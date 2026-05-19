@@ -114,6 +114,15 @@ run_seed(
     seed_file=os.path.join(os.getcwd(), "seed_data.sql")
 )
 
+# TEMPORARY DEBUG - remove after fix
+import sqlite3 as _sqlite3
+_conn = _sqlite3.connect(os.path.join(os.getcwd(), "stockapp.db"))
+_cur = _conn.cursor()
+_cur.execute("SELECT COUNT(*) FROM users")
+_count = _cur.fetchone()[0]
+_conn.close()
+st.sidebar.warning(f"Users in DB: {_count}")
+
 # ---------------------------------------------------
 # Market Data Service
 # ---------------------------------------------------
