@@ -10,9 +10,22 @@ VERSION = "2.4.0"
 
 st.set_page_config(page_title="Equity Research Terminal", layout="wide")
 
-st.title("Stocks Research Terminal")
-st.markdown(f"**Version:** {VERSION}")
+# ---------------------------------------------------
+# FORCE FRESH DB IF MISSING TABLES (CLOUD FIX)
+# ---------------------------------------------------
+from modules.db.core import engine
+from sqlalchemy import inspect as _inspect
 
+_inspector = _inspect(engine)
+_existing_tables = _inspector.get_table_names()
+
+if "universe_equities" not in _existing_tables:
+    print("[startup] Missing tables detected - dropping and rebuilding db")
+    _db_path = os.path.join(os.getcwd(), "stockapp.db")
+    if os.path.exists(_db_path):
+        os.remove(_db_path)
+    # Force engine to reconnect
+    engine.dispose()
 
 # ---------------------------------------------------
 # Cached & Safe Initialization
