@@ -49,6 +49,21 @@ class UniverseEquity(Base):
     universe_id = Column(String, nullable=True)
 
 # =====================================================
+# LEGACY COMPATIBILITY: UNIVERSE ANALYTICS CACHE
+# =====================================================
+
+class UniverseAnalyticsCache(Base):
+    __tablename__ = "universe_analytics_cache"
+
+    symbol = Column(String, primary_key=True)
+    tenant_id = Column(String, primary_key=True)
+
+    # Optional fields — add more if your seed file includes them
+    factor_score = Column(Integer, nullable=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
+
+# =====================================================
 # SECURITY MASTER (NEW PIPELINE)
 # =====================================================
 
