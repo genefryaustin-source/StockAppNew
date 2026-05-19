@@ -1,0 +1,12 @@
+pyinstaller --noconfirm --onefile ^
+--add-data "modules;modules" ^
+--add-data "models;models" ^
+--add-data ".streamlit;.streamlit" ^
+--hidden-import=streamlit.web.cli ^
+--hidden-import=streamlit.runtime ^
+--hidden-import=streamlit.runtime.scriptrunner ^
+--hidden-import=pandas ^
+--hidden-import=sqlalchemy ^
+--hidden-import=requests ^
+--hidden-import=reportlab ^
+run_app.py

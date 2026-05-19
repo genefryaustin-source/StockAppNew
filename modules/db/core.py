@@ -1,0 +1,80 @@
+import os
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.pool import StaticPool
+
+# ---------------------------------------------------
+# Database URL
+# ---------------------------------------------------
+
+DB_PATH = os.path.join(os.getcwd(), "stockapp.db")
+
+DB_URL = f"sqlite:///{DB_PATH}"
+
+# ---------------------------------------------------
+# Engine
+# ---------------------------------------------------
+
+engine = create_engine(
+    DB_URL,
+    connect_args={
+        "check_same_thread": False,
+        "timeout": 30
+    },
+    poolclass=StaticPool,
+    echo=False
+)
+
+# ---------------------------------------------------
+# SQLite Performance + Lock Fixes
+# ---------------------------------------------------
+
+@event.listens_for(engine, "connect")
+def enable_sqlite_wal(dbapi_connection, connection_record):
+
+    cursor = dbapi_connection.cursor()
+
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
+    cursor.execute("PRAGMA temp_store=MEMORY")
+    cursor.execute("PRAGMA cache_size=10000")
+
+    cursor.close()
+
+# ---------------------------------------------------
+# Session
+# ---------------------------------------------------
+
+SessionLocal = sessionmaker(
+    bind=engine,
+    expire_on_commit=False  # 🔥 disables this entire class of bugs
+)
+
+# ---------------------------------------------------
+# Base
+# ---------------------------------------------------
+
+Base = declarative_base()
+
+# ---------------------------------------------------
+# Init Database
+# ---------------------------------------------------
+
+def init_database():
+    import modules.db.models
+    import modules.institutional.models
+    import modules.analytics.models
+    import modules.alerts.models
+    Base.metadata.create_all(bind=engine)
+
+from sqlalchemy import event
+from datetime import datetime, UTC
+
+@event.listens_for(engine, "connect")
+def set_sqlite_utc(dbapi_connection, connection_record):
+    dbapi_connection.create_function(
+        "utcnow",
+        0,
+        lambda: datetime.now(UTC).isoformat()
+    )

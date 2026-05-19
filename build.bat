@@ -1,0 +1,14 @@
+pyinstaller launcher.py ^
+--name EquityResearchTerminal ^
+--onedir ^
+--clean ^
+--noconfirm ^
+--add-data "modules;modules" ^
+--add-data "config.yaml;." ^
+--add-data "app.py;." ^
+--hidden-import streamlit ^
+--hidden-import sqlalchemy ^
+--hidden-import pandas ^
+--hidden-import numpy ^
+--hidden-import plotly ^
+--hidden-import yfinance

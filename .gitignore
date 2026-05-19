@@ -1,0 +1,66 @@
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+
+# ========================
+# Virtual Environment
+# ========================
+.venv/
+venv/
+env/
+
+# ========================
+# Build / Distribution
+# ========================
+build/
+dist/
+installer/
+installer_assets/
+
+# ========================
+# Cache folders
+# ========================
+cache/
+market_cache/
+market_data_cache/
+
+# ========================
+# Streamlit - IMPORTANT
+# ========================
+.streamlit/secrets.toml   # Contains API keys/passwords - never push this!
+
+# ========================
+# PyCharm IDE files
+# ========================
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# ========================
+# OS files
+# ========================
+.DS_Store
+Thumbs.db
+
+# ========================
+# Logs & databases
+# ========================
+*.log
+*.sqlite
+*.db
+
+# Database files
+*.db
+*.db-wal
+*.db-shm
+
+
+

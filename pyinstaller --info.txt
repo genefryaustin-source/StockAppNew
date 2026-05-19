@@ -1,0 +1,76 @@
+pyinstaller --noconfirm --clean --onedir 
+--name EquityResearchTerminal 
+run_streamlit.py 
+--add-data "app.py;." 
+--hidden-import streamlit 
+--hidden-import streamlit.web 
+--hidden-import streamlit.web.cli 
+
+.venv\Scripts\activate
+
+rmdir /s /q build
+rmdir /s /q dist
+del *.spec
+
+pyinstaller --noconfirm --clean --onedir ^
+--name EquityResearchTerminal ^
+run_streamlit.py ^
+--add-data "app.py;." ^
+--add-data "modules;modules" ^
+--add-data "models;models" ^
+--add-data ".streamlit;.streamlit" ^
+--collect-all streamlit ^
+--copy-metadata streamlit ^
+--copy-metadata pandas ^
+--copy-metadata sqlalchemy ^
+--hidden-import streamlit ^
+--hidden-import streamlit.web ^
+--hidden-import streamlit.web.cli ^
+--hidden-import yfinance ^
+--hidden-import diskcache ^
+--hidden-import requests
+
+pyinstaller --debug=all app.py
+
+
+pyinstaller --noconfirm run_streamlit.spec
+
+import os
+import sys
+
+def main():
+    print("RUNNING STREAMLIT IN-PROCESS")
+
+    os.environ["STREAMLIT_GLOBAL_DEVELOPMENT_MODE"] = "false"
+
+    base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    app_path = os.path.join(base_dir, "app.py")
+
+    if not os.path.exists(app_path):
+        print("ERROR: app.py not found:", app_path)
+        input("Press Enter to exit...")
+        return
+
+    import streamlit.web.cli as stcli
+
+    sys.argv = [
+        "streamlit",
+        "run",
+        app_path,
+        "--server.port=8501",
+        "--server.headless=true",
+        "--browser.gatherUsageStats=false",
+    ]
+
+    stcli.main()
+
+if __name__ == "__main__":
+    main()
+
+
+INNO Installer
+INI 
+
+[Files]
+[Files]
+Source: "dist\EquityResearchTerminal\*"; DestDir: "{app}"; Flags: recursesubdirs

@@ -1,0 +1,10 @@
+from modules.market_data.service import get_fundamentals
+
+f = get_fundamentals("AAPL")
+print(f)
+
+
+
+import streamlit as st
+st.cache_data.clear()
+print("cache cleared")
