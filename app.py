@@ -70,7 +70,12 @@ except Exception as e:
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
-
+# TEMPORARY NUCLEAR RESET - remove after one deploy
+import sqlite3 as _sqlite3
+_db_path = os.path.join(os.getcwd(), "stockapp.db")
+if os.path.exists(_db_path):
+    os.remove(_db_path)
+    print("[reset] Deleted old db - will recreate fresh")
 # ---------------------------------------------------
 # Initialize DB + Schema Migration
 # ---------------------------------------------------
