@@ -55,12 +55,28 @@ class UniverseEquity(Base):
 class UniverseAnalyticsCache(Base):
     __tablename__ = "universe_analytics_cache"
 
-    symbol = Column(String, primary_key=True)
-    tenant_id = Column(String, primary_key=True)
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False)
+    universe_id = Column(String, nullable=True)
+    symbol = Column(String, nullable=False)
 
-    # Optional fields — add more if your seed file includes them
-    factor_score = Column(Integer, nullable=True)
+    analytics_snapshot_id = Column(String, nullable=True)
+    analytics_asof = Column(String, nullable=True)
+
+    sector = Column(String, nullable=True)
+    rating = Column(String, nullable=True)
+
+    composite_score = Column(Integer, nullable=True)
+    confidence_score = Column(Integer, nullable=True)
+
+    quality = Column(Integer, nullable=True)
+    growth = Column(Integer, nullable=True)
+    value = Column(Integer, nullable=True)
+    momentum = Column(Integer, nullable=True)
+    risk = Column(Integer, nullable=True)
+
     updated_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
 
 
 # =====================================================
