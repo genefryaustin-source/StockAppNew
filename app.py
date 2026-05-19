@@ -45,6 +45,7 @@ def get_db():
 def get_market_data_service():
     try:
         import modules.market_data.service as mds
+
         class MarketDataServiceAdapter:
             def get_quote(self, symbol: str):
                 if hasattr(mds, "get_quote"):
@@ -83,12 +84,7 @@ except Exception as e:
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
-# TEMPORARY NUCLEAR RESET - remove after one deploy
-import sqlite3 as _sqlite3
-_db_path = os.path.join(os.getcwd(), "stockapp.db")
-if os.path.exists(_db_path):
-    os.remove(_db_path)
-    print("[reset] Deleted old db - will recreate fresh")
+
 # ---------------------------------------------------
 # Initialize DB + Schema Migration
 # ---------------------------------------------------
@@ -115,17 +111,23 @@ if "schema_fixed" not in st.session_state:
     try:
         engine = db.get_bind()
         with engine.connect() as conn:
-            conn.execute("""
-                ALTER TABLE users 
-                ADD COLUMN IF NOT EXISTS is_active INTEGER DEFAULT 1
-            """)
-            conn.commit()
+            try:
+                conn.execute("""
+                    ALTER TABLE users 
+                    ADD COLUMN is_active INTEGER DEFAULT 1
+                """)
+                conn.commit()
+            except Exception:
+                # Column probably already exists or SQLite dialect error
+                pass
         st.session_state["schema_fixed"] = True
     except Exception:
-        # Column probably already exists or table doesn't exist yet
+        # Table might not exist yet or other transient issue
         st.session_state["schema_fixed"] = True
+
 # TEMP: show cloud table structure
 import sqlite3 as _sqlite3
+
 _conn2 = _sqlite3.connect(os.path.join(os.getcwd(), "stockapp.db"))
 _cur2 = _conn2.cursor()
 _cur2.execute("PRAGMA table_info(universes)")
@@ -135,9 +137,10 @@ st.sidebar.write("users columns:", [row[1] for row in _cur2.fetchall()])
 _cur2.execute("PRAGMA table_info(tenants)")
 st.sidebar.write("tenants columns:", [row[1] for row in _cur2.fetchall()])
 _conn2.close()
+
 # Seed reference data on first run
 from scripts.seed_db import run_seed
-# Seed reference data on first run
+
 # Seed reference data on first run
 import sqlite3 as _sqlite3
 import re as _re
@@ -147,8 +150,19 @@ _seed_path = os.path.join(os.getcwd(), "seed_data.sql")
 
 _conn = _sqlite3.connect(_db_path)
 _cur = _conn.cursor()
-_cur.execute("SELECT COUNT(*) FROM users")
-_user_count = _cur.fetchone()[0]
+
+# Check that users table exists before querying it
+_cur.execute("""
+    SELECT name FROM sqlite_master 
+    WHERE type='table' AND name='users'
+""")
+_users_table = _cur.fetchone()
+
+_user_count = None
+if _users_table:
+    _cur.execute("SELECT COUNT(*) FROM users")
+    _user_count = _cur.fetchone()[0]
+
 _conn.close()
 
 if _user_count == 0:
@@ -236,9 +250,6 @@ except Exception as e:
 st.sidebar.title("Stocks Research Terminal")
 st.sidebar.markdown(f"**Version:** {VERSION}")
 st.sidebar.markdown(datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"))
-st.sidebar.divider()
-
-#symbol_global = st.sidebar.text_input("Global Symbol", value="AAPL").upper()
 st.sidebar.divider()
 
 st.sidebar.write(f"Logged in as: {user.get('email', user.get('user_id'))}")
@@ -435,10 +446,7 @@ elif page == "AI Rankings":
         st.error("AI Rankings module failed to load.")
         st.exception(ranking_ui_mod)
     else:
-        # Your original AI Rankings code here (shortened for space)
         st.info("AI Rankings module ready")
-
-# Add the remaining pages (Strategy Lab, Regime Engine, etc.) the same way as above if needed.
 
 elif page == "Help":
     try:
