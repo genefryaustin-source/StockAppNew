@@ -1,7 +1,23 @@
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey
+from sqlalchemy import Column, String, Integer, DateTime
 from datetime import datetime, UTC
-
 from modules.db.core import Base
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False, default="default_tenant")
+
+    email = Column(String, nullable=False, unique=True)
+    role = Column(String, nullable=False, default="client")
+
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+
+    # REQUIRED — your table already has this column
+    password_hash = Column(String, nullable=True)
+
+    # REQUIRED — your migrations add this
+    is_active = Column(Integer, nullable=False, default=1)
 
 
 # =====================================================
