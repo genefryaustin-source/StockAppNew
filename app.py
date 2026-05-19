@@ -109,7 +109,12 @@ if "schema_fixed" not in st.session_state:
         # Column probably already exists or table doesn't exist yet
         st.session_state["schema_fixed"] = True
 
-
+# Seed reference data on first run
+from scripts.seed_db import run_seed
+run_seed(
+    db_path=os.path.join(os.getcwd(), "stockapp.db"),
+    seed_file=os.path.join(os.getcwd(), "seed_data.sql")
+)
 
 # ---------------------------------------------------
 # Market Data Service
