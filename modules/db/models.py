@@ -1,6 +1,6 @@
 import uuid
 from sqlalchemy import Column, String, DateTime, Integer
-from datetime import datetime
+from datetime import datetime, UTC
 
 from modules.db.core import Base
 
