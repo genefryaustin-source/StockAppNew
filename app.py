@@ -109,24 +109,31 @@ if "schema_fixed" not in st.session_state:
 
 # Seed reference data on first run
 from scripts.seed_db import run_seed
-run_seed(
-    db_path=os.path.join(os.getcwd(), "stockapp.db"),
-    seed_file=os.path.join(os.getcwd(), "seed_data.sql")
-)
-
-# TEMPORARY DEBUG
+# Seed reference data on first run
 import sqlite3 as _sqlite3
-_db = os.path.join(os.getcwd(), "stockapp.db")
-_seed = os.path.join(os.getcwd(), "seed_data.sql")
-st.sidebar.write("DB path:", _db)
-st.sidebar.write("DB exists:", os.path.exists(_db))
-st.sidebar.write("Seed exists:", os.path.exists(_seed))
-st.sidebar.write("Seed size:", os.path.getsize(_seed) if os.path.exists(_seed) else "MISSING")
-_conn = _sqlite3.connect(_db)
+_db_path = os.path.join(os.getcwd(), "stockapp.db")
+_seed_path = os.path.join(os.getcwd(), "seed_data.sql")
+
+_conn = _sqlite3.connect(_db_path)
 _cur = _conn.cursor()
 _cur.execute("SELECT COUNT(*) FROM users")
-st.sidebar.write("Users in DB:", _cur.fetchone()[0])
+_user_count = _cur.fetchone()[0]
 _conn.close()
+
+if _user_count == 0:
+    print("[seeder] Tables empty - seeding...")
+    try:
+        _conn = _sqlite3.connect(_db_path, timeout=30)
+        _conn.execute("PRAGMA journal_mode=WAL")
+        with open(_seed_path, "r", encoding="utf-8") as f:
+            _sql = f.read()
+        _conn.executescript(_sql)
+        _conn.commit()
+        _conn.close()
+        print("[seeder] Done.")
+    except Exception as _e:
+        print(f"[seeder] FAILED: {_e}")
+        st.sidebar.error(f"Seeder failed: {_e}")
 
 # ---------------------------------------------------
 # Market Data Service
