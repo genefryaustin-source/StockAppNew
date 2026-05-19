@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, DateTime
+from sqlalchemy import Column, String, DateTime, Integer
 from datetime import datetime
 
 from modules.db.core import Base
@@ -29,15 +29,18 @@ class Tenant(Base):
 # ------------------------------------
 
 class User(Base):
-
     __tablename__ = "users"
 
-    id = Column(String, primary_key=True, default=gen_uuid)
+    id = Column(String, primary_key=True)
+    tenant_id = Column(String, nullable=False, default="default_tenant")
 
-    tenant_id = Column(String)
+    email = Column(String, nullable=False, unique=True)
+    role = Column(String, nullable=False, default="client")
 
-    email = Column(String)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
 
-    role = Column(String)
+    # REQUIRED — your table already has this column
+    password_hash = Column(String, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    # REQUIRED — your migrations add this
+    is_active = Column(Integer, nullable=False, default=1)
