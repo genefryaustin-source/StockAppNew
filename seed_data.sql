@@ -24303,12 +24303,12 @@ CREATE TABLE users (
 	tenant_id VARCHAR, 
 	email VARCHAR, 
 	role VARCHAR, 
-	created_at DATETIME, password_hash TEXT, is_active INTEGER DEFAULT 1, 
+	created_at DATETIME, password_hash TEXT, is_active INTEGER DEFAULT 1, updated_at TEXT, 
 	PRIMARY KEY (id)
 );
-INSERT INTO users VALUES('admin-0001','default_tenant','admin@test.com','super_admin','2026-04-08 06:12:12','5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8',1);
-INSERT INTO users VALUES('f3941889-9e66-4dd1-8c3c-7b0bdeeae485','421644af-0b93-4963-ac4c-f267e6252e1b','tenant@test.com','tenant_admin',NULL,'5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8',1);
-INSERT INTO users VALUES('0aadebb2-12e9-4a74-9df1-7465b37bb4c6','421644af-0b93-4963-ac4c-f267e6252e1b','client1@test.com','client',NULL,'5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8',1);
+INSERT INTO users VALUES('admin-0001','default_tenant','admin@test.com','super_admin','2026-04-08 06:12:12','5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8',1,NULL);
+INSERT INTO users VALUES('f3941889-9e66-4dd1-8c3c-7b0bdeeae485','421644af-0b93-4963-ac4c-f267e6252e1b','tenant@test.com','tenant_admin',NULL,'5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8',1,NULL);
+INSERT INTO users VALUES('0aadebb2-12e9-4a74-9df1-7465b37bb4c6','421644af-0b93-4963-ac4c-f267e6252e1b','client1@test.com','client',NULL,'5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8',1,NULL);
 COMMIT;
 PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
