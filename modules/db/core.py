@@ -72,18 +72,19 @@ def init_database():
     # Safe Migrations - add missing columns if needed
     # ---------------------------------------------------
     migrations = [
+        # users
         "ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1",
         "ALTER TABLE users ADD COLUMN created_at TEXT",
         "ALTER TABLE users ADD COLUMN updated_at TEXT",
-        # universes missing columns
+        # universes
+        "ALTER TABLE universes ADD COLUMN description TEXT",
         "ALTER TABLE universes ADD COLUMN created_by_user_id VARCHAR",
         "ALTER TABLE universes ADD COLUMN updated_at TEXT",
-        # universe_symbols missing columns (likely same issue)
-        "ALTER TABLE universe_symbols ADD COLUMN created_at TEXT",
-        "ALTER TABLE universe_symbols ADD COLUMN updated_at TEXT",
-        # universe_equities missing columns
-        "ALTER TABLE universe_equities ADD COLUMN created_at TEXT",
-        "ALTER TABLE universe_equities ADD COLUMN updated_at TEXT",
+        # tenants
+        "ALTER TABLE tenants ADD COLUMN updated_at TEXT",
+        "ALTER TABLE tenants ADD COLUMN tenant_id VARCHAR",
+        "ALTER TABLE tenants ADD COLUMN description TEXT",
+        "ALTER TABLE tenants ADD COLUMN is_active INTEGER DEFAULT 1",
     ]
 
     with engine.connect() as conn:
