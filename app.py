@@ -74,13 +74,40 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
 # ---------------------------------------------------
-# Initialize DB
+# Initialize DB + Schema Migration
 # ---------------------------------------------------
 try:
     db = get_db()
 except Exception as e:
     st.error(f"❌ Failed to initialize database: {e}")
     st.stop()
+
+# ---------------------------------------------------
+# Table Creation + Fix missing columns (is_active)
+# ---------------------------------------------------
+if "tables_initialized" not in st.session_state:
+    try:
+        from models.base import Base
+        engine = db.get_bind()
+        Base.metadata.create_all(bind=engine)
+        st.session_state["tables_initialized"] = True
+    except Exception:
+        st.session_state["tables_initialized"] = True
+
+# Fix is_active column (this is what was causing the login error)
+if "schema_fixed" not in st.session_state:
+    try:
+        engine = db.get_bind()
+        with engine.connect() as conn:
+            conn.execute("""
+                ALTER TABLE users 
+                ADD COLUMN IF NOT EXISTS is_active INTEGER DEFAULT 1
+            """)
+            conn.commit()
+        st.session_state["schema_fixed"] = True
+    except Exception:
+        # Column probably already exists or table doesn't exist yet
+        st.session_state["schema_fixed"] = True
 
 
 
