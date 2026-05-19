@@ -110,7 +110,10 @@ if "schema_fixed" not in st.session_state:
 # Seed reference data on first run
 from scripts.seed_db import run_seed
 # Seed reference data on first run
+# Seed reference data on first run
 import sqlite3 as _sqlite3
+import re as _re
+
 _db_path = os.path.join(os.getcwd(), "stockapp.db")
 _seed_path = os.path.join(os.getcwd(), "seed_data.sql")
 
@@ -121,13 +124,19 @@ _user_count = _cur.fetchone()[0]
 _conn.close()
 
 if _user_count == 0:
-    print("[seeder] Tables empty - seeding...")
+    print("[seeder] Tables empty - seeding inserts only...")
     try:
         _conn = _sqlite3.connect(_db_path, timeout=30)
-        _conn.execute("PRAGMA journal_mode=WAL")
         with open(_seed_path, "r", encoding="utf-8") as f:
             _sql = f.read()
-        _conn.executescript(_sql)
+
+        # Extract only INSERT statements
+        _inserts = "\n".join(
+            line for line in _sql.splitlines()
+            if line.strip().upper().startswith("INSERT")
+        )
+
+        _conn.executescript(_inserts)
         _conn.commit()
         _conn.close()
         print("[seeder] Done.")
