@@ -4,73 +4,65 @@ from datetime import datetime, UTC
 import time
 import sys
 import os
+import sqlite3
 import matplotlib
 
 VERSION = "2.4.0"
 
 st.set_page_config(page_title="Equity Research Terminal", layout="wide")
 
-# ---------------------------------------------------
-# FORCE FRESH DB IF MISSING TABLES (CLOUD FIX)
-# ---------------------------------------------------
+# ============================================================
+# 0. DEV MODE FLAG (controls debug output)
+# ============================================================
+DEV_MODE = False  # Set True to show PRAGMA debug info
+
+# ============================================================
+# 1. ENGINE + TABLE INSPECTION (NO DELETIONS IN SAFE MODE)
+# ============================================================
 from modules.db.core import engine
 from sqlalchemy import inspect as _inspect
 
 _inspector = _inspect(engine)
-_existing_tables = _inspector.get_table_names()
+_existing_tables = set(_inspector.get_table_names())
 
-if "universe_equities" not in _existing_tables:
-    print("[startup] Missing tables detected - dropping and rebuilding db")
-    _db_path = os.path.join(os.getcwd(), "stockapp.db")
-    if os.path.exists(_db_path):
-        os.remove(_db_path)
-    # Force engine to reconnect
-    engine.dispose()
+# Required tables for a healthy DB
+REQUIRED_TABLES = {
+    "users",
+    "universes",
+    "universe_symbols",
+    "universe_equities",  # Option C compatibility table
+    "tenants"
+}
 
-# ---------------------------------------------------
-# Cached & Safe Initialization
-# ---------------------------------------------------
+# We DO NOT delete the DB in safe mode
+missing_required = [t for t in REQUIRED_TABLES if t not in _existing_tables]
+if missing_required:
+    print(f"[startup] Missing tables detected: {missing_required}")
+else:
+    print("[startup] All required tables present")
+
+# ============================================================
+# 2. CACHED DB SESSION (runs AFTER rebuild if needed)
+# ============================================================
 @st.cache_resource
 def get_db():
     try:
         from modules.db.core import init_database, SessionLocal
-        init_database()
+        init_database()  # Creates tables if missing
         return SessionLocal()
     except Exception as e:
         st.error(f"Database connection failed: {e}")
         st.stop()
 
-
-@st.cache_resource
-def get_market_data_service():
-    try:
-        import modules.market_data.service as mds
-
-        class MarketDataServiceAdapter:
-            def get_quote(self, symbol: str):
-                if hasattr(mds, "get_quote"):
-                    return mds.get_quote(symbol)
-                if hasattr(mds, "get_price"):
-                    return {"price": mds.get_price(symbol)}
-                if hasattr(mds, "fetch_price"):
-                    return {"price": mds.fetch_price(symbol)}
-                return None
-
-        return MarketDataServiceAdapter()
-    except Exception as e:
-        st.warning(f"Market data service init warning: {e}")
-        return None
-
-
-# ---------------------------------------------------
-# Basic Imports
-# ---------------------------------------------------
+# ============================================================
+# 3. IMPORT MODELS + SERVICES
+# ============================================================
 try:
     import modules.db.models
     import modules.institutional.models
     import modules.analytics.models
     import modules.alerts.models
-    import modules.universe.models
+    import modules.universe.models  # includes UniverseEquity (Option C)
     import modules.jobs.models
     import modules.market_data.models
     import modules.analytics.strategy_models
@@ -85,83 +77,78 @@ except Exception as e:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
-# ---------------------------------------------------
-# Initialize DB + Schema Migration
-# ---------------------------------------------------
+# ============================================================
+# 4. INITIALIZE DB + CREATE TABLES
+# ============================================================
 try:
     db = get_db()
 except Exception as e:
     st.error(f"❌ Failed to initialize database: {e}")
     st.stop()
 
-# ---------------------------------------------------
-# Table Creation + Fix missing columns (is_active)
-# ---------------------------------------------------
-if "tables_initialized" not in st.session_state:
-    try:
-        from models.base import Base
-        engine = db.get_bind()
-        Base.metadata.create_all(bind=engine)
-        st.session_state["tables_initialized"] = True
-    except Exception:
-        st.session_state["tables_initialized"] = True
+from models.base import Base
+engine = db.get_bind()
 
-# Fix is_active column (this is what was causing the login error)
-if "schema_fixed" not in st.session_state:
+# Create ALL tables including universe_equities (Option C)
+Base.metadata.create_all(bind=engine)
+
+# ============================================================
+# 5. SAFE SCHEMA MIGRATIONS
+# ============================================================
+def safe_migration(sql, label):
     try:
-        engine = db.get_bind()
         with engine.connect() as conn:
-            try:
-                conn.execute("""
-                    ALTER TABLE users 
-                    ADD COLUMN is_active INTEGER DEFAULT 1
-                """)
-                conn.commit()
-            except Exception:
-                # Column probably already exists or SQLite dialect error
-                pass
-        st.session_state["schema_fixed"] = True
+            conn.execute(sql)
+            conn.commit()
+        print(f"[migration] Applied: {label}")
     except Exception:
-        # Table might not exist yet or other transient issue
-        st.session_state["schema_fixed"] = True
+        pass  # Already applied or SQLite limitation
 
-# TEMP: show cloud table structure
-import sqlite3 as _sqlite3
+safe_migration("""
+    ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1
+""", "ALTER TABLE users ADD COLUMN is_active")
 
-_conn2 = _sqlite3.connect(os.path.join(os.getcwd(), "stockapp.db"))
-_cur2 = _conn2.cursor()
-_cur2.execute("PRAGMA table_info(universes)")
-st.sidebar.write("universes columns:", [row[1] for row in _cur2.fetchall()])
-_cur2.execute("PRAGMA table_info(users)")
-st.sidebar.write("users columns:", [row[1] for row in _cur2.fetchall()])
-_cur2.execute("PRAGMA table_info(tenants)")
-st.sidebar.write("tenants columns:", [row[1] for row in _cur2.fetchall()])
-_conn2.close()
+safe_migration("""
+    ALTER TABLE users ADD COLUMN updated_at TEXT
+""", "ALTER TABLE users ADD COLUMN updated_at")
 
-# Seed reference data on first run
-from scripts.seed_db import run_seed
+safe_migration("""
+    ALTER TABLE universes ADD COLUMN description TEXT
+""", "ALTER TABLE universes ADD COLUMN description")
 
-# Seed reference data on first run
-# ---------------------------------------------------
-# SAFE SEEDING (only after tables exist)
-# ---------------------------------------------------
-import sqlite3
+safe_migration("""
+    ALTER TABLE universes ADD COLUMN created_by_user_id VARCHAR
+""", "ALTER TABLE universes ADD COLUMN created_by_user_id")
 
+safe_migration("""
+    ALTER TABLE tenants ADD COLUMN updated_at TEXT
+""", "ALTER TABLE tenants ADD COLUMN updated_at")
+
+safe_migration("""
+    ALTER TABLE tenants ADD COLUMN tenant_id VARCHAR
+""", "ALTER TABLE tenants ADD COLUMN tenant_id")
+
+safe_migration("""
+    ALTER TABLE tenants ADD COLUMN description TEXT
+""", "ALTER TABLE tenants ADD COLUMN description")
+
+safe_migration("""
+    ALTER TABLE tenants ADD COLUMN is_active INTEGER DEFAULT 1
+""", "ALTER TABLE tenants ADD COLUMN is_active")
+
+# ============================================================
+# 6. SAFE SEEDING (only after tables exist)
+# ============================================================
 _db_path = os.path.join(os.getcwd(), "stockapp.db")
 _seed_path = os.path.join(os.getcwd(), "seed_data.sql")
 
 conn = sqlite3.connect(_db_path)
 cur = conn.cursor()
 
-# Ensure required tables exist before seeding
-required_tables = ["users", "universe_equities", "tenants"]
+cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+existing_tables = {row[0] for row in cur.fetchall()}
 
-cur.execute("""
-    SELECT name FROM sqlite_master WHERE type='table'
-""")
-existing = {row[0] for row in cur.fetchall()}
-
-missing = [t for t in required_tables if t not in existing]
+missing = [t for t in REQUIRED_TABLES if t not in existing_tables]
 
 if missing:
     print(f"[seeder] Skipping seeding — missing tables: {missing}")
@@ -191,52 +178,34 @@ else:
             print(f"[seeder] FAILED: {e}")
             st.sidebar.error(f"Seeder failed: {e}")
 
-
-# Check that users table exists before querying it
-_cur.execute("""
-    SELECT name FROM sqlite_master 
-    WHERE type='table' AND name='users'
-""")
-_users_table = _cur.fetchone()
-
-_user_count = None
-if _users_table:
-    _cur.execute("SELECT COUNT(*) FROM users")
-    _user_count = _cur.fetchone()[0]
-
-_conn.close()
-
-if _user_count == 0:
-    print("[seeder] Tables empty - seeding inserts only...")
+# ============================================================
+# 7. MARKET DATA SERVICE
+# ============================================================
+@st.cache_resource
+def get_market_data_service():
     try:
-        _conn = _sqlite3.connect(_db_path, timeout=30)
-        with open(_seed_path, "r", encoding="utf-8") as f:
-            _sql = f.read()
+        import modules.market_data.service as mds
 
-        # Extract only INSERT statements
-        _inserts = "\n".join(
-            line for line in _sql.splitlines()
-            if line.strip().upper().startswith("INSERT")
-        )
+        class MarketDataServiceAdapter:
+            def get_quote(self, symbol: str):
+                if hasattr(mds, "get_quote"):
+                    return mds.get_quote(symbol)
+                if hasattr(mds, "get_price"):
+                    return {"price": mds.get_price(symbol)}
+                if hasattr(mds, "fetch_price"):
+                    return {"price": mds.fetch_price(symbol)}
+                return None
 
-        _conn.executescript(_inserts)
-        _conn.commit()
-        _conn.close()
-        print("[seeder] Done.")
-    except Exception as _e:
-        print(f"[seeder] FAILED: {_e}")
-        st.sidebar.error(f"Seeder failed: {_e}")
+        return MarketDataServiceAdapter()
+    except Exception as e:
+        st.warning(f"Market data service init warning: {e}")
+        return None
 
-# ---------------------------------------------------
-# Market Data Service
-# ---------------------------------------------------
 market_data_service = get_market_data_service()
 
-# ---------------------------------------------------
-# AUTH GATE
-# ---------------------------------------------------
-DEV_MODE = False
-
+# ============================================================
+# 8. AUTH GATE
+# ============================================================
 if DEV_MODE:
     if "user" not in st.session_state:
         st.session_state.user = {
@@ -250,7 +219,6 @@ else:
     if "user" not in st.session_state:
         try:
             from modules.auth.login_ui import render_login
-
             render_login(db)
             st.stop()
         except Exception as e:
@@ -259,24 +227,27 @@ else:
 
 user = st.session_state.user
 
-# Session timeout
+# ============================================================
+# 9. SESSION TIMEOUT
+# ============================================================
 try:
     from modules.auth.guards import enforce_session_timeout
-
     enforce_session_timeout()
 except Exception:
     pass
 
-# User switch reset
+# ============================================================
+# 10. USER SWITCH RESET
+# ============================================================
 current_user_id = user.get("user_id")
 if st.session_state.get("_last_user_id") != current_user_id:
     st.session_state.clear()
     st.session_state["_last_user_id"] = current_user_id
     st.rerun()
 
-# ---------------------------------------------------
-# Services
-# ---------------------------------------------------
+# ============================================================
+# 11. SERVICES
+# ============================================================
 try:
     nav_service = NavService(db, market_data_service)
     alert_service = AlertService(db)
@@ -285,9 +256,9 @@ except Exception as e:
     st.error(f"Service initialization failed: {e}")
     st.stop()
 
-# ---------------------------------------------------
-# Sidebar
-# ---------------------------------------------------
+# ============================================================
+# 12. SIDEBAR
+# ============================================================
 st.sidebar.title("Stocks Research Terminal")
 st.sidebar.markdown(f"**Version:** {VERSION}")
 st.sidebar.markdown(datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"))
@@ -298,19 +269,30 @@ st.sidebar.write(f"Role: {user.get('role')}")
 
 if st.sidebar.button("Logout", key="sidebar_logout"):
     from modules.auth.auth_service import logout
-
     logout()
     st.rerun()
 
-# ---------------------------------------------------
-# Scheduler (Safe - with existence check)
-# ---------------------------------------------------
+# ============================================================
+# 13. DEV_MODE DEBUG PRAGMA OUTPUT
+# ============================================================
+if DEV_MODE:
+    conn = sqlite3.connect(_db_path)
+    cur = conn.cursor()
+
+    for table in ["universes", "users", "tenants", "universe_symbols", "universe_equities"]:
+        cur.execute(f"PRAGMA table_info({table})")
+        st.sidebar.write(f"{table} columns:", [row[1] for row in cur.fetchall()])
+
+    conn.close()
+
+# ============================================================
+# 14. SCHEDULER
+# ============================================================
 if "last_scheduler_run" not in st.session_state:
     st.session_state["last_scheduler_run"] = 0
 
 try:
     if time.time() - st.session_state["last_scheduler_run"] > 60:
-        # Only run if the method actually exists
         if hasattr(nav_service, "run_rebalance_scheduler"):
             nav_service.run_rebalance_scheduler(
                 order_service=order_service,
@@ -318,17 +300,12 @@ try:
                 user_id=user.get("user_id")
             )
             st.session_state["last_scheduler_run"] = time.time()
-        else:
-            # Optional: Log once that scheduler is not available
-            if "scheduler_warning_shown" not in st.session_state:
-                st.sidebar.info("⚠️ Rebalance scheduler not available in this version.")
-                st.session_state["scheduler_warning_shown"] = True
 except Exception as e:
     st.sidebar.warning(f"Scheduler: {str(e)[:80]}")
 
-# ---------------------------------------------------
-# Navigation
-# ---------------------------------------------------
+# ============================================================
+# 15. PAGE ROUTING
+# ============================================================
 role = (user.get("role") or "").lower()
 
 if role == "client":
@@ -344,16 +321,12 @@ else:
 
 page = st.sidebar.selectbox("Go to", pages)
 
-
-# Safe import helper
 def safe_import(module_path: str):
     try:
         return __import__(module_path, fromlist=["*"])
     except Exception as e:
         return e
 
-
-# Import modules
 watchlists_mod = safe_import("modules.institutional.ui.watchlists_ui")
 screener_mod = safe_import("modules.institutional.ui.screener_ui")
 earnings_mod = safe_import("modules.institutional.ui.earnings_ui")
@@ -449,12 +422,10 @@ elif page == "Portfolio":
 
     if role == "client":
         from modules.client.client_dashboard import render_client_dashboard
-
         render_client_dashboard(db_session=db, user=user, market_data_service=market_data_service)
         st.stop()
     elif role in ["tenant_admin", "super_admin"]:
         from modules.dashboard.dashboard_ui import render_dashboard
-
         render_dashboard(db_session=db, user=user, market_data_service=market_data_service)
         st.stop()
     else:
@@ -496,7 +467,9 @@ elif page == "Help":
         st.error("Help module failed.")
         st.exception(e)
 
-# Cleanup
+# ============================================================
+# 16. CLEANUP
+# ============================================================
 try:
     if db is not None:
         db.close()

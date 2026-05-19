@@ -35,6 +35,18 @@ class UniverseSymbol(Base):
     # 🔥 REQUIRED FOR YOUR SYSTEM
     universe_id = Column(String, nullable=True)
 
+# =====================================================
+# LEGACY COMPATIBILITY: UNIVERSE EQUITIES
+# =====================================================
+
+class UniverseEquity(Base):
+    __tablename__ = "universe_equities"
+
+    symbol = Column(String, primary_key=True)
+    tenant_id = Column(String, primary_key=True)
+
+    # Match UniverseSymbol structure for compatibility
+    universe_id = Column(String, nullable=True)
 
 # =====================================================
 # SECURITY MASTER (NEW PIPELINE)
