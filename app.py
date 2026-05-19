@@ -142,14 +142,55 @@ _conn2.close()
 from scripts.seed_db import run_seed
 
 # Seed reference data on first run
-import sqlite3 as _sqlite3
-import re as _re
+# ---------------------------------------------------
+# SAFE SEEDING (only after tables exist)
+# ---------------------------------------------------
+import sqlite3
 
 _db_path = os.path.join(os.getcwd(), "stockapp.db")
 _seed_path = os.path.join(os.getcwd(), "seed_data.sql")
 
-_conn = _sqlite3.connect(_db_path)
-_cur = _conn.cursor()
+conn = sqlite3.connect(_db_path)
+cur = conn.cursor()
+
+# Ensure required tables exist before seeding
+required_tables = ["users", "universe_equities", "tenants"]
+
+cur.execute("""
+    SELECT name FROM sqlite_master WHERE type='table'
+""")
+existing = {row[0] for row in cur.fetchall()}
+
+missing = [t for t in required_tables if t not in existing]
+
+if missing:
+    print(f"[seeder] Skipping seeding — missing tables: {missing}")
+    conn.close()
+else:
+    cur.execute("SELECT COUNT(*) FROM users")
+    user_count = cur.fetchone()[0]
+    conn.close()
+
+    if user_count == 0:
+        print("[seeder] Seeding reference data...")
+        try:
+            conn = sqlite3.connect(_db_path, timeout=30)
+            with open(_seed_path, "r", encoding="utf-8") as f:
+                sql = f.read()
+
+            inserts = "\n".join(
+                line for line in sql.splitlines()
+                if line.strip().upper().startswith("INSERT")
+            )
+
+            conn.executescript(inserts)
+            conn.commit()
+            conn.close()
+            print("[seeder] Done.")
+        except Exception as e:
+            print(f"[seeder] FAILED: {e}")
+            st.sidebar.error(f"Seeder failed: {e}")
+
 
 # Check that users table exists before querying it
 _cur.execute("""
