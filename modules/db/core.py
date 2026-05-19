@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool
 
@@ -48,7 +48,7 @@ def enable_sqlite_wal(dbapi_connection, connection_record):
 
 SessionLocal = sessionmaker(
     bind=engine,
-    expire_on_commit=False  # 🔥 disables this entire class of bugs
+    expire_on_commit=False  # disables this entire class of bugs
 )
 
 # ---------------------------------------------------
@@ -68,7 +68,24 @@ def init_database():
     import modules.alerts.models
     Base.metadata.create_all(bind=engine)
 
-from sqlalchemy import event
+    # ---------------------------------------------------
+    # Safe Migrations - add missing columns if needed
+    # ---------------------------------------------------
+    migrations = [
+        "ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN created_at TEXT",
+        "ALTER TABLE users ADD COLUMN updated_at TEXT",
+    ]
+
+    with engine.connect() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+                print(f"[migration] Applied: {sql}")
+            except Exception:
+                pass  # Column already exists, skip
+
 from datetime import datetime, UTC
 
 @event.listens_for(engine, "connect")
