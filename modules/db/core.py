@@ -66,6 +66,10 @@ def init_database():
     import modules.institutional.models
     import modules.analytics.models
     import modules.alerts.models
+    import modules.universe.models        # ADD
+    import modules.jobs.models            # ADD
+    import modules.market_data.models     # ADD
+    import modules.analytics.strategy_models  # ADD
     Base.metadata.create_all(bind=engine)
 
     # ---------------------------------------------------
