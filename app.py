@@ -5,11 +5,9 @@ import time
 import sys
 import os
 import matplotlib
-matplotlib.use('Agg')  # Use non-GUI backend (important for Streamlit Cloud + Windows)
-import matplotlib.pyplot as plt
+
 VERSION = "2.4.0"
 
-# MUST be the very first Streamlit command
 st.set_page_config(page_title="Equity Research Terminal", layout="wide")
 
 st.title("Stocks Research Terminal")
