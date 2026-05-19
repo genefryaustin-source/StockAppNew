@@ -114,14 +114,19 @@ run_seed(
     seed_file=os.path.join(os.getcwd(), "seed_data.sql")
 )
 
-# TEMPORARY DEBUG - remove after fix
+# TEMPORARY DEBUG
 import sqlite3 as _sqlite3
-_conn = _sqlite3.connect(os.path.join(os.getcwd(), "stockapp.db"))
+_db = os.path.join(os.getcwd(), "stockapp.db")
+_seed = os.path.join(os.getcwd(), "seed_data.sql")
+st.sidebar.write("DB path:", _db)
+st.sidebar.write("DB exists:", os.path.exists(_db))
+st.sidebar.write("Seed exists:", os.path.exists(_seed))
+st.sidebar.write("Seed size:", os.path.getsize(_seed) if os.path.exists(_seed) else "MISSING")
+_conn = _sqlite3.connect(_db)
 _cur = _conn.cursor()
 _cur.execute("SELECT COUNT(*) FROM users")
-_count = _cur.fetchone()[0]
+st.sidebar.write("Users in DB:", _cur.fetchone()[0])
 _conn.close()
-st.sidebar.warning(f"Users in DB: {_count}")
 
 # ---------------------------------------------------
 # Market Data Service
