@@ -3,7 +3,7 @@ from modules.auth.auth_service import authenticate
 
 from PIL import Image
 
-
+st.warning("LOGIN_UI FINGERPRINT")
 # Custom CSS for better logo display
 st.markdown("""
     <style>

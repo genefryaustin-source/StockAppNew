@@ -8,7 +8,9 @@ import sqlite3
 import matplotlib
 
 VERSION = "2.4.0"
+import streamlit as st
 
+st.error("APP.PY FINGERPRINT TEST 2026-05-20")
 st.set_page_config(page_title="Equity Research Terminal", layout="wide")
 
 # ============================================================
