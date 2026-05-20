@@ -20,12 +20,12 @@ st.markdown("""
 
 # Display logo at the top (centered)
 col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
-    try:
-        logo = Image.open("logo.png")  # Put your logo file in the same folder
-        st.image(logo) # use_container_width=True
-    except FileNotFoundError:
-        st.error("Logo file 'logo.png' not found. Please add it to your project folder.")
+#with col2:
+    #try:
+        #logo = Image.open("logo.png")  # Put your logo file in the same folder
+        #st.image(logo) # use_container_width=True
+    #except FileNotFoundError:
+        #st.error("Logo file 'logo.png' not found. Please add it to your project folder.")
 
 
 import streamlit as st
