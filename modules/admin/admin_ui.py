@@ -122,16 +122,22 @@ def render_admin_panel(db, user):
     # ---------------------------------------------------------
     # MAIN TABS
     # ---------------------------------------------------------
+    st.write("BEFORE TABS")
+
     tab_users, tab_tenants, tab_cleanup = st.tabs([
         "Users",
         "Tenants",
         "Universe Cleanup",
     ])
 
+    st.write("AFTER TABS")
+
     # =========================================================
     # USERS TAB
     # =========================================================
     with tab_users:
+
+        st.write("USERS TAB LOADED")
 
         # ---------------------------------------------------------
         # CREATE USER
@@ -444,6 +450,8 @@ def render_admin_panel(db, user):
     # =========================================================
     with tab_tenants:
 
+        st.write("TENANTS TAB LOADED")
+
         if role == "super_admin":
 
             tenant_id = st.session_state.get(
@@ -472,6 +480,8 @@ def render_admin_panel(db, user):
     # UNIVERSE CLEANUP TAB
     # =========================================================
     with tab_cleanup:
+
+        st.write("CLEANUP TAB LOADED")
 
         try:
 
