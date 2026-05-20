@@ -15,7 +15,7 @@ from modules.admin.tenant_admin_ui import (
     render_tenant_admin_panel,
 )
 
-from modules.admin.universe_cleanup_ui import (
+from modules.universe.universe_cleanup_ui import (
     render_universe_cleanup_ui,
 )
 
