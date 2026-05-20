@@ -1,13 +1,78 @@
-import pandas as pd
+import time
+from datetime import datetime
+
 import numpy as np
+import pandas as pd
 import requests
 import streamlit as st
-from datetime import datetime
-import time
 
 from modules.analytics.models import AnalyticsSnapshot
 from modules.utils.config import get_secret
-from modules.market_data.service import get_latest_price_map
+
+try:
+    from modules.market_data.service import (
+        get_latest_price_map,
+        get_price_history,
+        preload_histories,
+        build_shared_price_cache,
+    )
+except Exception:
+    from modules.market_data.service import (
+        get_latest_price_map,
+        get_price_history,
+        build_shared_price_cache,
+    )
+
+    def preload_histories(
+            db,
+            symbols,
+            period="1y",
+            interval="1d",
+    ):
+        """
+        Fallback preload helper in case service.py has not yet been updated.
+        Prefer the service.py implementation when available.
+        """
+        history_map = {}
+
+        clean_symbols = []
+        for s in symbols or []:
+            sym = str(s).upper().replace(".US", "").strip()
+            if sym:
+                clean_symbols.append(sym)
+
+        clean_symbols = list(dict.fromkeys(clean_symbols))
+
+        print(f"🚀 PRELOADING HISTORIES: {len(clean_symbols)} symbols")
+
+        for i, sym in enumerate(clean_symbols):
+            if i % 50 == 0:
+                print(f"History preload {i}/{len(clean_symbols)}")
+
+            try:
+                df = get_price_history(
+                    db=db,
+                    symbol=sym,
+                    period=period,
+                    interval=interval,
+                )
+
+                if df is None or df.empty:
+                    continue
+
+                if len(df) < 50:
+                    continue
+
+                history_map[sym] = df
+
+            except Exception as e:
+                print("PRELOAD ERROR:", sym, e)
+
+        print(f"✅ PRELOAD COMPLETE: {len(history_map)} loaded")
+
+        return history_map
+
+
 # ---------------------------------------------------
 # CONFIG
 # ---------------------------------------------------
@@ -16,6 +81,8 @@ EOD_REALTIME = "https://eodhd.com/api/real-time/stock"
 EOD_EOD = "https://eodhd.com/api/eod"
 
 _fund_cache = {}
+_profile_cache = {}
+
 
 # ---------------------------------------------------
 # HELPERS
@@ -26,7 +93,7 @@ def _to_float(x):
         if x in (None, "", "NA", "N/A", "-", "--"):
             return None
         return float(x)
-    except:
+    except Exception:
         return None
 
 
@@ -49,6 +116,7 @@ def _normalize_percent(x):
         return None
     return x if x > 1 else x * 100
 
+
 def _clip_score(x, lo=0.0, hi=100.0):
     if x is None:
         return None
@@ -64,8 +132,10 @@ def _score_percent(value, floor=0.0, cap=100.0):
 
 def _score_growth_pct(growth_pct):
     g = _to_float(growth_pct)
+
     if g is None:
         return 50.0
+
     if g <= -20:
         return 5.0
     if g <= -10:
@@ -80,6 +150,7 @@ def _score_growth_pct(growth_pct):
         return 75.0
     if g <= 25:
         return 85.0
+
     return 95.0
 
 
@@ -89,31 +160,45 @@ def _score_inverse_metric(v, bands):
     bands = [(upper_bound, score), ...]
     """
     x = _to_float(v)
+
     if x is None:
         return None
+
     for upper, score in bands:
         if x <= upper:
             return float(score)
+
     return float(bands[-1][1])
 
 
 def _score_value(pe_ttm=None, ps_ttm=None, ev_ebitda=None):
     pe_score = _score_inverse_metric(pe_ttm, [
         (10, 95), (15, 85), (20, 75), (25, 65),
-        (30, 55), (40, 40), (60, 25), (999999, 10)
-    ])
-    ps_score = _score_inverse_metric(ps_ttm, [
-        (2, 95), (4, 85), (6, 75), (8, 65),
-        (10, 55), (15, 40), (25, 25), (999999, 10)
-    ])
-    ev_score = _score_inverse_metric(ev_ebitda, [
-        (8, 95), (12, 85), (16, 75), (20, 65),
-        (25, 55), (35, 40), (50, 25), (999999, 10)
+        (30, 55), (40, 40), (60, 25), (999999, 10),
     ])
 
-    vals = [x for x in [pe_score, ps_score, ev_score] if x is not None]
+    ps_score = _score_inverse_metric(ps_ttm, [
+        (2, 95), (4, 85), (6, 75), (8, 65),
+        (10, 55), (15, 40), (25, 25), (999999, 10),
+    ])
+
+    ev_score = _score_inverse_metric(ev_ebitda, [
+        (8, 95), (12, 85), (16, 75), (20, 65),
+        (25, 55), (35, 40), (50, 25), (999999, 10),
+    ])
+
+    vals = [
+        x for x in [
+            pe_score,
+            ps_score,
+            ev_score,
+        ]
+        if x is not None
+    ]
+
     if not vals:
         return 50.0
+
     return float(sum(vals) / len(vals))
 
 
@@ -123,8 +208,10 @@ def _score_quality(gross_margin=None, operating_margin=None):
 
     if gm is None and om is None:
         return 50.0
+
     if gm is None:
         return om
+
     if om is None:
         return gm
 
@@ -133,6 +220,7 @@ def _score_quality(gross_margin=None, operating_margin=None):
 
 def _score_momentum(rsi, trend):
     r = _to_float(rsi)
+
     if r is None:
         base = 50.0
     elif r < 20:
@@ -166,7 +254,6 @@ def _score_risk(vol20, max_dd):
     dd_penalty = 0.0
 
     if vol is not None:
-        # vol is decimal annualized, e.g. 0.20 = 20%
         if vol <= 0.15:
             vol_penalty = 10
         elif vol <= 0.25:
@@ -179,8 +266,8 @@ def _score_risk(vol20, max_dd):
             vol_penalty = 80
 
     if dd is not None:
-        # max drawdown usually negative
         d = abs(dd)
+
         if d <= 0.10:
             dd_penalty = 10
         elif d <= 0.20:
@@ -193,6 +280,7 @@ def _score_risk(vol20, max_dd):
             dd_penalty = 85
 
     penalty = max(vol_penalty, dd_penalty)
+
     return _clip_score(100 - penalty)
 
 
@@ -245,6 +333,7 @@ def _composite_weighted(quality, growth, value, momentum):
 
     return float(sum(parts) / total_w)
 
+
 def _normalize_sector(s):
     if not s:
         return "Unknown"
@@ -264,12 +353,15 @@ def _normalize_sector(s):
 
         "CONSUMER CYCLICAL": "Consumer",
         "RETAIL": "Consumer",
+        "CONSUMER DEFENSIVE": "Consumer",
 
         "ENERGY": "Energy",
         "UTILITIES": "Utilities",
         "INDUSTRIALS": "Industrials",
         "MATERIALS": "Materials",
         "REAL ESTATE": "Real Estate",
+        "COMMUNICATION": "Communication Services",
+        "TELECOM": "Communication Services",
     }
 
     for k, v in mapping.items():
@@ -279,34 +371,146 @@ def _normalize_sector(s):
     return s.title()
 
 
+def _normalize_history_df(df):
+    required_cols = [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume",
+    ]
+
+    if df is None or df.empty:
+        return pd.DataFrame(columns=required_cols)
+
+    df = df.copy()
+
+    rename_map = {}
+
+    for c in df.columns:
+        lc = str(c).lower().strip()
+
+        if lc in ("date", "datetime", "timestamp", "time"):
+            rename_map[c] = "Date"
+        elif lc == "open":
+            rename_map[c] = "Open"
+        elif lc == "high":
+            rename_map[c] = "High"
+        elif lc == "low":
+            rename_map[c] = "Low"
+        elif lc in ("close", "adj close", "adjusted_close"):
+            rename_map[c] = "Close"
+        elif lc in ("volume", "vol"):
+            rename_map[c] = "Volume"
+
+    df.rename(columns=rename_map, inplace=True)
+
+    for col in required_cols:
+        if col not in df.columns:
+            if col == "Date":
+                df[col] = pd.NaT
+            else:
+                df[col] = 0.0
+
+    df["Date"] = pd.to_datetime(
+        df["Date"],
+        errors="coerce",
+    )
+
+    try:
+        if getattr(df["Date"].dt, "tz", None) is not None:
+            df["Date"] = df["Date"].dt.tz_convert(None)
+    except Exception:
+        try:
+            df["Date"] = df["Date"].dt.tz_localize(None)
+        except Exception:
+            pass
+
+    for col in [
+        "Open",
+        "High",
+        "Low",
+        "Close",
+        "Volume",
+    ]:
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce",
+        )
+
+    df = df.dropna(subset=["Date", "Close"])
+
+    df = (
+        df
+        .sort_values("Date")
+        .drop_duplicates(subset=["Date"])
+        .reset_index(drop=True)
+    )
+
+    return df[required_cols]
+
+
+def _safe_json_response(response, provider_name, symbol):
+    try:
+        if response.status_code != 200:
+            print(f"{provider_name} HTTP {response.status_code}: {symbol}")
+            print(str(response.text or "")[:300])
+            return None
+
+        if not response.text or not response.text.strip():
+            print(f"{provider_name} EMPTY RESPONSE: {symbol}")
+            return None
+
+        return response.json()
+
+    except Exception as e:
+        print(f"{provider_name} JSON ERROR: {symbol} {e}")
+        return None
+
+
 # ---------------------------------------------------
-# PRICE FETCH (REALTIME)
+# LEGACY PRICE FETCH HELPERS
 # ---------------------------------------------------
 
 def _get_prices_many(symbols):
-
+    """
+    Legacy EODHD realtime helper retained for compatibility.
+    Main analytics should use get_latest_price_map() from market_data.service.
+    """
     key = get_secret("EODHD_API_KEY")
+
     if not key:
         return {}
 
     out = {}
-    BATCH_SIZE = 50
+    batch_size = 50
 
-    for i in range(0, len(symbols), BATCH_SIZE):
-        batch = symbols[i:i + BATCH_SIZE]
+    clean_symbols = [
+        _normalize(s)
+        for s in symbols or []
+        if s
+    ]
+
+    for i in range(0, len(clean_symbols), batch_size):
+        batch = clean_symbols[i:i + batch_size]
 
         try:
-            r = requests.get(
+            response = requests.get(
                 EOD_REALTIME,
                 params={
                     "api_token": key,
                     "fmt": "json",
-                    "s": ",".join(batch)
+                    "s": ",".join(batch),
                 },
-                timeout=6
+                timeout=6,
             )
 
-            data = r.json()
+            data = _safe_json_response(
+                response,
+                "EODHD REALTIME",
+                ",".join(batch),
+            )
 
             if not isinstance(data, list):
                 continue
@@ -326,21 +530,31 @@ def _get_prices_many(symbols):
     return out
 
 
-# ---------------------------------------------------
-# LATEST BAR (FOR VOLUME)
-# ---------------------------------------------------
-
 def _get_latest_bar(symbol):
+    """
+    Legacy latest bar helper. Prefer normalized provider history for volume.
+    """
     key = get_secret("EODHD_API_KEY")
 
+    if not key:
+        return {}
+
     try:
-        r = requests.get(
+        response = requests.get(
             f"{EOD_EOD}/{_sym(symbol)}",
-            params={"api_token": key, "fmt": "json", "limit": 1},
-            timeout=6
+            params={
+                "api_token": key,
+                "fmt": "json",
+                "limit": 1,
+            },
+            timeout=6,
         )
 
-        data = r.json()
+        data = _safe_json_response(
+            response,
+            "EODHD LATEST BAR",
+            symbol,
+        )
 
         if isinstance(data, list) and data:
             return data[-1]
@@ -351,40 +565,42 @@ def _get_latest_bar(symbol):
     return {}
 
 
-# ---------------------------------------------------
-# PRICE SERIES (TECHNICALS)
-# ---------------------------------------------------
-
 def _get_price_series(symbol):
-
-    key = get_secret("EODHD_API_KEY")
-
+    """
+    Compatibility helper.
+    Now uses normalized market_data.service history instead of direct EODHD/Finnhub history.
+    """
     try:
-        r = requests.get(
-            f"{EOD_EOD}/{_sym(symbol)}",
-            params={
-                "api_token": key,
-                "fmt": "json",
-                "limit": 250
-            },
-            timeout=6
+        df = get_price_history(
+            db=None,
+            symbol=symbol,
+            period="1y",
+            interval="1d",
         )
 
-        data = r.json()
+        df = _normalize_history_df(df)
 
-        if isinstance(data, list) and len(data) > 0:
-            closes = [row["close"] for row in data if row.get("close") is not None]
-            volumes = [row.get("volume", 0) for row in data]
+        if df is None or df.empty:
+            return pd.DataFrame()
 
-            return pd.DataFrame({
-                "close": closes,
-                "volume": volumes[:len(closes)]
-            })
+        closes = pd.to_numeric(
+            df["Close"],
+            errors="coerce",
+        ).dropna()
+
+        volumes = pd.to_numeric(
+            df["Volume"],
+            errors="coerce",
+        ).fillna(0)
+
+        return pd.DataFrame({
+            "Close": closes,
+            "Volume": volumes.iloc[:len(closes)].reset_index(drop=True),
+        })
 
     except Exception as e:
         print("SERIES ERROR:", symbol, e)
-
-    return None
+        return pd.DataFrame()
 
 
 # ---------------------------------------------------
@@ -392,58 +608,90 @@ def _get_price_series(symbol):
 # ---------------------------------------------------
 
 def _compute_rsi(series, period=14):
+    if series is None or len(series) == 0:
+        return pd.Series(dtype=float)
+
+    series = pd.to_numeric(
+        series,
+        errors="coerce",
+    ).dropna()
+
+    if len(series) < period + 1:
+        return pd.Series(dtype=float)
+
     delta = series.diff()
     gain = delta.clip(lower=0).rolling(period).mean()
     loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+
+    rs = gain / loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi.fillna(50.0)
 
 
-_profile_cache = {}
+# ---------------------------------------------------
+# FUNDAMENTALS
+# ---------------------------------------------------
 
 def _get_fundamentals(symbol):
-
     sym = _normalize(symbol)
 
     if sym in _fund_cache:
         return _fund_cache[sym]
 
     key = get_secret("FINNHUB_API_KEY")
+
     if not key:
         return {}
 
     try:
-        # --------------------------------------------------
-        # 1. METRICS (PRIMARY)
-        # --------------------------------------------------
-        r = requests.get(
+        response = requests.get(
             "https://finnhub.io/api/v1/stock/metric",
-            params={"symbol": sym, "metric": "all", "token": key},
-            timeout=6
+            params={
+                "symbol": sym,
+                "metric": "all",
+                "token": key,
+            },
+            timeout=8,
         )
 
-        data = r.json()
-        m = data.get("metric", {})
+        data = _safe_json_response(
+            response,
+            "FINNHUB METRIC",
+            sym,
+        )
 
-        if not m:
+        if not isinstance(data, dict):
             return {}
 
-        # --------------------------------------------------
-        # 2. SECTOR (PROFILE ENDPOINT - CORRECT SOURCE)
-        # --------------------------------------------------
+        metrics = data.get("metric", {})
+
+        if not isinstance(metrics, dict):
+            metrics = {}
+
         sector = None
 
         if sym in _profile_cache:
             sector = _profile_cache[sym]
         else:
             try:
-                prof = requests.get(
+                profile_response = requests.get(
                     "https://finnhub.io/api/v1/stock/profile2",
-                    params={"symbol": sym, "token": key},
-                    timeout=5
-                ).json()
+                    params={
+                        "symbol": sym,
+                        "token": key,
+                    },
+                    timeout=8,
+                )
 
-                sector = prof.get("finnhubIndustry")
+                profile_data = _safe_json_response(
+                    profile_response,
+                    "FINNHUB PROFILE",
+                    sym,
+                )
+
+                if isinstance(profile_data, dict):
+                    sector = profile_data.get("finnhubIndustry")
 
                 print("✅ FINNHUB PROFILE SECTOR:", sym, sector)
 
@@ -452,43 +700,34 @@ def _get_fundamentals(symbol):
             except Exception as e:
                 print("PROFILE ERROR:", sym, e)
 
-        # --------------------------------------------------
-        # 3. BASE FUNDAMENTALS
-        # --------------------------------------------------
         result = {
-            "revenue_cagr": _to_float(m.get("revenueGrowthTTMYoy")),
-            "gross_margin": _normalize_percent(m.get("grossMarginTTM")),
-            "operating_margin": _normalize_percent(m.get("operatingMarginTTM")),
-            "pe_ttm": _to_float(m.get("peTTM")),
-            "ps_ttm": _to_float(m.get("psTTM")),
-            "ev_ebitda": _to_float(m.get("evEbitdaTTM")),
+            "revenue_cagr": _to_float(metrics.get("revenueGrowthTTMYoy")),
+            "gross_margin": _normalize_percent(metrics.get("grossMarginTTM")),
+            "operating_margin": _normalize_percent(metrics.get("operatingMarginTTM")),
+            "pe_ttm": _to_float(metrics.get("peTTM")),
+            "ps_ttm": _to_float(metrics.get("psTTM")),
+            "ev_ebitda": _to_float(metrics.get("evEbitdaTTM")),
             "fcf_margin": None,
-            "sector": sector,  # 🔥 FIXED
+            "sector": sector,
         }
 
-        print("✅ FINNHUB FUNDAMENTALS USED:", sym)
-
-        # --------------------------------------------------
-        # 4. FCF CALCULATION (UNCHANGED)
-        # --------------------------------------------------
         fcf_ps = _to_float(
-            m.get("cashFlowPerShareTTM")
-            or m.get("freeCashFlowPerShareTTM")
+            metrics.get("cashFlowPerShareTTM")
+            or metrics.get("freeCashFlowPerShareTTM")
         )
 
-        rev_ps = _to_float(m.get("revenuePerShareTTM"))
+        rev_ps = _to_float(metrics.get("revenuePerShareTTM"))
 
         print("DEBUG FCF INPUT:", sym, fcf_ps, rev_ps)
 
-        if fcf_ps and rev_ps:
+        if fcf_ps is not None and rev_ps not in (None, 0):
             result["fcf_margin"] = (fcf_ps / rev_ps) * 100
             print("✅ FCF CALCULATED:", sym, result["fcf_margin"])
         else:
             print("⚠️ FCF STILL MISSING:", sym)
 
-        # --------------------------------------------------
-        # 5. CACHE + RETURN
-        # --------------------------------------------------
+        print("✅ FINNHUB FUNDAMENTALS USED:", sym)
+
         _fund_cache[sym] = result
         return result
 
@@ -496,12 +735,12 @@ def _get_fundamentals(symbol):
         print("FINNHUB ERROR:", sym, e)
         return {}
 
+
 # ---------------------------------------------------
 # FACTORS
 # ---------------------------------------------------
 
 def _compute_factors(price, fundamentals, rsi):
-
     quality = fundamentals.get("gross_margin") or 0
     growth = fundamentals.get("revenue_cagr") or 0
     value = max(0, 100 - (fundamentals.get("pe_ttm") or 50))
@@ -512,68 +751,127 @@ def _compute_factors(price, fundamentals, rsi):
 
 
 # ---------------------------------------------------
-# MAIN ANALYTICS
+# ALERTS
 # ---------------------------------------------------
+
 def check_for_alerts(symbol, signal, composite, sentiment):
     alerts = []
 
-    # -----------------------------
-    # SIGNAL ALERTS
-    # -----------------------------
     if signal in ["Buy", "Strong Buy"]:
         alerts.append(f"🚀 {symbol} BUY signal")
-
     elif signal in ["Sell", "Strong Sell"]:
         alerts.append(f"⚠️ {symbol} SELL signal")
 
-    # -----------------------------
-    # SENTIMENT ALERTS
-    # -----------------------------
     if sentiment is not None:
         if sentiment > 0.1:
             alerts.append(f"📰 {symbol} positive news sentiment")
-
         elif sentiment < -0.1:
             alerts.append(f"📰 {symbol} negative news sentiment")
 
-    # -----------------------------
-    # COMPOSITE ALERTS (FIXED)
-    # -----------------------------
     if composite and composite >= 65:
         alerts.append(f"🔥 {symbol} strong composite score ({round(composite, 1)})")
-
     elif composite and composite <= 30:
         alerts.append(f"❄️ {symbol} weak composite score ({round(composite, 1)})")
 
     return alerts
 
-def run_analytics_for_symbol(db, tenant_id, symbol):
 
+# ---------------------------------------------------
+# MAIN ANALYTICS
+# ---------------------------------------------------
+
+def run_analytics_for_symbol(
+        db,
+        tenant_id,
+        symbol,
+        price_df=None,
+):
     sym = _normalize(symbol)
 
-    # -------- PRICE --------
-    price_map = _get_prices_many([sym, f"{sym}.US"])
-
-    price = (
-        price_map.get(sym) or
-        price_map.get(f"{sym}.US")
-    )
-
-    if price is None:
-        print("NO PRICE:", sym, price_map)
+    if not sym:
         return None
 
-    # -------- SERIES --------
-    df = _get_price_series(sym)
+    # ---------------------------------
+    # PRICE HISTORY / SERIES
+    # ---------------------------------
+    df = price_df
 
-    if df is None or len(df) < 50:
+    if df is None or df.empty:
+        try:
+            df = get_price_history(
+                db=db,
+                symbol=sym,
+                period="1y",
+                interval="1d",
+            )
+        except Exception as e:
+            print("PRICE HISTORY ERROR:", sym, e)
+            df = pd.DataFrame()
+
+    df = _normalize_history_df(df)
+
+    if df is None or df.empty or len(df) < 50:
+        print("INSUFFICIENT PRICE HISTORY:", sym, 0 if df is None else len(df))
         return None
 
-    closes = df["close"]
-    volumes = df["volume"]
+    required_cols = [
+        "Close",
+        "Volume",
+    ]
 
-    # -------- TECH --------
-    rsi = _compute_rsi(closes).iloc[-1]
+    for col in required_cols:
+        if col not in df.columns:
+            print(f"MISSING REQUIRED COLUMN {col}: {sym}")
+            return None
+
+    closes = pd.to_numeric(
+        df["Close"],
+        errors="coerce",
+    ).dropna()
+
+    volumes = pd.to_numeric(
+        df["Volume"],
+        errors="coerce",
+    ).fillna(0)
+
+    if len(closes) < 50:
+        print("INSUFFICIENT CLOSE SERIES:", sym, len(closes))
+        return None
+
+    # ---------------------------------
+    # LATEST PRICE
+    # ---------------------------------
+    price = None
+
+    try:
+        latest_prices = get_latest_price_map([sym])
+
+        if isinstance(latest_prices, dict):
+            price = (
+                latest_prices.get(sym)
+                or latest_prices.get(f"{sym}.US")
+            )
+
+    except Exception as e:
+        print("LATEST PRICE ERROR:", sym, e)
+
+    if price is None or float(price or 0) <= 0:
+        try:
+            price = float(closes.iloc[-1])
+        except Exception:
+            price = None
+
+    if price is None or float(price or 0) <= 0:
+        print("NO PRICE:", sym, {})
+        return None
+
+    price = float(price)
+
+    # ---------------------------------
+    # TECHNICALS
+    # ---------------------------------
+    rsi_series = _compute_rsi(closes)
+    rsi = rsi_series.iloc[-1] if rsi_series is not None and not rsi_series.empty else 50.0
 
     sma50 = closes.rolling(50).mean().iloc[-1] if len(closes) >= 50 else None
     sma200 = closes.rolling(200).mean().iloc[-1] if len(closes) >= 200 else None
@@ -586,20 +884,29 @@ def run_analytics_for_symbol(db, tenant_id, symbol):
     support = closes.tail(20).min()
     resistance = closes.tail(20).max()
 
-    # -------- TREND --------
+    # ---------------------------------
+    # TREND
+    # ---------------------------------
     trend = "Range"
-    if sma50 and sma200:
+
+    if sma50 is not None and sma200 is not None:
         if price > sma50 > sma200:
             trend = "Uptrend"
         elif price < sma50 < sma200:
             trend = "Downtrend"
 
-    # -------- VOLUME --------
-    latest_bar = _get_latest_bar(sym)
-    latest_volume = _to_float(latest_bar.get("volume"))
+    # ---------------------------------
+    # VOLUME
+    # ---------------------------------
+    try:
+        latest_volume = float(volumes.iloc[-1]) if len(volumes) else 0.0
+    except Exception:
+        latest_volume = 0.0
 
-    # -------- FUNDAMENTALS --------
-    fundamentals = _get_fundamentals(sym)
+    # ---------------------------------
+    # FUNDAMENTALS
+    # ---------------------------------
+    fundamentals = _get_fundamentals(sym) or {}
 
     gross_margin = _to_float(fundamentals.get("gross_margin"))
     operating_margin = _to_float(fundamentals.get("operating_margin"))
@@ -610,156 +917,114 @@ def run_analytics_for_symbol(db, tenant_id, symbol):
     ps = _to_float(fundamentals.get("ps_ttm"))
     ev_ebitda = _to_float(fundamentals.get("ev_ebitda"))
 
-    # -------- FACTOR SCORES --------
+    # ---------------------------------
+    # FACTOR SCORES
+    # ---------------------------------
     quality = _score_quality(gross_margin, operating_margin)
     growth = _score_growth_pct(revenue_cagr)
     value = _score_value(pe, ps, ev_ebitda)
     momentum = _score_momentum(rsi, trend)
     risk = _score_risk(vol20, max_dd)
 
-    # ✅ FIX: use computed confidence
-    confidence = _score_confidence(fundamentals, sma50, sma200, vol20, max_dd)
+    confidence = _score_confidence(
+        fundamentals,
+        sma50,
+        sma200,
+        vol20,
+        max_dd,
+    )
 
-    # -------- BASE COMPOSITE --------
-    # ---------------------------------------
-    # SENTIMENT-ADJUSTED COMPOSITE
-    # ---------------------------------------
+    base_composite = _composite_weighted(
+        quality,
+        growth,
+        value,
+        momentum,
+    )
 
+    if base_composite is None:
+        base_composite = 50.0
+
+    # ---------------------------------
+    # SENTIMENT
+    # ---------------------------------
     sentiment_score = 0.0
 
     try:
-        from modules.market_data.news_service import get_finnhub_news
         from modules.market_data.news_service import (
             get_finnhub_news,
-            derive_sentiment_from_news
+            derive_sentiment_from_news,
         )
-        news_items = get_finnhub_news(symbol)
+
+        news_items = get_finnhub_news(sym)
 
         if news_items:
             sentiment_score = derive_sentiment_from_news(news_items)
 
     except Exception as e:
+        print("Sentiment integration failed:", sym, e)
         sentiment_score = 0.0
 
-    base_composite = _composite_weighted(quality, growth, value, momentum)
+    sentiment_score = float(sentiment_score or 0.0)
 
-    # Weight sentiment lightly (10–15% influence)
     composite = (
-            base_composite * 0.9
-            + (sentiment_score * 100) * 0.1
+        float(base_composite) * 0.90
+        + (sentiment_score * 100.0) * 0.10
     )
 
-    def generate_trade_signal(composite, sentiment, confidence):
-        if composite is None:
+    composite = _clip_score(composite)
+
+    # ---------------------------------
+    # SIGNAL GENERATION
+    # ---------------------------------
+    def generate_trade_signal(composite_score, sentiment, confidence_score):
+        if composite_score is None:
             return "Hold", "No composite score"
 
-        # Strong Buy
-        if composite >= 70 and sentiment > 0.1 and confidence >= 60:
+        if composite_score >= 70 and sentiment > 0.1 and confidence_score >= 60:
             return "Strong Buy", "High composite + positive sentiment"
 
-        # Buy
-        if composite >= 60:
+        if composite_score >= 60:
             return "Buy", "Solid fundamentals"
 
-        # Sell
-        if composite <= 40:
+        if composite_score <= 40:
             if sentiment < -0.1:
-                return "Strong Sell", "Weak + negative sentiment"
+                return "Strong Sell", "Weak composite + negative sentiment"
             return "Sell", "Weak composite"
 
         return "Hold", "Neutral conditions"
-    # --------------------------------------------------
-    # 🧠 SENTIMENT INTEGRATION (SAFE)
-    # --------------------------------------------------
-    try:
-        from modules.market_data.news_service import get_finnhub_news
 
-        def derive_sentiment_from_news(news_items):
-            if not news_items:
-                return 0.0
-
-            bullish_words = [
-                "beat", "growth", "strong", "upgrade", "outperform",
-                "record", "surge", "expansion", "positive"
-            ]
-
-            bearish_words = [
-                "miss", "weak", "downgrade", "decline", "drop",
-                "cut", "risk", "concern", "negative"
-            ]
-
-            bullish = 0
-            bearish = 0
-
-            for n in news_items:
-                text = f"{n.get('headline', '')} {n.get('summary', '')}".lower()
-
-                if any(w in text for w in bullish_words):
-                    bullish += 1
-
-                if any(w in text for w in bearish_words):
-                    bearish += 1
-
-            total = bullish + bearish
-            if total == 0:
-                return 0.0
-
-            return (bullish - bearish) / total
-
-        news_items = get_finnhub_news(sym)
-        sentiment_score = derive_sentiment_from_news(news_items)
-
-        sentiment_scaled = sentiment_score * 100
-        SENTIMENT_WEIGHT = 0.10
-
-        composite += sentiment_scaled * SENTIMENT_WEIGHT
-
-    except Exception as e:
-        print("Sentiment integration failed:", e)
-
-    print("FINAL COMPOSITE:", composite)
     signal, rationale = generate_trade_signal(
         composite,
         sentiment_score,
-        confidence
+        confidence,
     )
-    # ---------------------------------------
-    # 🚨 ALERT ENGINE (PLACE IT HERE)
-    # ---------------------------------------
-    alerts = check_for_alerts(
-        symbol,
-        signal,
-        composite,
-        sentiment_score
-    )
-
-    for alert in alerts:
-        print("ALERT:", alert)
 
     if not signal:
         signal = "Hold"
 
-    if sentiment_score is None:
-        sentiment_score = sentiment_score if sentiment_score is not None else 0.0
+    print("FINAL COMPOSITE:", sym, composite)
+    print("FINAL SIGNAL:", sym, composite, signal)
 
-        # -----------------------------
-        # SIGNAL GENERATION (REQUIRED)
-        # -----------------------------
-        if composite is None:
-            signal = None
-        elif composite >= 65:
-            signal = "Strong Buy"
-        elif composite >= 55:
-            signal = "Buy"
-        elif composite <= 30:
-            signal = "Strong Sell"
-        elif composite <= 45:
-            signal = "Sell"
-        else:
-            signal = "Hold"
+    # ---------------------------------
+    # ALERTS
+    # ---------------------------------
+    try:
+        alerts = check_for_alerts(
+            sym,
+            signal,
+            composite,
+            sentiment_score,
+        )
 
-        print("FINAL SIGNAL:", sym, composite, signal)
-    # -------- SNAPSHOT --------
+        for alert in alerts:
+            print("ALERT:", alert)
+
+    except Exception as e:
+        print("ALERT CHECK ERROR:", sym, e)
+
+    # ---------------------------------
+    # SNAPSHOT
+    # ---------------------------------
     snapshot = AnalyticsSnapshot(
         tenant_id=tenant_id,
         symbol=sym,
@@ -767,12 +1032,8 @@ def run_analytics_for_symbol(db, tenant_id, symbol):
 
         sector=_normalize_sector(fundamentals.get("sector")),
 
-        rating = signal,
-
-        # ✅ FIX: safe float conversion
+        rating=signal,
         composite_score=float(composite or 0.0),
-
-        # ✅ FIX: use real confidence
         confidence_score=float(confidence or 0.0),
 
         quality_score=_to_float(quality),
@@ -796,50 +1057,76 @@ def run_analytics_for_symbol(db, tenant_id, symbol):
 
         latest_volume=_to_float(latest_volume),
 
-        revenue_cagr=_to_float(fundamentals.get("revenue_cagr")),
-        gross_margin=_to_float(fundamentals.get("gross_margin")),
-        operating_margin=_to_float(fundamentals.get("operating_margin")),
+        revenue_cagr=_to_float(revenue_cagr),
+        gross_margin=_to_float(gross_margin),
+        operating_margin=_to_float(operating_margin),
 
-        pe_ttm=_to_float(fundamentals.get("pe_ttm")),
-        ps_ttm=_to_float(fundamentals.get("ps_ttm")),
-        ev_ebitda=_to_float(fundamentals.get("ev_ebitda")),
-        fcf_margin=_to_float(fundamentals.get("fcf_margin")),
+        pe_ttm=_to_float(pe),
+        ps_ttm=_to_float(ps),
+        ev_ebitda=_to_float(ev_ebitda),
+        fcf_margin=_to_float(fcf_margin),
     )
 
-    # -----------------------------
+    # ---------------------------------
     # UPSERT SNAPSHOT
-    # -----------------------------
+    # ---------------------------------
     existing = (
         db.query(AnalyticsSnapshot)
         .filter(
             AnalyticsSnapshot.tenant_id == tenant_id,
-            AnalyticsSnapshot.symbol == symbol,
+            AnalyticsSnapshot.symbol == sym,
         )
         .order_by(AnalyticsSnapshot.asof.desc())
         .first()
     )
 
     if existing:
-        existing.composite_score = float(composite or 0.0)
-        existing.signal = signal
-        existing.rating = signal
-        existing.sentiment_score = float(sentiment_score or 0.0)
-        existing.confidence_score = float(confidence or 0.0)
         existing.asof = datetime.utcnow()
+        existing.sector = _normalize_sector(fundamentals.get("sector"))
+        existing.rating = signal
+        existing.composite_score = float(composite or 0.0)
+        existing.confidence_score = float(confidence or 0.0)
+
+        existing.quality_score = _to_float(quality)
+        existing.growth_score = _to_float(growth)
+        existing.value_score = _to_float(value)
+        existing.momentum_score = _to_float(momentum)
+        existing.risk_score = _to_float(risk)
+
+        existing.trend = trend
+        existing.rsi_14 = _to_float(rsi)
+        existing.sma_50 = _to_float(sma50)
+        existing.sma_200 = _to_float(sma200)
+        existing.signal = signal
+        existing.signal_rationale = rationale
+        existing.support = _to_float(support)
+        existing.resistance = _to_float(resistance)
+        existing.sentiment_score = _to_float(sentiment_score)
+        existing.vol_20d = _to_float(vol20)
+        existing.max_drawdown_1y = _to_float(max_dd)
+
+        existing.latest_volume = _to_float(latest_volume)
+
+        existing.revenue_cagr = _to_float(revenue_cagr)
+        existing.gross_margin = _to_float(gross_margin)
+        existing.operating_margin = _to_float(operating_margin)
+
+        existing.pe_ttm = _to_float(pe)
+        existing.ps_ttm = _to_float(ps)
+        existing.ev_ebitda = _to_float(ev_ebitda)
+        existing.fcf_margin = _to_float(fcf_margin)
 
         print("🔥 SNAPSHOT UPDATED:", sym, composite, signal)
 
         db.commit()
         return existing
 
-    else:
-        db.add(snapshot)
+    db.add(snapshot)
 
-        print("🔥 SNAPSHOT INSERTED:", sym, composite, signal)
+    print("🔥 SNAPSHOT INSERTED:", sym, composite, signal)
 
-        db.commit()
-        return snapshot
-
+    db.commit()
+    return snapshot
 
 
 # ---------------------------------------------------
@@ -847,20 +1134,52 @@ def run_analytics_for_symbol(db, tenant_id, symbol):
 # ---------------------------------------------------
 
 def run_analytics(db, tenant_id, symbols):
-
     if isinstance(symbols, str):
         symbols = [symbols]
 
+    clean_symbols = []
+
+    for s in symbols or []:
+        sym = _normalize(s)
+
+        if sym:
+            clean_symbols.append(sym)
+
+    clean_symbols = list(dict.fromkeys(clean_symbols))
+
+    if not clean_symbols:
+        st.warning("No symbols provided for analytics.")
+        return []
+
+    # ---------------------------------
+    # PRELOAD PRICE HISTORIES
+    # ---------------------------------
+    history_map = preload_histories(
+        db=db,
+        symbols=clean_symbols,
+        period="1y",
+        interval="1d",
+    )
+
     results = []
 
-    for i, s in enumerate(symbols):
+    for i, sym in enumerate(clean_symbols):
         if i % 25 == 0:
-            st.write(f"Processing {i}/{len(symbols)}")
+            st.write(f"Processing {i}/{len(clean_symbols)}")
 
-        snap = run_analytics_for_symbol(db, tenant_id, s)
+        try:
+            snap = run_analytics_for_symbol(
+                db=db,
+                tenant_id=tenant_id,
+                symbol=sym,
+                price_df=history_map.get(sym),
+            )
 
-        if snap:
-            results.append(snap)
+            if snap:
+                results.append(snap)
+
+        except Exception as e:
+            print("ANALYTICS ERROR:", sym, e)
 
     db.commit()
 
@@ -874,43 +1193,115 @@ def run_analytics(db, tenant_id, symbols):
 # ---------------------------------------------------
 
 def run_full_analytics(db, tenant_id, symbols):
-
-    results = run_analytics(db, tenant_id, symbols)
+    results = run_analytics(
+        db=db,
+        tenant_id=tenant_id,
+        symbols=symbols,
+    )
 
     if not results:
         return None
 
     return results[-1]
+
+
 # ---------------------------------------------------
-# COMPATIBILITY: VECTOR ANALYTICS (UNIVERSE SUPPORT)
+# COMPATIBILITY: VECTOR ANALYTICS
 # ---------------------------------------------------
 
-def run_vectorized_price_analytics(db, tenant_id, symbols, **kwargs):
+def run_vectorized_price_analytics(
+        db,
+        tenant_id,
+        symbols,
+        **kwargs,
+):
     """
-    Compatibility wrapper for legacy universe module.
+    Vector-compatible analytics runner.
 
-    Previously vectorized — now routes to per-symbol analytics safely.
+    Uses shared normalized cached price history and passes cached
+    dataframes into run_analytics_for_symbol() to avoid repeated
+    provider fetches inside the analytics loop.
     """
-
-    print("⚠️ Using fallback: run_vectorized_price_analytics → run_analytics")
 
     if isinstance(symbols, str):
         symbols = [symbols]
 
+    clean_symbols = []
+
+    for s in symbols or []:
+        try:
+            sym = _normalize(s)
+
+            if sym:
+                clean_symbols.append(sym)
+
+        except Exception:
+            continue
+
+    clean_symbols = list(dict.fromkeys(clean_symbols))
+
+    print(f"🚀 VECTOR ANALYTICS START: {len(clean_symbols)} symbols")
+
+    if not clean_symbols:
+        return []
+
+    # ---------------------------------
+    # BUILD SHARED CACHE
+    # ---------------------------------
+    try:
+        price_cache, meta = build_shared_price_cache(
+            db=db,
+            symbols=clean_symbols,
+            min_rows=50,
+            period="1y",
+            interval="1d",
+            max_api_calls=kwargs.get("max_api_calls", None),
+        )
+
+    except Exception as e:
+        print("🚨 SHARED CACHE BUILD FAILED:", e)
+        price_cache = {}
+        meta = {}
+
+    if not price_cache:
+        print("🚨 VECTOR CACHE EMPTY")
+        return []
+
+    print(f"✅ VECTOR CACHE READY: {len(price_cache)} symbols")
+
+    # ---------------------------------
+    # ANALYTICS LOOP
+    # ---------------------------------
     results = []
 
-    for i, sym in enumerate(symbols):
-
+    for i, sym in enumerate(clean_symbols):
         if i % 50 == 0:
-            print(f"Vector fallback processing {i}/{len(symbols)}")
+            print(f"Vector analytics processing {i}/{len(clean_symbols)}")
 
         try:
-            snap = run_analytics_for_symbol(db, tenant_id, sym)
+            cached_df = price_cache.get(sym)
+
+            if cached_df is None or cached_df.empty:
+                continue
+
+            cached_df = _normalize_history_df(cached_df)
+
+            if cached_df is None or cached_df.empty or len(cached_df) < 50:
+                continue
+
+            snap = run_analytics_for_symbol(
+                db=db,
+                tenant_id=tenant_id,
+                symbol=sym,
+                price_df=cached_df,
+            )
 
             if snap:
                 results.append(snap)
 
         except Exception as e:
-            print("VECTOR FALLBACK ERROR:", sym, e)
+            print("VECTOR ANALYTICS ERROR:", sym, e)
+
+    print(f"✅ VECTOR ANALYTICS COMPLETE: {len(results)} snapshots")
 
     return results

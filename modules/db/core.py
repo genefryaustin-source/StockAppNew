@@ -66,15 +66,15 @@ def init_database():
     import modules.institutional.models
     import modules.analytics.models
     import modules.alerts.models
-    import modules.universe.models        # ADD
-    import modules.jobs.models            # ADD
-    import modules.market_data.models     # ADD
-    import modules.analytics.strategy_models  # ADD
+    import modules.universe.models
+    import modules.jobs.models
+    import modules.market_data.models
+    import modules.analytics.strategy_models
+
+    # Create all tables from models first
     Base.metadata.create_all(bind=engine)
 
-    # ---------------------------------------------------
-    # Safe Migrations - add missing columns if needed
-    # ---------------------------------------------------
+    # Safe migrations
     migrations = [
         # users
         "ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1",
@@ -96,9 +96,8 @@ def init_database():
             try:
                 conn.execute(text(sql))
                 conn.commit()
-                print(f"[migration] Applied: {sql}")
             except Exception:
-                pass  # Column already exists, skip
+                pass
 
 from datetime import datetime, UTC
 
