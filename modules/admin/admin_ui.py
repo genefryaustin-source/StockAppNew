@@ -36,6 +36,8 @@ def get_active_tenant(user):
 # ---------------------------------------------------------
 def render_admin_panel(db, user):
 
+    st.write("ADMIN PANEL LOADED")
+
     # ---------------------------------------------------------
     # FIX TENANT ID IF NAME STORED INSTEAD OF UUID
     # ---------------------------------------------------------
@@ -67,6 +69,9 @@ def render_admin_panel(db, user):
     tenant_id = user.get("tenant_id")
 
     st.title("Admin Console")
+
+    st.write("ROLE:", role)
+    st.write("TENANT:", tenant_id)
 
     # ---------------------------------------------------------
     # SUPER ADMIN TENANT SELECTOR
@@ -453,19 +458,27 @@ def render_admin_panel(db, user):
 
             st.error("❌ No tenant context available")
 
-            st.stop()
+        else:
 
-        render_tenant_admin_panel(
-            db,
-            {
-                **user,
-                "tenant_id": tenant_id
-            }
-        )
+            render_tenant_admin_panel(
+                db,
+                {
+                    **user,
+                    "tenant_id": tenant_id
+                }
+            )
 
     # =========================================================
     # UNIVERSE CLEANUP TAB
     # =========================================================
     with tab_cleanup:
 
-        render_universe_cleanup_ui(db)
+        try:
+
+            render_universe_cleanup_ui(db)
+
+        except Exception as e:
+
+            st.error(
+                f"Universe cleanup failed: {e}"
+            )
