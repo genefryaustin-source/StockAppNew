@@ -349,6 +349,7 @@ backtest_mod = safe_import("modules.analytics.backtesting")
 regime_engine_mod = safe_import("modules.market.regime_engine")
 strategy_discovery_mod = safe_import("modules.analytics.strategy_discovery")
 strategy_library_mod = safe_import("modules.analytics.strategy_library")
+admin_mod = safe_import("modules.admin.admin_ui")
 
 # ====================== PAGE ROUTING ======================
 if page == "Dashboard":
@@ -459,6 +460,34 @@ elif page == "AI Rankings":
         st.exception(ranking_ui_mod)
     else:
         st.info("AI Rankings module ready")
+
+elif page == "Admin":
+
+    st.header("Admin Console")
+
+    if isinstance(admin_mod, Exception):
+
+        st.error("Admin module failed to load.")
+
+        st.exception(admin_mod)
+
+    elif hasattr(admin_mod, "render_admin_panel"):
+
+        try:
+
+            admin_mod.render_admin_panel(db, user)
+
+        except Exception as e:
+
+            st.error("Admin panel failed.")
+
+            st.exception(e)
+
+    else:
+
+        st.error(
+            "render_admin_panel() not found in admin_ui.py"
+        )
 
 elif page == "Help":
     try:
