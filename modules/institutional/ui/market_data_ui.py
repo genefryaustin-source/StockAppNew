@@ -241,7 +241,11 @@ def render_market_refresh(db, user):
 
     if run:
         try:
-            query = (text("""SELECT symbol FROM universe_equities"""))
+            query = text("""
+            SELECT DISTINCT symbol
+            FROM price_history
+            ORDER BY symbol
+            """)
             if limit > 0:
                 query += f" LIMIT {int(limit)}"
 
@@ -282,7 +286,9 @@ Failed: {result['failed']}
             )
 
             if updated_symbols:
-                st.info(f"Running analytics for {len(updated_symbols)} updated symbols...")
+                st.info(
+                    f"Running analytics for {len(updated_symbols)} updated symbols..."
+                )
 
                 analytics_result = run_incremental_analytics(
                     db,
@@ -290,27 +296,14 @@ Failed: {result['failed']}
                     updated_symbols,
                 )
 
-                st.success(
-                    f"""
-
-from modules.analytics.runner import enrich_missing_fundamentals
-
-enriched = enrich_missing_fundamentals(
-    db,
-    user["tenant_id"],
-    updated_symbols,
-    limit=200,
-)
-
-st.info(f"Fundamentals enriched: {enriched}")
-
-
-📊 Analytics Updated
-
-Processed: {analytics_result['processed']}
-Failed: {analytics_result['failed']}
-"""
+                st.info(
+                    f"Analytics completed for {len(updated_symbols)} symbols."
                 )
 
+                st.success(
+                    f"Analytics Updated | "
+                    f"Processed: {analytics_result['processed']} | "
+                    f"Failed: {analytics_result['failed']}"
+                )
         except Exception as e:
-            st.error(f"Market refresh failed: {e}")
+            st.error(f"Analytics did not update: {e}")
