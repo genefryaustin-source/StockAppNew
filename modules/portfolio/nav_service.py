@@ -1,6 +1,6 @@
 import pandas as pd
 from sqlalchemy import text
-
+from datetime import datetime, timedelta, UTC
 
 from collections import deque
 import uuid
@@ -106,7 +106,7 @@ class NavService:
         price_matrix.index = price_matrix.index.normalize()
 
         # TIME WINDOW
-        end_date = pd.Timestamp.utcnow().tz_localize(None).normalize()
+        end_date = pd.Timestamp.now(UTC).tz_localize(None).normalize()
         start_date = (end_date - pd.Timedelta(days=self._get_period_days(period))).normalize()
 
         price_matrix = price_matrix[
@@ -154,7 +154,7 @@ class NavService:
         hist["Date"] = hist["Date"].dt.normalize()
 
         # TIME WINDOW
-        end_date = pd.Timestamp.utcnow().tz_localize(None).normalize()
+        end_date = pd.Timestamp.now(UTC).tz_localize(None).normalize()
         start_date = (end_date - pd.Timedelta(days=self._get_period_days(period))).normalize()
 
         hist = hist[
@@ -873,7 +873,7 @@ class NavService:
             # ---------------------------------
             # HOLDING PERIOD (FIXED + SAFE)
             # ---------------------------------
-            sell_time = pd.Timestamp.utcnow().tz_localize(None)
+            sell_time = pd.Timestamp.now(UTC).tz_localize(None)
 
             if "Time" in open_lots.columns:
                 open_lots["Time"] = pd.to_datetime(open_lots["Time"], errors="coerce")
@@ -890,7 +890,7 @@ class NavService:
             # ---------------------------------
             from datetime import datetime
 
-            sell_time = pd.Timestamp.utcnow().tz_localize(None)
+            sell_time = pd.Timestamp.now(UTC).tz_localize(None)
 
             if "Time" in open_lots.columns:
                 open_lots["Time"] = pd.to_datetime(open_lots["Time"], errors="coerce")
@@ -1281,11 +1281,11 @@ class NavService:
                         open_lots[time_col] = pd.to_datetime(open_lots[time_col], errors="coerce")
                         open_lots[time_col] = open_lots[time_col].dt.tz_localize(None)
 
-                        age_days = (pd.Timestamp.utcnow().tz_localize(None) - open_lots[time_col]).dt.days
+                        age_days = (pd.Timestamp.now(UTC).tz_localize(None) - open_lots[time_col]).dt.days
                         if getattr(open_lots["Time"].dt, "tz", None) is not None:
                             open_lots["Time"] = open_lots["Time"].dt.tz_convert(None)
 
-                        age_days = (pd.Timestamp.utcnow().tz_localize(None) - open_lots["Time"]).dt.days
+                        age_days = (pd.Timestamp.now(UTC).tz_localize(None) - open_lots["Time"]).dt.days
                         long_term_bonus = float((age_days >= 365).mean() * 10.0) if len(open_lots) else 0.0
                         score += long_term_bonus
 

@@ -47,6 +47,7 @@ def _percentile_rank(series: pd.Series, ascending: bool = True) -> pd.Series:
     s = pd.to_numeric(series, errors="coerce")
     if s.notna().sum() == 0:
         return pd.Series([None] * len(series), index=series.index, dtype="float64")
+
     ranked = s.rank(method="average", pct=True, ascending=ascending) * 100.0
     return ranked.round(2)
 
@@ -120,7 +121,7 @@ def rank_symbols(
     tenant_id: str,
     symbols: List[str],
     min_confidence: float = 0.0,
-    require_composite: bool = True,
+    require_composite: bool = False,
     use_percentiles: bool = True,
     sector_relative: bool = False,
 ) -> List[RankedRow]:
@@ -128,7 +129,9 @@ def rank_symbols(
     if not symbols:
         st.session_state.rank_rows = []
         return []
-
+    from modules.utils.symbol_classifier import (
+        is_supported_common_equity,
+    )
     syms = [str(s).strip().upper() for s in symbols if s and str(s).strip()]
     if not syms:
         st.session_state.rank_rows = []
@@ -145,6 +148,24 @@ def rank_symbols(
         return []
 
     df["symbol"] = df["symbol"].astype(str).str.upper()
+    #df = df[
+        #df["symbol"].apply(
+            #is_supported_common_equity
+        #)
+    #].copy()
+    df = df[
+        (
+                df["symbol"].str.len() <= 6
+        )
+        &
+        (
+            ~df["symbol"].str.contains(
+                r"[\^]",
+                regex=True,
+                na=False,
+            )
+        )
+        ].copy()
     df = df[df["symbol"].isin(syms)].copy()
 
     if df.empty:
@@ -233,7 +254,7 @@ def rank_symbols(
 
     st.session_state.rank_rows = ranked
     return ranked
-
+    print("FINAL RANKED COUNT:", len(ranked))
 
 def sector_leaderboards(
     rows: List[RankedRow], top_n: int = 10
@@ -280,7 +301,8 @@ def build_percentile_rankings(
     sector_relative: bool = False,
 ) -> pd.DataFrame:
     df = get_latest_snapshots_df(db, tenant_id)
-
+    print("RANK DF INITIAL:", len(df))
+    print(df.columns.tolist())
     if df is None or df.empty:
         return pd.DataFrame()
 
@@ -293,7 +315,7 @@ def build_percentile_rankings(
         syms = [str(s).strip().upper() for s in symbols if s and str(s).strip()]
         if syms:
             df = df[df["symbol"].isin(syms)].copy()
-
+            print("AFTER SYMBOL FILTER:", len(df))
     if df.empty:
         return pd.DataFrame()
 
@@ -310,11 +332,11 @@ def build_percentile_rankings(
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    if "confidence_score" in df.columns:
-        df = df[
-            df["confidence_score"].isna()
-            | (df["confidence_score"] >= float(min_confidence))
-        ].copy()
+    #if "confidence_score" in df.columns:
+        #df = df[
+            #df["confidence_score"].isna()
+            #| (df["confidence_score"] >= float(min_confidence))
+        #].copy()
 
     if df.empty:
         return pd.DataFrame()

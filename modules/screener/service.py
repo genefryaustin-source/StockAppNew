@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 import pandas as pd
 import requests
 import streamlit as st
-
+from datetime import datetime, UTC
 from modules.analytics.models import AnalyticsSnapshot
 
 
@@ -23,78 +23,55 @@ def _to_float(x):
 # PRICE FETCH (EODHD ONLY)
 # ---------------------------------------------------
 
-def _get_prices_many(symbols: list[str]):
+# ---------------------------------------------------
+# PRICE FETCH (PROVIDER AGNOSTIC)
+# ---------------------------------------------------
 
-    key = st.secrets.get("EODHD_API_KEY")
+def _get_prices_many(
+    db: Session,
+    symbols: list[str],
+):
 
-    if not key:
-        st.error("Missing EODHD_API_KEY")
-        return {}
+    from modules.market_data.price_cache import (
+        get_price,
+    )
 
     out = {}
-    BATCH_SIZE = 50
+
+    symbols = [
+        str(s).upper().strip()
+        for s in symbols
+        if s
+    ]
+
+    total = len(symbols)
 
     progress = st.progress(0)
-    total_batches = (len(symbols) // BATCH_SIZE) + 1
-    batch_num = 0
 
-    for i in range(0, len(symbols), BATCH_SIZE):
-        batch = symbols[i:i + BATCH_SIZE]
-        batch_num += 1
-
-        progress.progress(batch_num / total_batches)
-        st.write(f"Fetching batch {batch_num}/{total_batches}")
-
-        url = "https://eodhd.com/api/real-time/stock"
-
-        params = {
-            "api_token": key,
-            "fmt": "json",
-            "s": ",".join(batch)
-        }
+    for i, sym in enumerate(symbols):
 
         try:
-            r = requests.get(url, params=params, timeout=5)
 
-            if r.status_code != 200:
-                print("EODHD status error:", r.status_code, r.text)
-                continue
+            progress.progress((i + 1) / total)
 
-            try:
-                data = r.json()
-            except Exception:
-                print("EODHD JSON parse error:", r.text[:200])
-                continue
+            df = get_price(sym, db)
 
-            if not isinstance(data, list):
-                print("EODHD invalid response:", data)
-                continue
-
-            for row in data:
-                sym = row.get("code")
-
-                price = _to_float(row.get("close"))
-                volume = _to_float(row.get("volume"))
-
-                # 🔥 ONLY REQUIRE PRICE
-                if not sym or price is None:
-                    continue
-
-                df = pd.DataFrame([{
-                    "Date": pd.Timestamp.utcnow(),
-                    "Open": None,
-                    "High": None,
-                    "Low": None,
-                    "Close": price,
-                    "Volume": volume or 0,
-                }])
-
-                out[sym.upper()] = df
+            if (
+                isinstance(df, pd.DataFrame)
+                and not df.empty
+            ):
+                out[sym] = df
 
         except Exception as e:
-            print("EODHD fetch error:", e)
+
+            print(
+                "SCREENER PRICE ERROR",
+                sym,
+                e,
+            )
 
     st.write("✅ PRICE COUNT:", len(out))
+
     return out
 
 
@@ -158,7 +135,10 @@ def run_screener(
     st.warning("🚀 Screener started...")
 
     # ---------------- PRICE ----------------
-    price_data = _get_prices_many(symbols)
+    price_data = _get_prices_many(
+        db,
+        symbols,
+    )
 
     # ---------------- SNAPSHOTS ----------------
     snap_map = _latest_snapshots(db, tenant_id)

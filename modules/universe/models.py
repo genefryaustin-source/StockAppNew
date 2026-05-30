@@ -15,14 +15,31 @@ class Universe(Base):
     __tablename__ = "universes"
 
     id = Column(String, primary_key=True)
+
     name = Column(String, nullable=False)
 
-    # ✅ REQUIRED
-    tenant_id = Column(String, nullable=False, default="default_tenant")
+    description = Column(String, nullable=True)
 
-    # ✅ REQUIRED (fix for your error)
-    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
-    updated_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    tenant_id = Column(
+        String,
+        nullable=False,
+        default="default_tenant",
+    )
+
+    created_by_user_id = Column(
+        String,
+        nullable=True,
+    )
+
+    created_at = Column(
+        DateTime,
+        default=lambda: datetime.now(UTC),
+    )
+
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(UTC),
+    )
 # =====================================================
 # UNIVERSE SYMBOLS (CRITICAL)
 # =====================================================
@@ -31,10 +48,16 @@ class UniverseSymbol(Base):
     __tablename__ = "universe_symbols"
 
     symbol = Column(String, primary_key=True)
-    tenant_id = Column(String, primary_key=True)
 
-    # 🔥 REQUIRED FOR YOUR SYSTEM
-    universe_id = Column(String, nullable=True)
+    tenant_id = Column(
+        String,
+        primary_key=True,
+    )
+
+    universe_id = Column(
+        String,
+        primary_key=True,
+    )
 
 # =====================================================
 # LEGACY COMPATIBILITY: UNIVERSE EQUITIES

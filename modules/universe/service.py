@@ -5,6 +5,7 @@ from datetime import datetime, UTC
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+import uuid
 
 from modules.universe.models import Universe, UniverseSymbol
 
@@ -58,12 +59,21 @@ def create_universe(
     description: Optional[str] = None,
     created_by_user_id: Optional[str] = None,
 ) -> Universe:
-
     u = Universe(
-        tenant_id=tenant_id,
+
+        id=str(uuid.uuid4()),
+
         name=name,
+
         description=description,
+
+        tenant_id=tenant_id,
+
         created_by_user_id=created_by_user_id,
+
+        created_at=datetime.now(UTC),
+
+        updated_at=datetime.now(UTC),
     )
 
     db.add(u)
@@ -129,7 +139,13 @@ def add_symbols(db, tenant_id, universe_id, symbols):
 
         if exists:
             continue
-
+        symbols = [
+            s.strip().upper()
+            for s in symbols
+            if s
+               and len(s.strip()) > 0
+        ]
+        symbols = list(set(symbols))
         db.add(
             UniverseSymbol(
                 tenant_id=tenant_id,

@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, UTC
 
 from modules.institutional.models import Watchlist, WatchlistItem
 
@@ -15,7 +15,7 @@ def create_watchlist(db, tenant_id, name, created_by_user_id=None):
         tenant_id=tenant_id,
         name=name.strip(),
         created_by_user_id=created_by_user_id,
-        created_at=datetime.utcnow()
+        created_at=datetime.now(UTC)
     )
 
     db.add(wl)
@@ -64,7 +64,7 @@ def add_symbol(db, tenant_id, watchlist_id, symbol):
         tenant_id=tenant_id,
         watchlist_id=watchlist_id,
         symbol=symbol,
-        created_at=datetime.utcnow()
+        created_at=datetime.now(UTC)
     )
 
     db.add(item)

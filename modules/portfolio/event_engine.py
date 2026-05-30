@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime
+from datetime import datetime, UTC
 import pandas as pd
 
 
@@ -17,7 +17,7 @@ class EventDrivenExecutionEngine:
         source: str = "system",
     ) -> dict:
         event = {
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(UTC),
             "event_type": event_type,
             "priority": priority,
             "payload": payload or {},

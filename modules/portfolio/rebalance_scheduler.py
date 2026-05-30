@@ -1,6 +1,6 @@
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, UTC
 
 class RebalanceScheduler:
     def __init__(self, db_session, nav_service, order_service, alert_service):
@@ -26,7 +26,7 @@ class RebalanceScheduler:
 
             while self.running:
                 try:
-                    print(f"⏱ Running rebalance check @ {datetime.utcnow()}")
+                    print(f"⏱ Running rebalance check @ {datetime.now(UTC)}")
 
                     result = self.nav_service.auto_rebalance_check(
                         portfolio_id=portfolio_id,

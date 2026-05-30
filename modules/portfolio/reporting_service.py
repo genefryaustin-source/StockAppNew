@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, UTC
 
 
 class ReportingService:
@@ -10,7 +10,7 @@ class ReportingService:
 
     def build_portfolio_summary(self, totals: dict, health: dict) -> dict:
         return {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "equity": float(totals.get("equity", 0.0)),
             "net_pnl": float(totals.get("net_pnl", 0.0)),
             "health_score": float(health.get("score", 0.0)),

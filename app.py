@@ -1,4 +1,5 @@
 import streamlit as st
+
 import pandas as pd
 from datetime import datetime, UTC
 import time
@@ -10,7 +11,9 @@ import matplotlib
 VERSION = "2.4.0"
 
 st.set_page_config(page_title="Equity Research Terminal", layout="wide")
+st.write("🔥 APP.PY IS RELOADING")
 
+print("🔥 APP.PY IS RELOADING")
 # ============================================================
 # 0. DEV MODE FLAG (controls debug output)
 # ============================================================
@@ -316,7 +319,7 @@ else:
         "Analytics", "Rankings", "Universe", "Stock Dashboard", "Portfolio",
         "Portfolio Construction", "Portfolio Deployment", "Market Overview",
         "AI Rankings", "Strategy Lab", "Regime Engine", "Strategy Discovery",
-        "Strategy Library", "Alerts", "Admin", "Help"
+        "Strategy Library", "Alerts", "Admin","AI Portfolio", "Help"
     ]
 
 page = st.sidebar.selectbox("Go to", pages)
@@ -350,6 +353,8 @@ regime_engine_mod = safe_import("modules.market.regime_engine")
 strategy_discovery_mod = safe_import("modules.analytics.strategy_discovery")
 strategy_library_mod = safe_import("modules.analytics.strategy_library")
 admin_mod = safe_import("modules.admin.admin_ui")
+ai_portfolio_mod = safe_import("modules.portfolio.ai_portfolio_ui")
+alerts_mod = safe_import("modules.institutional.ui.alerts_ui")
 
 # ====================== PAGE ROUTING ======================
 if page == "Dashboard":
@@ -454,12 +459,94 @@ elif page == "Market Overview":
         market_dashboard_mod.render_market_dashboard(db)
 
 elif page == "AI Rankings":
-    st.header("AI Stock Rankings")
-    if isinstance(ranking_ui_mod, Exception):
-        st.error("AI Rankings module failed to load.")
-        st.exception(ranking_ui_mod)
+
+    rankings_mod = safe_import(
+        "modules.analytics.ranking_ui"
+    )
+
+    if rankings_mod and hasattr(rankings_mod, "render_ai_rankings"):
+
+        rankings_mod.render_ai_rankings(
+            db=db,
+            user=user,
+            price_data={},
+        )
+
     else:
-        st.info("AI Rankings module ready")
+
+        st.error(
+            "AI Rankings UI failed to load. "
+            "Expected modules.analytics.ranking_ui.render_ai_rankings"
+        )
+
+elif page == "Regime Engine":
+    st.header("Regime Engine Overview")
+    if hasattr(regime_mod, "render_regime_dashboard"):
+        regime_mod.render_market_regime(db)
+
+
+
+
+
+
+
+elif page == "Alerts":
+
+    st.header("Alerts")
+
+    if isinstance(alerts_mod, Exception):
+
+        st.error(
+            "Alerts module failed to load."
+        )
+
+        st.exception(alerts_mod)
+
+    elif hasattr(
+        alerts_mod,
+        "render_alerts_page",
+    ):
+
+        try:
+
+            alerts_mod.render_alerts_page(
+                db,
+                user,
+            )
+
+        except Exception as e:
+
+            st.error(
+                "Alerts page failed."
+            )
+
+            st.exception(e)
+
+    elif hasattr(
+        alerts_mod,
+        "render_alerts",
+    ):
+
+        try:
+
+            alerts_mod.render_alerts(
+                db,
+                user,
+            )
+
+        except Exception as e:
+
+            st.error(
+                "Alerts page failed."
+            )
+
+            st.exception(e)
+
+    else:
+
+        st.error(
+            "No alerts render function found."
+        )
 
 elif page == "Admin":
 
@@ -488,6 +575,74 @@ elif page == "Admin":
         st.error(
             "render_admin_panel() not found in admin_ui.py"
         )
+
+
+elif page == "AI Portfolio Command Center":
+
+    st.write(
+        "🚀 ENTERED AI PORTFOLIO PAGE BLOCK"
+    )
+
+    print(
+        "🚀 ENTERED AI PORTFOLIO PAGE BLOCK"
+    )
+
+    try:
+
+        import modules.portfolio.ai_portfolio_ui as ai_ui
+
+        st.success(
+            "✅ ai_portfolio_ui imported"
+        )
+
+        print(
+            "✅ ai_portfolio_ui imported"
+        )
+
+    except Exception as e:
+
+        st.error(
+            "❌ ai_portfolio_ui import failed"
+        )
+
+        st.exception(e)
+
+        print(
+            "❌ IMPORT FAILED:",
+            e,
+        )
+
+        raise
+
+    try:
+
+        ai_ui.render_ai_portfolio_center(
+            db=db,
+            user=user,
+        )
+
+        st.success(
+            "✅ render_ai_portfolio_center completed"
+        )
+
+        print(
+            "✅ render_ai_portfolio_center completed"
+        )
+
+    except Exception as e:
+
+        st.error(
+            "❌ render_ai_portfolio_center failed"
+        )
+
+        st.exception(e)
+
+        print(
+            "❌ RENDER FAILED:",
+            e,
+        )
+
+        raise
 
 elif page == "Help":
     try:

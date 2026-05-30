@@ -333,48 +333,24 @@ def _get_price_finnhub(symbol: str):
 # ---------------------------------------------------
 
 def _get_price_eod(sym: str):
-    if _provider_disabled("eodhd"):
-        print("⚠️ EODHD TEMP DISABLED")
-        return None
-
-    key = get_secret("EODHD_API_KEY")
-    if not key:
-        return None
-
-    base = _valid_base_symbol(sym)
-    if not base:
-        return None
 
     try:
-        r = requests.get(
-            f"https://eodhd.com/api/eod/{base}.US",
-            params={"api_token": key, "fmt": "json", "limit": 1},
-            timeout=8,
+
+        from modules.market_data.price_cache import (
+            get_price,
         )
 
-        data = _safe_json(r, "eodhd", base)
-        if not isinstance(data, list) or not data:
-            return None
-
-        row = data[-1]
-        close = row.get("close")
-        if close is None:
-            return None
-
-        return {
-            "price": float(close),
-            "volume": float(row.get("volume", 0.0) or 0.0),
-        }
+        return get_price(sym, None)
 
     except Exception as e:
-        err = str(e)
 
-        if "401" in err or "Unauthorized" in err:
-            _disable_provider("eodhd", reason=f"for {base}")
+        print(
+            "LEGACY EOD FALLBACK ERROR",
+            sym,
+            e,
+        )
 
-        print("EODHD ERROR:", base, e)
-
-    return None
+        return None
 
 
 # ---------------------------------------------------
@@ -433,7 +409,7 @@ def _get_price_massive(sym: str):
 
 def _get_history_eodhd(symbol: str) -> pd.DataFrame:
     if _provider_disabled("eodhd"):
-        print("⚠️ EODHD TEMP DISABLED")
+
         return _empty_history()
 
     key = get_secret("EODHD_API_KEY")
@@ -476,7 +452,13 @@ def _get_history_eodhd(symbol: str) -> pd.DataFrame:
         err = str(e)
 
         if "401" in err or "Unauthorized" in err:
-            _disable_provider("eodhd", reason=f"for {sym}")
+            # disable quietly
+            _disable_provider(
+                "eodhd",
+                reason=f"for {sym}",
+            )
+
+            return _empty_history()
 
         print("EODHD HISTORY ERROR:", sym, e)
 
@@ -530,14 +512,38 @@ def _get_history_yahoo(symbol: str, period: str = "1y", interval: str = "1d") ->
 
 def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=False):
     print("🔥 PRICE HISTORY CALLED:", symbol)
+    end = int(datetime.now(UTC).timestamp())
 
+    if period == "1y":
+        start = int(
+            (datetime.now(UTC) - timedelta(days=365))
+            .timestamp()
+        )
+
+    elif period == "6mo":
+        start = int(
+            (datetime.now(UTC) - timedelta(days=180))
+            .timestamp()
+        )
+
+    elif period == "3mo":
+        start = int(
+            (datetime.now(UTC) - timedelta(days=90))
+            .timestamp()
+        )
+
+    else:
+        start = int(
+            (datetime.now(UTC) - timedelta(days=365))
+            .timestamp()
+        )
     sym = _valid_base_symbol(symbol)
     if not sym:
         return _empty_history()
 
     cache_key = f"{sym}:{period}:{interval}"
-
-    if not force_refresh and cache_key in CACHE:
+    print("CACHE CHECK:", cache_key)
+    if False and not force_refresh and cache_key in CACHE:
         cached_df = CACHE[cache_key]
         if cached_df is not None and not cached_df.empty:
             print("🔥 PRICE HISTORY CACHE HIT:", sym, cached_df.shape)
@@ -554,7 +560,13 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
     # -----------------------------------
     # 1. MARKETDATA.APP PRIMARY
     # -----------------------------------
-    df = marketdata_history(sym)
+    df = marketdata_history(
+        symbol,
+        period="1y",
+        start=None,
+        end=None,
+        interval="1d",
+    )
 
     if df is not None and not df.empty:
         CACHE[cache_key] = df
@@ -563,7 +575,13 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
     # -----------------------------------
     # 2. ALPHA VANTAGE BACKUP
     # -----------------------------------
-    df = alpha_history(sym)
+    df = alpha_history(
+        symbol,
+        period="1y",
+        start=None,
+        end=None,
+        interval="1d",
+    )
 
     if df is not None and not df.empty:
         CACHE[cache_key] = df
@@ -573,9 +591,11 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
     # 3. YAHOO EMERGENCY FALLBACK
     # -----------------------------------
     df = _get_history_yahoo(
-        sym,
-        period=period,
-        interval=interval,
+        symbol,
+        period="1y",
+        start=None,
+        end=None,
+        interval="1d",
     )
 
     if df is not None and not df.empty:
@@ -615,7 +635,7 @@ def get_prices_many(db, symbols):
         if sym in fh:
             row = fh[sym]
             results[sym] = pd.DataFrame([{
-                "Date": pd.Timestamp.utcnow(),
+                "Date": pd.Timestamp.now(UTC),
                 "Close": row["price"],
                 "Volume": row["volume"],
             }])
@@ -627,7 +647,7 @@ def get_prices_many(db, symbols):
         eod = _get_price_eod(sym)
         if eod:
             results[sym] = pd.DataFrame([{
-                "Date": pd.Timestamp.utcnow(),
+                "Date": pd.Timestamp.now(UTC),
                 "Close": eod["price"],
                 "Volume": eod["volume"],
             }])
@@ -639,7 +659,7 @@ def get_prices_many(db, symbols):
         yh = _get_price_yahoo(sym)
         if yh:
             results[sym] = pd.DataFrame([{
-                "Date": pd.Timestamp.utcnow(),
+                "Date": pd.Timestamp.now(UTC),
                 "Close": yh["price"],
                 "Volume": yh["volume"],
             }])

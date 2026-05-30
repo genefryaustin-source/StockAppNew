@@ -284,7 +284,7 @@ def latest_snapshot(
 
 ):
 
-    cutoff = datetime.utcnow() - timedelta(hours=max_age_hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
 
     return (
 

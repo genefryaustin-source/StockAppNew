@@ -67,12 +67,34 @@ def run_one_queued_job(db: Session, tenant_id: str, universe_id: str = None):
                 except Exception:
                     pass
 
+            print(
+                "🚨 STEP 1 — BEFORE refresh_universe_cache"
+            )
+
+            append_log(
+                db,
+                job,
+                "🚨 STEP 1 — BEFORE refresh_universe_cache"
+            )
+
             result = refresh_universe_cache(
                 db=db,
                 tenant_id=tenant_id,
                 universe_id=universe_id,
                 progress=progress,
             )
+
+            print(
+                "🚨 STEP 2 — AFTER refresh_universe_cache"
+            )
+
+            append_log(
+                db,
+                job,
+                "🚨 STEP 2 — AFTER refresh_universe_cache"
+            )
+
+            print("REFRESH RESULT:", result)
 
             append_log(db, job, f"Refresh result: {result}")
 

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from sqlalchemy import Column, String, DateTime, Float, Integer, UniqueConstraint, Index
 from sqlalchemy.orm import Session
 from modules.db.models import Base, gen_uuid
@@ -37,7 +37,7 @@ def upsert_bars(db: Session, symbol: str, interval: str, df):
 
 def read_bars(db: Session, symbol: str, interval: str, lookback_days: int = 400):
     import pandas as pd
-    cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+    cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
     rows = (
         db.query(OHLCVBar)
         .filter(OHLCVBar.symbol == symbol, OHLCVBar.interval == interval, OHLCVBar.ts >= cutoff)

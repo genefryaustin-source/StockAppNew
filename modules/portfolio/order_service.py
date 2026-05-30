@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, UTC
 
 import streamlit as st
 
@@ -19,7 +19,7 @@ from modules.portfolio.closed_trade_service import ClosedTradeService
 
 class SimulatedBrokerResponse:
     def __init__(self, req: BrokerOrderRequest, price: float):
-        self.broker_order_id = f"SIM-{req.symbol}-{int(datetime.utcnow().timestamp())}"
+        self.broker_order_id = f"SIM-{req.symbol}-{int(datetime.now(UTC).timestamp())}"
         self.symbol = str(req.symbol).upper()
         self.side = str(req.side).lower()
         self.qty = float(req.qty)
@@ -166,8 +166,8 @@ class OrderService:
                 limit_price=limit_price,
                 stop_price=stop_price,
                 status=broker_resp.status,
-                submitted_at=datetime.utcnow(),
-                filled_at=datetime.utcnow() if float(broker_resp.filled_qty or 0) > 0 else None,
+                submitted_at=datetime.now(UTC),
+                filled_at=datetime.now(UTC) if float(broker_resp.filled_qty or 0) > 0 else None,
                 avg_fill_price=exec_price if float(broker_resp.filled_qty or 0) > 0 else None,
                 filled_qty=float(broker_resp.filled_qty or 0.0),
                 estimated_commission=self._estimate_commission(
@@ -180,7 +180,7 @@ class OrderService:
                 actual_commission=0.0,
                 actual_slippage=0.0,
                 notes=None,
-                updated_at=datetime.utcnow(),
+                updated_at=datetime.now(UTC),
             )
 
             self.db.add(order)
@@ -213,7 +213,7 @@ class OrderService:
                 order.estimated_slippage = float(cost.slippage)
                 order.actual_commission = float(cost.commission)
                 order.actual_slippage = float(cost.slippage)
-                order.updated_at = datetime.utcnow()
+                order.updated_at = datetime.now(UTC)
 
                 # ---------------------------------------
                 # POSITION LOAD / INIT
@@ -296,7 +296,7 @@ class OrderService:
                 )
 
                 position.market_price = fill_price
-                position.updated_at = datetime.utcnow()
+                position.updated_at = datetime.now(UTC)
 
                 # ---------------------------------------
                 # CASH MOVEMENT
@@ -325,7 +325,7 @@ class OrderService:
                         net_pnl = gross_pnl - total_cost
 
                         opened_at = prior_updated_at
-                        closed_at = datetime.utcnow()
+                        closed_at = datetime.now(UTC)
 
                         holding_period_days = 0.0
                         if opened_at:

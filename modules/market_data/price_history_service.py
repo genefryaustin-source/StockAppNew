@@ -1,16 +1,24 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import List
 import time
 
 import pandas as pd
-import yfinance as yf
+
 from sqlalchemy.orm import Session
 
 from modules.market_data.models import PriceHistory
+from modules.market_data.providers.finnhub_provider import (
+    get_history as finnhub_history,
+)
 
-
+from modules.market_data.providers.twelvedata_provider import (
+    get_history as twelvedata_history,
+)
+from modules.utils.symbol_classifier import (
+    filter_supported_equities,
+)
 # ---------------------------------------------------
 # Load price history from DB
 # ---------------------------------------------------
@@ -59,8 +67,88 @@ def load_price_history(db: Session, symbol: str) -> pd.DataFrame | None:
 from sqlalchemy.dialects.sqlite import insert
 
 def store_price_history(db, symbol, df):
+    df = df.copy()
 
     if df is None or df.empty:
+        return
+
+    # -----------------------------------
+    # Flatten MultiIndex columns
+    # -----------------------------------
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [
+            str(c[0]).strip()
+            for c in df.columns
+        ]
+
+    # -----------------------------------
+    # Normalize column names
+    # -----------------------------------
+
+    df.columns = [
+        str(c).strip().title()
+        for c in df.columns
+    ]
+
+    # -----------------------------------
+    # Normalize index -> Date column
+    # -----------------------------------
+
+    if "Date" not in df.columns:
+
+        if isinstance(df.index, pd.MultiIndex):
+
+            try:
+                df = df.reset_index()
+
+            except Exception:
+                pass
+
+        elif df.index.name is not None:
+
+            df = df.reset_index()
+
+        else:
+
+            df = df.reset_index().rename(
+                columns={"index": "Date"}
+            )
+
+    # -----------------------------------
+    # Normalize columns AGAIN after reset
+    # -----------------------------------
+
+    df.columns = [
+        str(c).strip().title()
+        for c in df.columns
+    ]
+
+    # -----------------------------------
+    # Ensure required columns exist
+    # -----------------------------------
+
+    required = [
+        "Date",
+        "Open",
+        "High",
+        "Low",
+        "Close",
+    ]
+
+    missing = [
+        c for c in required
+        if c not in df.columns
+    ]
+
+    if missing:
+        print(
+            "PRICE HISTORY MISSING COLUMNS",
+            symbol,
+            missing,
+            df.columns.tolist(),
+        )
+
         return
 
     symbol = symbol.upper()
@@ -69,12 +157,19 @@ def store_price_history(db, symbol, df):
 
         stmt = insert(PriceHistory).values(
             symbol=symbol,
-            date=row["Date"],
+            date=pd.to_datetime(row["Date"]),
             open=float(row["Open"]),
             high=float(row["High"]),
             low=float(row["Low"]),
             close=float(row["Close"]),
-            volume=int(row["Volume"]) if row["Volume"] else None,
+            volume=(
+                int(row["Volume"])
+                if (
+                        "Volume" in row
+                        and pd.notna(row["Volume"])
+                )
+                else None
+            ),
         )
 
         stmt = stmt.on_conflict_do_update(
@@ -94,84 +189,142 @@ def store_price_history(db, symbol, df):
 
 
 # ---------------------------------------------------
-# Batch Yahoo downloader
+# Batch downloader
 # ---------------------------------------------------
 
-def download_price_batch(symbols, batch_size=5, pause=3):
+def download_price_batch(
+    symbols,
+    batch_size=5,
+    pause=1,
+):
 
     """
-    Download price history in controlled batches
-    to avoid Yahoo rate limits.
+    Multi-provider institutional price loader.
+
+    Provider priority:
+    1. Finnhub
+    2. TwelveData
+
+    Returns:
+        {
+            "AAPL": DataFrame,
+            ...
+        }
     """
+
+
+
+    PROVIDERS = [
+
+        finnhub_history,
+
+        twelvedata_history,
+    ]
 
     results = {}
 
     if not symbols:
         return results
 
-    end = datetime.utcnow()
-    start = end - timedelta(days=365 * 5)
+    symbols = filter_supported_equities(
+        symbols
+    )
 
-    for i in range(0, len(symbols), batch_size):
+    total = len(symbols)
 
-        batch = symbols[i:i + batch_size]
+    print(
+        f"🚀 DOWNLOAD PRICE BATCH START "
+        f"({total} symbols)"
+    )
 
-        try:
+    for i, symbol in enumerate(symbols):
 
-            data = yf.download(
-                tickers=" ".join(batch),
-                start=start.strftime("%Y-%m-%d"),
-                end=end.strftime("%Y-%m-%d"),
-                interval="1d",
-                group_by="ticker",
-                auto_adjust=True,
-                progress=False,
-                threads=False,
+        print(
+            f"📈 [{i+1}/{total}] "
+            f"{symbol}"
+        )
+        # -----------------------------------
+        # Skip unsupported OTC/warrant/etc
+        # -----------------------------------
+
+        bad_suffixes = (
+            "W",
+            "WS",
+            "U",
+            "R",
+        )
+
+        if (
+                len(symbol) > 5
+                and symbol.endswith(bad_suffixes)
+        ):
+            continue
+        success = False
+
+        for provider in PROVIDERS:
+
+            try:
+
+                print(
+                    "🔎 TRY PROVIDER:",
+                    provider.__name__,
+                    symbol,
+                )
+
+                df = provider(
+                    symbol=symbol,
+                    period="1y",
+                    interval="1d",
+                )
+
+                if (
+                    isinstance(df, pd.DataFrame)
+                    and not df.empty
+                ):
+
+                    results[symbol] = df
+
+                    print(
+                        "✅ PROVIDER SUCCESS:",
+                        provider.__name__,
+                        symbol,
+                        len(df),
+                    )
+
+                    success = True
+
+                    break
+
+                else:
+
+                    print(
+                        "⚠️ EMPTY DATA:",
+                        provider.__name__,
+                        symbol,
+                    )
+
+            except Exception as e:
+
+                print(
+                    "❌ PROVIDER FAILED:",
+                    provider.__name__,
+                    symbol,
+                    e,
+                )
+
+        if not success:
+
+            print(
+                "❌ ALL PROVIDERS FAILED:",
+                symbol,
             )
 
-            if data is None or data.empty:
-
-                print("Yahoo returned empty data")
-
-                time.sleep(10)
-
-                continue
-
-            # single ticker case
-            if len(batch) == 1:
-
-                df = data.dropna()
-
-                if not df.empty:
-                    results[batch[0]] = df
-
-            else:
-
-                for sym in batch:
-
-                    try:
-
-                        df = data[sym].dropna()
-
-                        if not df.empty:
-                            results[sym] = df
-
-                    except Exception:
-                        continue
-
-        except Exception as e:
-
-            if "RateLimit" in str(e) or "Too Many Requests" in str(e):
-
-                print("Yahoo rate limit hit, sleeping 30s")
-
-                time.sleep(30)
-
-                continue
-
-            print("YAHOO DOWNLOAD ERROR", e)
-
         time.sleep(pause)
+
+    print(
+        f"✅ DOWNLOAD COMPLETE: "
+        f"{len(results)} / {total}"
+    )
 
     return results
 

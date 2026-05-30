@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import List, Optional, Callable
-
+from datetime import UTC
 from sqlalchemy.orm import Session
 
 from modules.analytics.models import AnalyticsSnapshot
 from modules.analytics.runner import (
     run_full_analytics,
     run_vectorized_price_analytics,
+)
+from modules.utils.datetime_utils import (
+    to_aware_utc,
 )
 from modules.universe.service import list_symbols
 from modules.market_data.price_cache import warm_price_cache
@@ -45,11 +48,23 @@ def refresh_universe_cache(
 
     symbols = [s.strip().upper() for s in symbols if s and s.strip()]
     total_symbols = len(symbols)
+    from modules.utils.symbol_classifier import (
+        filter_supported_equities,
+    )
 
+    symbols = filter_supported_equities(
+        symbols
+    )
     # warm cache from local DB / table
-    warm_price_cache(db, symbols)
 
-    cutoff = datetime.utcnow() - timedelta(hours=max_age_hours)
+
+    print("⚠️ warm_price_cache TEMP DISABLED")
+
+
+
+    cutoff = datetime.now(UTC) - timedelta(
+        hours=max_age_hours
+    )
 
     rows = (
         db.query(AnalyticsSnapshot.symbol, AnalyticsSnapshot.asof)
@@ -75,7 +90,13 @@ def refresh_universe_cache(
             continue
 
         asof = latest[s]
-        if asof is None or asof < cutoff:
+
+        asof_utc = to_aware_utc(asof)
+
+        if (
+                asof_utc is None
+                or asof_utc < cutoff
+        ):
             to_refresh.append(s)
 
     if not to_refresh:

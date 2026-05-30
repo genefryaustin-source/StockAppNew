@@ -77,9 +77,22 @@ def get_price(symbol: str, db) -> pd.DataFrame:
 
         return df
 
+
     except Exception as e:
 
-        print("PRICE DOWNLOAD ERROR", symbol, e)
+        import traceback
+
+        print(
+
+            "PRICE DOWNLOAD ERROR",
+
+            symbol,
+
+            e,
+
+        )
+
+        traceback.print_exc()
 
         return None
 

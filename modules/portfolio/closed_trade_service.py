@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, UTC
 
 from models.trading import ClosedTrade
 
@@ -32,7 +32,7 @@ class ClosedTradeService:
             portfolio_id=portfolio_id,
             symbol=symbol.upper(),
             opened_at=opened_at,
-            closed_at=closed_at or datetime.utcnow(),
+            closed_at=closed_at or datetime.now(UTC),
             entry_qty=float(entry_qty),
             exit_qty=float(exit_qty),
             entry_price=float(entry_price),

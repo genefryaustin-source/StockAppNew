@@ -40,6 +40,9 @@ class AnalyticsSnapshot(Base):
     fcf_margin = Column(Float, nullable=True)
     revenue_cagr = Column(Float, nullable=True)
 
+    @property
+    def revenue_cagr_3y(self):
+        return self.revenue_cagr
     # -----------------------------
     # Valuation
     # -----------------------------

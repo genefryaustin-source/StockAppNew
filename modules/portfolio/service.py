@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, UTC
 from sqlalchemy import text
 
 
@@ -14,7 +14,7 @@ def create_portfolio(db, tenant_id, name):
             "id": str(uuid.uuid4()),
             "tenant_id": tenant_id,
             "name": name.strip(),
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(UTC),
         },
     )
 
@@ -56,7 +56,7 @@ def add_position(db, tenant_id, portfolio_id, symbol, quantity, cost_basis):
             "symbol": symbol,
             "quantity": quantity,
             "cost_basis": cost_basis,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(UTC),
         },
     )
 
@@ -111,7 +111,7 @@ def record_trade(db, tenant_id, portfolio_id, symbol, side, quantity, price):
             "side": side,
             "quantity": quantity,
             "price": price,
-            "trade_date": datetime.utcnow(),
+            "trade_date": datetime.now(UTC),
         },
     )
 

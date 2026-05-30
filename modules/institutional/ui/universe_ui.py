@@ -14,7 +14,9 @@ from modules.universe.auto_assign import auto_assign_universes
 from modules.analytics.rankings import rank_symbols, sector_leaderboards
 from modules.utils.symbol_utils import clean_symbol_list
 from modules.universe.universe_pipeline import run_universe_pipeline
-
+from modules.utils.datetime_utils import (
+    to_aware_utc,
+)
 
 
 
@@ -34,26 +36,40 @@ from modules.universe.job_runner import run_one_queued_job
 
 
 
-# --------------------------------------------------
-# Helper: normalize timestamps
-# --------------------------------------------------
 
-def _to_aware_utc(dt):
+MAX_UI_ROWS = 50
+MAX_RANK_ROWS = 50
+MAX_SECTOR_ROWS = 25
 
-    if dt is None:
-        return None
 
-    if isinstance(dt, str):
-        try:
-            dt = datetime.fromisoformat(dt)
-        except Exception:
-            return None
+def _safe_clear_streamlit_cache():
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=UTC)
 
-    return dt.astimezone(UTC)
+def _show_dataframe(df: pd.DataFrame, max_rows: int = MAX_UI_ROWS):
+    if df is None or df.empty:
+        st.info("No data to display.")
+        return
 
+    df = df.copy().reset_index(drop=True)
+
+    total = len(df)
+
+    if total > max_rows:
+        st.caption(
+            f"Showing first {max_rows:,} of {total:,} rows "
+            f"to keep the Streamlit UI stable."
+        )
+        df = df.head(max_rows)
+
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 # --------------------------------------------------
@@ -85,12 +101,22 @@ def render_universe_dashboard(db, tenant_id, universe_id):
     for s in snapshots:
 
         sym = s.symbol
+        current_asof = to_aware_utc(s.asof)
 
-        if sym not in latest_by_symbol:
+        existing = latest_by_symbol.get(sym)
+
+        if existing is None:
             latest_by_symbol[sym] = s
-        else:
-            if s.asof > latest_by_symbol[sym].asof:
-                latest_by_symbol[sym] = s
+            continue
+
+        existing_asof = to_aware_utc(existing.asof)
+
+        if (
+                current_asof
+                and existing_asof
+                and current_asof > existing_asof
+        ):
+            latest_by_symbol[sym] = s
 
     fresh = 0
     stale = 0
@@ -104,7 +130,7 @@ def render_universe_dashboard(db, tenant_id, universe_id):
             stale += 1
             continue
 
-        snap_asof = _to_aware_utc(snap.asof)
+        snap_asof = to_aware_utc(snap.asof)
 
         if snap_asof and snap_asof >= fresh_cutoff:
             fresh += 1
@@ -214,9 +240,11 @@ def render_universe(db, user):
                     description=description,
                     created_by_user_id=user_id,
                 )
-
+                db.commit()
+                _safe_clear_streamlit_cache()
                 st.success("Universe created")
-                st.rerun()
+                _safe_clear_streamlit_cache()
+                st.info("Operation complete. Refresh manually if the table does not update immediately.")
     # --------------------------------------------------
     # Delete Old Analytics Refresh Data
     #---------------------------------------------------
@@ -247,7 +275,8 @@ def render_universe(db, user):
         )
         """)
     ).scalar()
-
+    db.commit()
+    _safe_clear_streamlit_cache()
     st.info(f"{rows_to_delete} historical analytics rows can be deleted.")
 
     if st.button("Clean Analytics Snapshot History"):
@@ -266,10 +295,12 @@ def render_universe(db, user):
             )
 
             db.commit()
+            _safe_clear_streamlit_cache()
 
         st.success("Analytics snapshot history cleaned. Only latest snapshot per symbol remains.")
 
-        st.rerun()
+        _safe_clear_streamlit_cache()
+        st.info("Operation complete. Refresh manually if the table does not update immediately.")
 
     # --------------------------------------------------
     # Select universe
@@ -295,7 +326,8 @@ def render_universe(db, user):
 
             st.warning("Universe deleted")
 
-            st.rerun()
+            _safe_clear_streamlit_cache()
+            st.info("Operation complete. Refresh manually if the table does not update immediately.")
 
     # --------------------------------------------------
     # Symbols
@@ -307,10 +339,16 @@ def render_universe(db, user):
 
     if symbols:
 
-        st.dataframe(
-            pd.DataFrame({"symbol": symbols}),
-            use_container_width=True,
-            hide_index=True,
+        st.caption(
+            f"Universe contains {len(symbols):,} symbols. "
+            f"Showing first {MAX_UI_ROWS:,}."
+        )
+
+        preview_symbols = symbols[:MAX_UI_ROWS]
+
+        st.code(
+            ", ".join(preview_symbols),
+            language="text",
         )
 
     else:
@@ -372,7 +410,8 @@ def render_universe(db, user):
 
             st.success(f"Added {inserted} symbols")
 
-            st.rerun()
+            _safe_clear_streamlit_cache()
+            st.info("Operation complete. Refresh manually if the table does not update immediately.")
 
     # --------------------------------------------------
     # Remove symbol
@@ -390,10 +429,12 @@ def render_universe(db, user):
                 universe_id,
                 remove_symbol_text.upper(),
             )
-
+            db.commit()
+            _safe_clear_streamlit_cache()
             st.success("Symbol removed")
 
-            st.rerun()
+            _safe_clear_streamlit_cache()
+            st.info("Operation complete. Refresh manually if the table does not update immediately.")
 
     # ---------------------------------------
     # Universe Pipeline
@@ -507,7 +548,8 @@ def render_universe(db, user):
 
             st.success("Refresh job queued")
 
-            st.rerun()
+            _safe_clear_streamlit_cache()
+            st.info("Operation complete. Refresh manually if the table does not update immediately.")
 
     with colB:
 
@@ -519,98 +561,153 @@ def render_universe(db, user):
 
                 if job_id:
                     st.success(f"Started job {job_id}")
-                    st.rerun()
+                    _safe_clear_streamlit_cache()
+                    st.info("Operation complete. Refresh manually if the table does not update immediately.")
                 else:
                     st.warning("No queued jobs found for this universe.")
 
 
-    # --------------------------------------------------
-    # Jobs Section
-    # --------------------------------------------------
+
     # --------------------------------------------------
     # Jobs
     # --------------------------------------------------
 
     st.markdown("### Recent Jobs")
 
-    jobs = list_jobs(db, tenant_id, universe_id=universe_id)
+    jobs = list_jobs(
+        db,
+        tenant_id,
+        universe_id=universe_id,
+    )
 
-    if not jobs:
+    jobs = jobs[:50]
 
-        st.info("No jobs yet.")
+    rows = []
 
-    else:
+    for j in jobs:
+        rows.append({
+            "Job ID": j.id,
+            "Type": j.job_type,
+            "Status": j.status,
+            "Progress": (
+                f"{getattr(j, 'done', 0)}/"
+                f"{getattr(j, 'total', 0)}"
+            ),
+            "Error": getattr(j, "error", ""),
+        })
 
-        header = st.columns([2, 2, 2, 2, 4])
+    jobs_df = pd.DataFrame(rows)
 
-        header[0].write("Job ID")
-        header[1].write("Type")
-        header[2].write("Status")
-        header[3].write("Progress")
-        header[4].write("Actions")
+    st.dataframe(
+        jobs_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+    job_map = {
+        f"{j.id[:8]} | {j.status} | {j.job_type}": j
+        for j in jobs
+    }
 
-        for j in jobs:
+    selected_job_key = st.selectbox(
+        "Select Job",
+        list(job_map.keys()),
+    )
 
-            col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 4])
+    selected_job = job_map.get(selected_job_key)
 
-            progress_text = "—"
+    st.markdown("### Job Controls")
 
-            done = getattr(j, "done", None)
-            total = getattr(j, "total", None)
 
-            if done is not None and total is not None:
-                progress_text = f"{done}/{total}"
+    c1, c2, c3, c4 = st.columns(4)
 
-            col1.write(j.id[:8])
-            col2.write(j.job_type)
-            col3.write(j.status)
-            col4.write(progress_text)
+    if c1.button("Run Job"):
+        from modules.universe.job_runner import (
+            run_specific_job,
+        )
 
-            with col5:
+        run_specific_job(db, selected_job.id)
 
-                a1, a2, a3 = st.columns(3)
+        db.commit()
 
-                if j.status == "queued":
+        st.success("Job started.")
 
-                    from modules.universe.job_runner import run_specific_job
+    if c2.button("Stop Job"):
+        stop_job(db, selected_job.id)
 
-                    if a1.button("Run", key=f"run_{j.id}"):
-                        run_specific_job(db, j.id)
-                        st.rerun()
+        db.commit()
 
-                    if a2.button("Dequeue", key=f"dequeue_{j.id}"):
-                        dequeue_job(db, j.id)
-                        st.rerun()
+        st.success("Stop requested.")
 
-                    if a3.button("Cancel", key=f"cancelq_{j.id}"):
-                        cancel_job(db, j.id)
-                        st.rerun()
+    if c3.button("Cancel Job"):
+        cancel_job(db, selected_job.id)
 
-                elif j.status == "running":
+        db.commit()
 
-                    if a1.button("Stop", key=f"stop_{j.id}"):
-                        stop_job(db, j.id)
-                        st.rerun()
+        st.success("Job cancelled.")
 
-                    if a2.button("Cancel", key=f"cancelr_{j.id}"):
-                        cancel_job(db, j.id)
-                        st.rerun()
+    if c4.button("Requeue Job"):
+        requeue_job(db, selected_job.id)
 
-                elif j.status in ["failed", "cancelled", "stopped"]:
+        db.commit()
 
-                    if a1.button("Requeue", key=f"requeue_{j.id}"):
-                        requeue_job(db, j.id)
-                        st.rerun()
+        st.success("Job requeued.")
 
-            if getattr(j, "error", None):
+    #st.markdown("### Job Logs")
 
-                st.caption(f"Error: {j.error}")
+    #logs = getattr(selected_job, "logs", "")
 
-            if getattr(j, "logs", None):
+    #if logs:
+        #st.text(logs[-5000:])
+    # --------------------------------------------------
+    # Delete Job
+    # --------------------------------------------------
 
-                with st.expander(f"Logs {j.id[:8]}", expanded=False):
+    if selected_job is not None:
 
-                    st.code(j.logs)
+        st.markdown("### Delete Selected Job")
+
+        st.warning(
+            "Deleting a job permanently removes it "
+            "from the job history table."
+        )
+
+        confirm_delete = st.checkbox(
+            "I understand this cannot be undone",
+            key=f"confirm_delete_{selected_job.id}",
+        )
+
+        if st.button(
+                "Delete Job",
+                key=f"delete_job_{selected_job.id}",
+        ):
+
+            if not confirm_delete:
+
+                st.warning(
+                    "Please confirm deletion first."
+                )
+
+            else:
+
+                try:
+
+                    db.delete(selected_job)
+
+                    db.commit()
+
+                    st.success(
+                        f"Deleted job "
+                        f"{selected_job.id[:8]}"
+                    )
+
+                except Exception as e:
+
+                    db.rollback()
+
+                    st.error(
+                        f"Delete failed: {e}"
+                    )
+
 
     # --------------------------------------------------
     # Rankings
@@ -621,13 +718,33 @@ def render_universe(db, user):
 
     current_symbols = list_symbols(db, tenant_id, universe_id)
 
-    if st.button("Run Rankings"):
+    if st.button("Run Rankings", key=f"run_rankings_{universe_id}"):
 
-        rows = rank_symbols(
-            db=db,
-            tenant_id=tenant_id,
-            symbols=current_symbols,
+        if not current_symbols:
+            st.warning("Universe has no symbols to rank.")
+            return
+
+        st.caption(
+            f"Ranking {len(current_symbols):,} symbols. "
+            f"Large universes may take time. Results are capped in the UI."
         )
+
+        with st.spinner(f"Ranking {len(current_symbols):,} symbols..."):
+
+            try:
+                rows = rank_symbols(
+                    db=db,
+                    tenant_id=tenant_id,
+                    symbols=current_symbols,
+                )
+
+                db.commit()
+                _safe_clear_streamlit_cache()
+
+            except Exception as e:
+                st.error("Ranking failed.")
+                st.exception(e)
+                return
 
         if not rows:
             st.warning("No ranked results found. Run refresh first.")
@@ -641,22 +758,22 @@ def render_universe(db, user):
                 "Composite": r.composite,
                 "Confidence": r.confidence,
             }
-            for i, r in enumerate(rows[:25])
+            for i, r in enumerate(rows[:MAX_RANK_ROWS])
         ])
 
-        st.dataframe(
-            leaderboard,
-            use_container_width=True,
-            hide_index=True,
+        st.success(
+            f"Ranking complete. Showing top "
+            f"{min(len(rows), MAX_RANK_ROWS):,} of {len(rows):,} results."
         )
+
+        _show_dataframe(leaderboard, MAX_RANK_ROWS)
 
         st.markdown("### Sector Leaders")
 
         sectors = sector_leaderboards(rows)
 
         for sector, items in sectors.items():
-
-            st.markdown(f"**{sector}**")
+            st.markdown(f"**{sector or 'Unknown'}**")
 
             sdf = pd.DataFrame([
                 {
@@ -664,11 +781,7 @@ def render_universe(db, user):
                     "Composite": r.composite,
                     "Confidence": r.confidence,
                 }
-                for r in items
+                for r in items[:MAX_SECTOR_ROWS]
             ])
 
-            st.dataframe(
-                sdf,
-                use_container_width=True,
-                hide_index=True,
-            )
+            _show_dataframe(sdf, MAX_SECTOR_ROWS)

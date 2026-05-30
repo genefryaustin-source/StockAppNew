@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, UTC
 from sqlalchemy import func
 
 from models.trading import (
@@ -110,7 +110,7 @@ class AccountingService:
 
         snapshot = PortfolioSnapshot(
             portfolio_id=portfolio_id,
-            as_of=datetime.utcnow(),
+            as_of=datetime.now(UTC),
             cash=totals["cash"],
             market_value=totals["market_value"],
             equity=totals["equity"],

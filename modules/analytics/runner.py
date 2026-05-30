@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import datetime, UTC
 
 import numpy as np
 import pandas as pd
@@ -1028,7 +1028,7 @@ def run_analytics_for_symbol(
     snapshot = AnalyticsSnapshot(
         tenant_id=tenant_id,
         symbol=sym,
-        asof=datetime.utcnow(),
+        asof=datetime.now(UTC),
 
         sector=_normalize_sector(fundamentals.get("sector")),
 
@@ -1081,7 +1081,7 @@ def run_analytics_for_symbol(
     )
 
     if existing:
-        existing.asof = datetime.utcnow()
+        existing.asof = datetime.now(UTC)
         existing.sector = _normalize_sector(fundamentals.get("sector"))
         existing.rating = signal
         existing.composite_score = float(composite or 0.0)
@@ -1222,13 +1222,18 @@ def run_vectorized_price_analytics(
     dataframes into run_analytics_for_symbol() to avoid repeated
     provider fetches inside the analytics loop.
     """
-
+    print(
+        f"🚨 VECTOR STEP 1 — ENTERED "
+        f"run_vectorized_price_analytics "
+        f"symbols={len(symbols)}"
+    )
     if isinstance(symbols, str):
         symbols = [symbols]
 
     clean_symbols = []
 
     for s in symbols or []:
+
         try:
             sym = _normalize(s)
 
@@ -1249,6 +1254,7 @@ def run_vectorized_price_analytics(
     # BUILD SHARED CACHE
     # ---------------------------------
     try:
+
         price_cache, meta = build_shared_price_cache(
             db=db,
             symbols=clean_symbols,

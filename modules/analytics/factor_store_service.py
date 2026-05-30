@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, UTC
 from sqlalchemy.orm import Session
 
 from modules.analytics.factor_store_models import FactorStore
@@ -24,7 +24,7 @@ def upsert_factor_store(db: Session, snapshot) -> FactorStore:
     payload = dict(
         tenant_id=snapshot.tenant_id,
         symbol=snapshot.symbol,
-        updated_at=datetime.utcnow(),
+        updated_at=datetime.now(UTC),
 
         sector=getattr(snapshot, "sector", None),
         rating=getattr(snapshot, "rating", None),

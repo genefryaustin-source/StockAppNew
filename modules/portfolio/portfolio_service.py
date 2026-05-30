@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, UTC
 import uuid
 from sqlalchemy import text
 
@@ -48,8 +48,8 @@ class PortfolioService:
                 base_currency=base_currency,
                 starting_cash=starting_cash,
                 is_active=True,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
             )
 
             self.db.add(portfolio)

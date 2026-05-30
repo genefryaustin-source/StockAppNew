@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 import pandas as pd
 
 
@@ -12,14 +12,14 @@ class MonitoringService:
         self.audit_log: list[dict] = []
 
     def heartbeat(self, status: str = "ok", message: str = "") -> None:
-        self.last_heartbeat = datetime.utcnow()
+        self.last_heartbeat = datetime.now(UTC)
         self.last_cycle_status = status
         self.last_cycle_message = message
 
     def is_stale(self, max_age_seconds: int = 180) -> bool:
         if self.last_heartbeat is None:
             return True
-        return datetime.utcnow() - self.last_heartbeat > timedelta(seconds=max_age_seconds)
+        return datetime.now(UTC) - self.last_heartbeat > timedelta(seconds=max_age_seconds)
 
     def log_event(
         self,
@@ -31,7 +31,7 @@ class MonitoringService:
         metadata: dict | None = None,
     ) -> None:
         self.audit_log.insert(0, {
-            "Timestamp": datetime.utcnow(),
+            "Timestamp": datetime.now(UTC),
             "Event Type": event_type,
             "Status": status,
             "Message": message,

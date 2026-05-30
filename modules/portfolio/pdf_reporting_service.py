@@ -3,7 +3,7 @@ from reportlab.platypus import (
 )
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import letter
-from datetime import datetime
+from datetime import datetime, UTC
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -110,7 +110,7 @@ class PDFReportingService:
         elements.append(Paragraph("Portfolio Report", self.styles["Title"]))
         elements.append(Spacer(1, 20))
         elements.append(Paragraph(
-            f"Generated: {datetime.utcnow().strftime('%Y-%m-%d')}",
+            f"Generated: {datetime.now(UTC).strftime('%Y-%m-%d')}",
             self.styles["Normal"]
         ))
         elements.append(PageBreak())

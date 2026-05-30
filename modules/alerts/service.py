@@ -346,7 +346,7 @@ class AlertService:
                 alert_type=alert_type,
                 message=message,
                 severity=severity,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(UTC)
             )
 
             self.db.add(alert)

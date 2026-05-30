@@ -1,5 +1,5 @@
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from modules.utils.config import get_secret
 
 
@@ -13,7 +13,7 @@ def get_finnhub_news(symbol: str):
         return []
 
     try:
-        today = datetime.utcnow()
+        today = datetime.now(UTC)
         start = today - timedelta(days=7)
 
         r = requests.get(

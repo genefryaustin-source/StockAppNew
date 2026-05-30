@@ -266,6 +266,11 @@ def run_one_queued_job(db: Session, tenant_id: str):
             append_job_log(db, job, f"Refresh result: {result}")
             succeed_job(db, job)
             append_job_log(db, job, "Universe refresh complete.")
+            from modules.core.cache_invalidation import (
+                invalidate_all_app_caches,
+            )
+
+            #invalidate_all_app_caches()
             return job.id
 
         else:

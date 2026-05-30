@@ -37,7 +37,11 @@ def upsert_bars(db: Session, symbol: str, interval: str, df):
 
 def read_bars(db: Session, symbol: str, interval: str, lookback_days: int = 400):
     import pandas as pd
-    cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+    from datetime import UTC
+
+    cutoff = datetime.now(UTC) - timedelta(
+        days=lookback_days
+    )
     rows = (
         db.query(OHLCVBar)
         .filter(OHLCVBar.symbol == symbol, OHLCVBar.interval == interval, OHLCVBar.ts >= cutoff)

@@ -5,7 +5,7 @@ import streamlit as st
 from sqlalchemy import text
 
 
-@st.cache_data(ttl=120)
+#@st.cache_data(ttl=120)
 def get_latest_snapshots_df(_db, tenant_id: str) -> pd.DataFrame:
     """
     Fast cached dataframe of the latest analytics snapshot per symbol.

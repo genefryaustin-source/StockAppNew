@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import List
 import uuid
 from sqlalchemy import text
@@ -122,7 +122,7 @@ class PaperBroker(BrokerBase):
 
         self._orders[broker_order_id] = {
             "response": resp,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(UTC),
         }
 
         print("💰 PAPER CASH AFTER TRADE:", self.cash)

@@ -1,13 +1,13 @@
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 
 def fetch_ohlcv(symbol: str, period: str, interval: str, api_key: str, timeout: int):
     if not api_key:
         raise RuntimeError("Polygon API key missing")
 
     # basic period->date range
-    end = datetime.utcnow().date()
+    end = datetime.now(UTC).date()
     start = end - timedelta(days=400 if period in ("1y","2y") else 120)
     start_s = start.isoformat()
     end_s = end.isoformat()

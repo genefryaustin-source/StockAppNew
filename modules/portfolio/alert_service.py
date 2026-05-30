@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Any
 
 
@@ -17,7 +17,7 @@ class AlertService:
         metadata: dict | None = None,
     ) -> dict:
         alert = {
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(UTC),
             "level": str(level).lower(),
             "title": title,
             "message": message,
