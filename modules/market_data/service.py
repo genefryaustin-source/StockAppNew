@@ -26,7 +26,12 @@ from modules.market_data.providers.alpha_vantage_provider import (
 from modules.market_data.providers.polygon import (
     fetch_ohlcv as polygon_history,
 )
-
+from modules.market_data.provider_router import (
+    get_provider_router,
+)
+from modules.market_data.providers.polygon import (
+    fetch_ohlcv as polygon_history,
+)
 
 # ---------------------------------------------------
 # CACHE SETUP
@@ -295,6 +300,7 @@ def _get_prices_finnhub(symbols: Iterable[str]) -> Dict[str, Dict[str, float]]:
 
     for raw_sym in symbols:
         sym = _valid_base_symbol(raw_sym)
+
         if not sym:
             continue
 
@@ -544,6 +550,7 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
             .timestamp()
         )
     sym = _valid_base_symbol(symbol)
+    router = get_provider_router()
     if not sym:
         return _empty_history()
 
@@ -591,9 +598,9 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
             CACHE[cache_key] = df
 
             return df
-
+        router.mark_success("POLYGON")
     except Exception as e:
-
+        router.mark_failure("POLYGON")
         print(
             f"POLYGON HISTORY ERROR: {sym}",
             e,
@@ -619,7 +626,7 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
         CACHE[cache_key] = df
 
         return df
-
+    router.mark_success("MARKETDATA")
     # -----------------------------------
     # 2. ALPHA VANTAGE BACKUP
     # -----------------------------------
@@ -641,7 +648,7 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
         CACHE[cache_key] = df
 
         return df
-
+    router.mark_success("ALPHA VANTAGE")
     # -----------------------------------
     # 3. YAHOO EMERGENCY FALLBACK
     # -----------------------------------
@@ -661,7 +668,7 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
         CACHE[cache_key] = df
 
         return df
-
+    router.mark_success("YAHOO")
     print(f"⚠️ NO PRICE DATA RETURNED: {sym}")
     _mark_symbol_failed(sym)
     return _empty_history()
