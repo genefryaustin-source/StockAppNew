@@ -593,8 +593,6 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
     df = _get_history_yahoo(
         symbol,
         period="1y",
-        start=None,
-        end=None,
         interval="1d",
     )
 
