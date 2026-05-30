@@ -119,11 +119,10 @@ def render_market_data(db, user):
             interval="1d",
             force_refresh=force_refresh,
         )
-        st.write("DEBUG CHART_DF TYPE:", type(chart_df))
+
 
         if chart_df is not None:
-            st.write("DEBUG ROWS:", len(chart_df))
-            st.write("DEBUG COLUMNS:", list(chart_df.columns))
+
 
             if not chart_df.empty:
                 st.dataframe(chart_df.head())
@@ -132,9 +131,7 @@ def render_market_data(db, user):
             len(chart_df)
         )
 
-        st.dataframe(
-            chart_df.head()
-        )
+
         if chart_df is None or chart_df.empty:
             st.warning("No market data returned.")
             return
@@ -181,16 +178,13 @@ def render_market_data(db, user):
 
     try:
 
-        st.write("DEBUG: Checking PriceHistory")
+
 
         rows = db.query(
             PriceHistory
         ).count()
 
-        st.write(
-            "PriceHistory rows:",
-            rows
-        )
+
 
     except Exception as e:
 
