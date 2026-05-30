@@ -3,7 +3,7 @@ from typing import Dict
 import time
 import pandas as pd
 
-from modules.market_data.service import get_price_history
+
 from modules.market_data.price_history_service import load_price_history
 from modules.market_data.price_history_service import store_price_history
 from modules.market_data.price_history_service import download_price_batch
@@ -31,8 +31,11 @@ def get_price(symbol: str, db) -> pd.DataFrame:
     2) local DB price_history table
     3) Yahoo download (only if missing)
     """
-
     symbol = symbol.upper()
+
+    if db is None:
+        return None
+
 
     # ----------------------------------------
     # 1. Memory cache

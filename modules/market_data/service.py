@@ -346,23 +346,7 @@ def _get_price_finnhub(symbol: str):
 
 def _get_price_eod(sym: str):
 
-    try:
-
-        from modules.market_data.price_cache import (
-            get_price,
-        )
-
-        return get_price(sym, None)
-
-    except Exception as e:
-
-        print(
-            "LEGACY EOD FALLBACK ERROR",
-            sym,
-            e,
-        )
-
-        return None
+    return None
 
 
 # ---------------------------------------------------
@@ -1103,7 +1087,7 @@ def _save_history_to_db(
                     row_error,
                 )
 
-        db.commit()
+        #db.commit()
 
         print(
             f"✅ SAVED {rows_saved} ROWS:",
@@ -1112,7 +1096,7 @@ def _save_history_to_db(
 
     except Exception as e:
 
-        db.rollback()
+        #db.rollback()
 
         print(
             "PRICE HISTORY SAVE ERROR:",
