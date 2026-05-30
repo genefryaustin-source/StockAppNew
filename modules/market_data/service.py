@@ -26,6 +26,8 @@ from modules.market_data.providers.alpha_vantage_provider import (
 from modules.market_data.providers.polygon import (
     fetch_ohlcv as polygon_history,
 )
+
+
 # ---------------------------------------------------
 # CACHE SETUP
 # ---------------------------------------------------
@@ -580,13 +582,13 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
         )
 
         if df is not None and not df.empty:
-            df = _normalize_df(df)
+            _save_history_to_db(
+                db,
+                sym,
+                df,
+            )
 
             CACHE[cache_key] = df
-
-            print(
-                f"✅ POLYGON HISTORY SUCCESS: {sym}"
-            )
 
             return df
 
@@ -608,7 +610,14 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
     )
 
     if df is not None and not df.empty:
+        _save_history_to_db(
+            db,
+            sym,
+            df,
+        )
+
         CACHE[cache_key] = df
+
         return df
 
     # -----------------------------------
@@ -623,7 +632,14 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
     )
 
     if df is not None and not df.empty:
+        _save_history_to_db(
+            db,
+            sym,
+            df,
+        )
+
         CACHE[cache_key] = df
+
         return df
 
     # -----------------------------------
@@ -636,7 +652,14 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
     )
 
     if df is not None and not df.empty:
+        _save_history_to_db(
+            db,
+            sym,
+            df,
+        )
+
         CACHE[cache_key] = df
+
         return df
 
     print(f"⚠️ NO PRICE DATA RETURNED: {sym}")
@@ -967,3 +990,127 @@ def preload_histories(
     print(f"✅ PRELOAD COMPLETE: {len(history_map)} loaded")
 
     return history_map
+
+# ---------------------------------------------------
+# PRICE HISTORY PERSISTENCE
+# ---------------------------------------------------
+
+def _save_history_to_db(
+    db,
+    symbol: str,
+    df: pd.DataFrame,
+):
+
+    if df is None or df.empty:
+        return 0
+
+    sym = _valid_base_symbol(symbol)
+
+    if not sym:
+        return 0
+
+    rows_saved = 0
+
+    try:
+
+        for _, row in df.iterrows():
+
+            try:
+
+                dt = pd.to_datetime(
+                    row["Date"]
+                ).date()
+
+                existing = (
+                    db.query(
+                        PriceHistory
+                    )
+                    .filter(
+                        PriceHistory.symbol == sym,
+                        PriceHistory.date == dt,
+                    )
+                    .first()
+                )
+
+                if existing:
+
+                    existing.open = float(
+                        row["Open"]
+                    )
+
+                    existing.high = float(
+                        row["High"]
+                    )
+
+                    existing.low = float(
+                        row["Low"]
+                    )
+
+                    existing.close = float(
+                        row["Close"]
+                    )
+
+                    existing.volume = float(
+                        row["Volume"]
+                    )
+
+                else:
+
+                    db.add(
+
+                        PriceHistory(
+
+                            symbol=sym,
+
+                            date=dt,
+
+                            open=float(
+                                row["Open"]
+                            ),
+
+                            high=float(
+                                row["High"]
+                            ),
+
+                            low=float(
+                                row["Low"]
+                            ),
+
+                            close=float(
+                                row["Close"]
+                            ),
+
+                            volume=float(
+                                row["Volume"]
+                            ),
+                        )
+                    )
+
+                rows_saved += 1
+
+            except Exception as row_error:
+
+                print(
+                    "PRICE ROW SAVE ERROR:",
+                    sym,
+                    row_error,
+                )
+
+        db.commit()
+
+        print(
+            f"✅ SAVED {rows_saved} ROWS:",
+            sym,
+        )
+
+    except Exception as e:
+
+        db.rollback()
+
+        print(
+            "PRICE HISTORY SAVE ERROR:",
+            sym,
+            e,
+        )
+
+    return rows_saved
