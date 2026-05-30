@@ -185,7 +185,7 @@ def store_price_history(db, symbol, df):
 
         db.execute(stmt)
 
-    db.commit()
+
 
 
 # ---------------------------------------------------

@@ -59,7 +59,7 @@ def update_latest_prices(
     updated_symbols = []
     failed = 0
     skipped = 0
-
+    BATCH_COMMIT = 25
     for i, sym in enumerate(symbols):
 
         try:
@@ -73,19 +73,39 @@ def update_latest_prices(
 
             store_price_history(db, sym, df)
 
-            updated += 1
-            updated_symbols.append(sym)
+            if updated % BATCH_COMMIT == 0:
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    raise
 
             # Progress callback for UI
             if progress_callback:
                 progress_callback(i + 1, total, sym)
 
             # Throttle to avoid API bans
-            time.sleep(0.12)
+            time.sleep(0.50)
+
 
         except Exception as e:
+
+            try:
+
+                db.rollback()
+
+            except Exception:
+
+                pass
+
             print(f"[FAIL] {sym}: {e}")
+
             failed += 1
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     return {
         "total": total,
