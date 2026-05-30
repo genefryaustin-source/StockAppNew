@@ -12,7 +12,7 @@ from modules.market_data.service import (
     get_stale_symbols,
 )
 from modules.market_data.updater import update_latest_prices
-
+from modules.market_data.models import PriceHistory
 
 # ---------------------------------------------------
 # INDICATORS
@@ -119,7 +119,14 @@ def render_market_data(db, user):
             interval="1d",
             force_refresh=force_refresh,
         )
+        st.write(
+            "Chart Rows:",
+            len(chart_df)
+        )
 
+        st.dataframe(
+            chart_df.head()
+        )
         if chart_df is None or chart_df.empty:
             st.warning("No market data returned.")
             return
@@ -164,7 +171,24 @@ def render_market_data(db, user):
             st.caption(f"Rows returned: {len(chart_df)}")
             st.dataframe(chart_df.iloc[start:end], use_container_width=True, height=600)
 
+    try:
+
+        st.write("DEBUG: Checking PriceHistory")
+
+        rows = db.query(
+            PriceHistory
+        ).count()
+
+        st.write(
+            "PriceHistory rows:",
+            rows
+        )
+
+    except Exception as e:
+
+        st.exception(e)
     st.divider()
+
     st.subheader("Data Freshness")
 
     try:
