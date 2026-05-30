@@ -22,6 +22,10 @@ from modules.market_data.providers.alpha_vantage_provider import (
     get_history as alpha_history,
 )
 
+
+from modules.market_data.providers.polygon import (
+    fetch_ohlcv as polygon_history,
+)
 # ---------------------------------------------------
 # CACHE SETUP
 # ---------------------------------------------------
@@ -558,6 +562,41 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
         return _empty_history()
 
     # -----------------------------------
+    # 1. POLYGON PRIMARY
+    # -----------------------------------
+
+    try:
+
+        polygon_key = get_secret(
+            "POLYGON_API_KEY"
+        )
+
+        df = polygon_history(
+            symbol=sym,
+            period=period,
+            interval=interval,
+            api_key=polygon_key,
+            timeout=15,
+        )
+
+        if df is not None and not df.empty:
+            df = _normalize_df(df)
+
+            CACHE[cache_key] = df
+
+            print(
+                f"✅ POLYGON HISTORY SUCCESS: {sym}"
+            )
+
+            return df
+
+    except Exception as e:
+
+        print(
+            f"POLYGON HISTORY ERROR: {sym}",
+            e,
+        )
+    # -----------------------------------
     # 1. MARKETDATA.APP PRIMARY
     # -----------------------------------
     df = marketdata_history(
@@ -848,19 +887,33 @@ def get_price_history_page_from_db(db, symbol, page=1, page_size=250, period="1y
 
 def massive_fetch_ohlc(symbol: str, period="1y") -> pd.DataFrame:
     try:
-        sym = _valid_base_symbol(symbol)
-        if not sym:
-            return _empty_history()
 
-        df = _get_history_eodhd(sym)
+        polygon_key = get_secret(
+            "POLYGON_API_KEY"
+        )
+
+        df = polygon_history(
+            symbol=symbol,
+            period=period,
+            interval="1d",
+            api_key=polygon_key,
+            timeout=15,
+        )
+
         if df is not None and not df.empty:
-            return df
-
-        return _empty_history()
+            return _normalize_df(df)
 
     except Exception as e:
-        print("massive_fetch_ohlc fallback error:", symbol, e)
-        return _empty_history()
+
+        print(
+            "POLYGON MASSIVE FALLBACK ERROR:",
+            symbol,
+            e,
+        )
+
+    return _empty_history()
+
+
 
 def preload_histories(
         db,
