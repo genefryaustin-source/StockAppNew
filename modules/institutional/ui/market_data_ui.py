@@ -119,6 +119,14 @@ def render_market_data(db, user):
             interval="1d",
             force_refresh=force_refresh,
         )
+        st.write("DEBUG CHART_DF TYPE:", type(chart_df))
+
+        if chart_df is not None:
+            st.write("DEBUG ROWS:", len(chart_df))
+            st.write("DEBUG COLUMNS:", list(chart_df.columns))
+
+            if not chart_df.empty:
+                st.dataframe(chart_df.head())
         st.write(
             "Chart Rows:",
             len(chart_df)

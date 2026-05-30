@@ -11,9 +11,7 @@ import matplotlib
 VERSION = "2.4.0"
 
 st.set_page_config(page_title="Equity Research Terminal", layout="wide")
-st.write("🔥 APP.PY IS RELOADING")
 
-print("🔥 APP.PY IS RELOADING")
 # ============================================================
 # 0. DEV MODE FLAG (controls debug output)
 # ============================================================
