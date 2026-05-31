@@ -32,6 +32,16 @@ from modules.market_data.provider_router import (
 from modules.market_data.providers.polygon import (
     fetch_ohlcv as polygon_history,
 )
+from modules.market_data.provider_router import (
+    get_provider_router,
+    is_rate_limit_error,
+)
+
+
+from modules.market_data.autonomous_market_data_orchestrator import (
+    get_autonomous_market_data_orchestrator,
+)
+
 
 # ---------------------------------------------------
 # CACHE SETUP
@@ -506,7 +516,14 @@ def _get_history_yahoo(symbol: str, period: str = "1y", interval: str = "1d") ->
 # PRICE HISTORY
 # ---------------------------------------------------
 
-def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=False):
+def get_price_history_internal(
+    db,
+    symbol,
+    period="1y",
+    interval="1d",
+    force_refresh=False,
+    provider_override=None,
+):
     print("🔥 PRICE HISTORY CALLED:", symbol)
     end = int(datetime.now(UTC).timestamp())
 
@@ -535,6 +552,14 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
         )
     sym = _valid_base_symbol(symbol)
     router = get_provider_router()
+    print(
+        "PROVIDER OVERRIDE:",
+        provider_override,
+    )
+    if provider_override:
+        provider_override = (
+            provider_override.upper()
+        )
     if not sym:
         return _empty_history()
 
@@ -558,106 +583,206 @@ def get_price_history(db, symbol, period="1y", interval="1d", force_refresh=Fals
     # 1. POLYGON PRIMARY
     # -----------------------------------
 
-    try:
+    if (
+            provider_override in (None, "POLYGON")
+            and router.is_available("POLYGON")
+    ):
 
-        polygon_key = get_secret(
-            "POLYGON_API_KEY"
-        )
+        try:
+            start_time = time.time()
 
-        df = polygon_history(
-            symbol=sym,
-            period=period,
-            interval=interval,
-            api_key=polygon_key,
-            timeout=15,
-        )
+            router.wait_for_provider("POLYGON")
 
-        if df is not None and not df.empty:
-            _save_history_to_db(
-                db,
-                sym,
-                df,
+            polygon_key = get_secret(
+                "POLYGON_API_KEY"
             )
 
-            CACHE[cache_key] = df
+            df = polygon_history(
+                symbol=sym,
+                period=period,
+                interval=interval,
+                api_key=polygon_key,
+                timeout=15,
+            )
 
-            return df
-        router.mark_success("POLYGON")
-    except Exception as e:
-        router.mark_failure("POLYGON")
-        print(
-            f"POLYGON HISTORY ERROR: {sym}",
-            e,
-        )
+            if df is not None and not df.empty:
+                latency_ms = (time.time() - start_time) * 1000
+
+                router.mark_success(
+                    "POLYGON",
+                    latency_ms=latency_ms,
+                )
+
+                _save_history_to_db(
+                    db,
+                    sym,
+                    df,
+                )
+
+                CACHE[cache_key] = df
+
+                return df
+
+            router.mark_failure("POLYGON")
+
+        except Exception as e:
+            if is_rate_limit_error(e):
+                router.mark_rate_limited(
+                    "POLYGON",
+                    cooldown_minutes=15,
+                )
+            else:
+                router.mark_failure("POLYGON")
+
+            print(
+                f"POLYGON HISTORY ERROR: {sym}",
+                e,
+            )
+
     # -----------------------------------
     # 1. MARKETDATA.APP PRIMARY
     # -----------------------------------
-    df = marketdata_history(
-        symbol,
-        period="1y",
-        start=None,
-        end=None,
-        interval="1d",
-    )
+    if (
+            provider_override in (None, "MARKETDATA")
+            and router.is_available("MARKETDATA")
+    ):
 
-    if df is not None and not df.empty:
-        _save_history_to_db(
-            db,
-            sym,
-            df,
-        )
+        try:
+            start_time = time.time()
+            router.wait_for_provider("MARKETDATA")
 
-        CACHE[cache_key] = df
+            df = marketdata_history(
+                symbol,
+                period=period,
+                start=None,
+                end=None,
+                interval=interval,
+            )
 
-        return df
-    router.mark_success("MARKETDATA")
+            if df is not None and not df.empty:
+                router.mark_success(
+                    "MARKETDATA",
+                    latency_ms=(time.time() - start_time) * 1000,
+                )
+
+                _save_history_to_db(db, sym, df)
+                CACHE[cache_key] = df
+                return df
+
+            router.mark_failure("MARKETDATA")
+
+        except Exception as e:
+            if is_rate_limit_error(e):
+                router.mark_rate_limited("MARKETDATA", cooldown_minutes=15)
+            else:
+                router.mark_failure("MARKETDATA")
+
+            print(f"MARKETDATA HISTORY ERROR: {sym}", e)
     # -----------------------------------
     # 2. ALPHA VANTAGE BACKUP
     # -----------------------------------
-    df = alpha_history(
-        symbol,
-        period="1y",
-        start=None,
-        end=None,
-        interval="1d",
-    )
+    if (
+            provider_override in (None, "ALPHA_VANTAGE")
+            and router.is_available("ALPHA_VANTAGE")
+    ):
 
-    if df is not None and not df.empty:
-        _save_history_to_db(
-            db,
-            sym,
-            df,
-        )
+        try:
+            start_time = time.time()
+            router.wait_for_provider("ALPHA_VANTAGE")
 
-        CACHE[cache_key] = df
+            df = alpha_history(
+                symbol,
+                period=period,
+                start=None,
+                end=None,
+                interval=interval,
+            )
 
-        return df
-    router.mark_success("ALPHA VANTAGE")
+            if df is not None and not df.empty:
+                router.mark_success(
+                    "ALPHA_VANTAGE",
+                    latency_ms=(time.time() - start_time) * 1000,
+                )
+
+                _save_history_to_db(db, sym, df)
+                CACHE[cache_key] = df
+                return df
+
+            router.mark_failure("ALPHA_VANTAGE")
+
+        except Exception as e:
+            if is_rate_limit_error(e):
+                router.mark_rate_limited("ALPHA_VANTAGE", cooldown_minutes=60)
+            else:
+                router.mark_failure("ALPHA_VANTAGE")
+
+            print(f"ALPHA HISTORY ERROR: {sym}", e)
     # -----------------------------------
     # 3. YAHOO EMERGENCY FALLBACK
     # -----------------------------------
-    df = _get_history_yahoo(
-        symbol,
+    if (
+            provider_override in (None, "YAHOO")
+            and router.is_available("YAHOO")
+    ):
+
+        try:
+            start_time = time.time()
+            router.wait_for_provider("YAHOO")
+
+            df = _get_history_yahoo(
+                symbol,
+                period=period,
+                interval=interval,
+            )
+
+            if df is not None and not df.empty:
+                router.mark_success(
+                    "YAHOO",
+                    latency_ms=(time.time() - start_time) * 1000,
+                )
+
+                _save_history_to_db(db, sym, df)
+                CACHE[cache_key] = df
+                return df
+
+            router.mark_failure("YAHOO")
+
+        except Exception as e:
+            if is_rate_limit_error(e):
+                router.mark_rate_limited("YAHOO", cooldown_minutes=30)
+            else:
+                router.mark_failure("YAHOO")
+
+            print(f"YAHOO HISTORY ERROR: {sym}", e)
+        return _empty_history()
+def get_price_history(
+    db,
+    symbol,
+    period="1y",
+    interval="1d",
+    force_refresh=False,
+):
+    from modules.market_data.autonomous_market_data_orchestrator import (
+        get_autonomous_market_data_orchestrator,
+    )
+
+    orchestrator = (
+        get_autonomous_market_data_orchestrator()
+    )
+
+    result = orchestrator.fetch_price_history(
+        db=db,
+        symbol=symbol,
         period=period,
         interval=interval,
     )
 
-    if df is not None and not df.empty:
-        _save_history_to_db(
-            db,
-            sym,
-            df,
-        )
+    df = result.get("data")
 
-        CACHE[cache_key] = df
-
+    if df is not None:
         return df
-    router.mark_success("YAHOO")
-    print(f"⚠️ NO PRICE DATA RETURNED: {sym}")
-    _mark_symbol_failed(sym)
-    return _empty_history()
 
-
+    return pd.DataFrame()
 # ---------------------------------------------------
 # BULK PRICE FETCH
 # ---------------------------------------------------
@@ -725,7 +850,9 @@ def get_prices_many(db, symbols):
 # LATEST PRICE
 # ---------------------------------------------------
 
-def get_latest_price(symbol: str):
+def get_latest_price_internal(
+    symbol: str
+):
     sym = _valid_base_symbol(symbol)
     if not sym:
         return None
@@ -759,7 +886,24 @@ def get_latest_price(symbol: str):
         print(f"PRICE FETCH ERROR (Massive): {sym} {e}")
 
     return None
+def get_latest_price(
+    symbol: str,
+    db=None,
+):
+    from modules.market_data.autonomous_market_data_orchestrator import (
+        get_autonomous_market_data_orchestrator,
+    )
 
+    orchestrator = (
+        get_autonomous_market_data_orchestrator()
+    )
+
+    result = orchestrator.fetch_latest_price(
+        db=db,
+        symbol=symbol,
+    )
+
+    return result.get("price")
 
 # ---------------------------------------------------
 # LATEST PRICE MAP
@@ -1087,7 +1231,7 @@ def _save_history_to_db(
                     row_error,
                 )
 
-        #db.commit()
+        db.commit()
 
         print(
             f"✅ SAVED {rows_saved} ROWS:",

@@ -345,7 +345,9 @@ def run_due_universe_refresh_jobs(
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> Dict[str, Any]:
     from modules.market_data.updater import update_latest_prices
-    from modules.analytics.incremental_runner import run_incremental_analytics
+    from modules.analytics.universe_aware_analytics_runner import (
+        run_universe_aware_analytics,
+    )
 
     ensure_universe_refresh_tables(db)
 
@@ -365,7 +367,24 @@ def run_due_universe_refresh_jobs(
         "details": [],
     }
 
-    tenant_id = user.get("tenant_id") if isinstance(user, dict) else None
+    tenant_id = None
+
+    if isinstance(user, dict):
+        tenant_id = user.get("tenant_id")
+
+    if not tenant_id:
+
+        row = db.execute(text("""
+            SELECT tenant_id
+            FROM universe_symbols
+            WHERE universe_id = :universe_id
+            LIMIT 1
+        """), {
+            "universe_id": str(job.universe_id),
+        }).fetchone()
+
+        if row:
+            tenant_id = row.tenant_id
 
     for job in jobs:
         job_id = int(job.id)
@@ -417,11 +436,12 @@ def run_due_universe_refresh_jobs(
                 "failed": 0,
             }
 
-            if updated_symbols and tenant_id:
-                analytics_result = run_incremental_analytics(
-                    db,
-                    tenant_id,
-                    list(dict.fromkeys(updated_symbols)),
+            if tenant_id:
+                analytics_result = run_universe_aware_analytics(
+                    db=db,
+                    tenant_id=tenant_id,
+                    universe_id=str(job.universe_id),
+                    max_symbols=max_symbols_per_run,
                 )
 
             mark_job_complete(
@@ -440,13 +460,31 @@ def run_due_universe_refresh_jobs(
                 "job_id": job_id,
                 "universe_id": str(job.universe_id),
                 "universe_name": job.universe_name,
+
                 "symbols_available": len(all_symbols),
+
                 "symbols_attempted": len(selected_symbols),
+
                 "updated": total_updated,
+
                 "skipped": total_skipped,
+
                 "failed": total_failed,
-                "analytics_processed": analytics_result.get("processed", 0),
-                "analytics_failed": analytics_result.get("failed", 0),
+
+                "analytics_symbols": analytics_result.get(
+                    "symbols",
+                    0,
+                ),
+
+                "analytics_processed": analytics_result.get(
+                    "processed",
+                    0,
+                ),
+
+                "analytics_failed": analytics_result.get(
+                    "failed",
+                    0,
+                ),
             })
 
         except Exception as e:

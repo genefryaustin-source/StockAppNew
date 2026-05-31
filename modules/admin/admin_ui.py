@@ -19,6 +19,10 @@ from modules.universe.universe_cleanup_ui import (
     render_universe_cleanup_ui,
 )
 
+from modules.ui.admin.provider_health_dashboard_page import (
+    render_provider_health_dashboard_page,
+)
+
 
 # ---------------------------------------------------------
 # ACTIVE TENANT
@@ -124,10 +128,11 @@ def render_admin_panel(db, user):
     # ---------------------------------------------------------
     st.write("BEFORE TABS")
 
-    tab_users, tab_tenants, tab_cleanup = st.tabs([
+    tab_users, tab_tenants, tab_cleanup, provider_health_tab = st.tabs([
         "Users",
         "Tenants",
         "Universe Cleanup",
+        "Provider Health",
     ])
 
     st.write("AFTER TABS")
@@ -492,3 +497,14 @@ def render_admin_panel(db, user):
             st.error(
                 f"Universe cleanup failed: {e}"
             )
+
+    # =========================================================
+    # PROVIDER HEALTH TAB
+    # =========================================================
+
+    with provider_health_tab:
+
+        render_provider_health_dashboard_page(
+            db=db,
+            user=user,
+        )
