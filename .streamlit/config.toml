@@ -4,3 +4,6 @@ port = 8502
 
 [browser]
 gatherUsageStats = false
+
+[logger]
+level = "debug"
