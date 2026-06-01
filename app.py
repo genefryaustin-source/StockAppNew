@@ -1,3 +1,16 @@
+import sys
+import traceback
+
+try:
+    pass  # your existing code stays below
+except Exception as _boot_err:
+    import streamlit as st
+    st.error(f"Boot error: {_boot_err}")
+    st.code(traceback.format_exc())
+    st.stop()
+
+
+
 import streamlit as st
 
 import pandas as pd
