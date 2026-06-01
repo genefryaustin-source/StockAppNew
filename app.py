@@ -1,20 +1,51 @@
 
-import sys, os
-with open("/tmp/boot_log.txt", "w") as _f:
-    _f.write(str(sys.path) + "\n")
-    _f.write(str(os.getcwd()) + "\n")
+import streamlit as st
+import sys
+import os
+import traceback
 
-import traceback as _tb
-import builtins as _bi
-_orig_import = _bi.__import__
-def _traced_import(name, *a, **kw):
+st.set_page_config(page_title="Equity Research Terminal", layout="wide")
+
+# ── CLOUD BOOT DIAGNOSTICS ──────────────────────────────────
+# Remove this block once the app is confirmed working on Cloud
+_diag = []
+_failed = False
+
+def _test(label, fn):
+    global _failed
+    if _failed:
+        return
     try:
-        return _orig_import(name, *a, **kw)
+        fn()
+        _diag.append(f"✅ {label}")
     except Exception as e:
-        with open("/tmp/boot_log.txt", "a") as _f:
-            _f.write(f"FAILED: {name}\n{_tb.format_exc()}\n")
-        raise
-_bi.__import__ = _traced_import
+        _diag.append(f"❌ {label}")
+        _diag.append(traceback.format_exc())
+        _failed = True
+
+_test("import pandas",      lambda: __import__("pandas"))
+_test("import sqlalchemy",  lambda: __import__("sqlalchemy"))
+_test("import yfinance",    lambda: __import__("yfinance"))
+_test("import diskcache",   lambda: __import__("diskcache"))
+_test("import anthropic",   lambda: __import__("anthropic"))
+_test("modules.db.core",    lambda: __import__("modules.db.core", fromlist=["*"]))
+_test("modules.db.models",  lambda: __import__("modules.db.models", fromlist=["*"]))
+_test("modules.market_data.models", lambda: __import__("modules.market_data.models", fromlist=["*"]))
+_test("modules.analytics.models",   lambda: __import__("modules.analytics.models", fromlist=["*"]))
+_test("modules.auth.login_ui",      lambda: __import__("modules.auth.login_ui", fromlist=["*"]))
+_test("modules.portfolio.nav_service", lambda: __import__("modules.portfolio.nav_service", fromlist=["*"]))
+_test("modules.forecasting.forecast_ui", lambda: __import__("modules.forecasting.forecast_ui", fromlist=["*"]))
+
+if _failed:
+    st.error("🚨 Boot failed — see diagnostics below")
+    st.code("\n".join(_diag))
+    st.stop()
+else:
+    st.success("✅ All imports OK — loading app...")
+    # Remove the st.stop() below once confirmed working
+    # st.stop()
+
+# ── END CLOUD BOOT DIAGNOSTICS ─────────────────────────────
 
 
 import streamlit as st
