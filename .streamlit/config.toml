@@ -1,6 +1,6 @@
-﻿[server]
-headless = true
+[server]
+headless = false
 port = 8501
 
-[logger]
-level = "info"
+[browser]
+gatherUsageStats = false
