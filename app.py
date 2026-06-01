@@ -1,4 +1,22 @@
 
+import sys, os
+with open("/tmp/boot_log.txt", "w") as _f:
+    _f.write(str(sys.path) + "\n")
+    _f.write(str(os.getcwd()) + "\n")
+
+import traceback as _tb
+import builtins as _bi
+_orig_import = _bi.__import__
+def _traced_import(name, *a, **kw):
+    try:
+        return _orig_import(name, *a, **kw)
+    except Exception as e:
+        with open("/tmp/boot_log.txt", "a") as _f:
+            _f.write(f"FAILED: {name}\n{_tb.format_exc()}\n")
+        raise
+_bi.__import__ = _traced_import
+
+
 import streamlit as st
 
 import pandas as pd
@@ -12,7 +30,10 @@ import matplotlib
 VERSION = "2.4.0"
 
 st.set_page_config(page_title="Equity Research Terminal", layout="wide")
-
+import streamlit as st
+if os.path.exists("/tmp/boot_log.txt"):
+    with open("/tmp/boot_log.txt") as f:
+        st.code(f.read())
 # ============================================================
 # 0. DEV MODE FLAG (controls debug output)
 # ============================================================
