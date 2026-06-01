@@ -1,33 +1,3 @@
-import streamlit as st
-import sys
-import traceback
-
-st.set_page_config(page_title="Equity Research Terminal", layout="wide")
-
-try:
-    import pandas as pd
-    import sqlalchemy
-    import os
-    import sqlite3
-    import time
-    from datetime import datetime, UTC
-except Exception as e:
-    st.error(f"❌ Core import failed: {e}")
-    st.code(traceback.format_exc())
-    st.stop()
-
-try:
-    from modules.db.core import engine
-    from sqlalchemy import inspect as _inspect
-except Exception as e:
-    st.error(f"❌ modules.db.core failed: {e}")
-    st.code(traceback.format_exc())
-    st.stop()
-
-st.success("✅ DB core loaded")
-st.stop()  # Remove this line once you see where it fails
-
-
 
 import streamlit as st
 
