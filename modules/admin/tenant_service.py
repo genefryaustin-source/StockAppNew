@@ -46,3 +46,11 @@ class TenantService:
         """), {"id": tenant_id})
 
         self.db.commit()
+
+    def activate_tenant(self, tenant_id: str):
+        self.db.execute(text("""
+            UPDATE tenants
+            SET is_active = 1
+            WHERE id = :id
+        """), {"id": tenant_id})
+        self.db.commit()

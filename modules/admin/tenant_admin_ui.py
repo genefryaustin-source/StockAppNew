@@ -6,7 +6,6 @@ import os
 from modules.admin.tenant_service import TenantService
 from modules.portfolio.portfolio_assignment_service import PortfolioAssignmentService
 
-#st.write("DEBUG FILE LOADED:", __file__)
 
 def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
@@ -34,9 +33,9 @@ def render_tenant_admin_panel(db, user):
         tab_users = st.container()
         tab_tenants = None
 
-    # ---------------------------------
+    # ========================================
     # USERS TAB
-    # ---------------------------------
+    # ========================================
     with tab_users:
 
         # ---------------------------------
@@ -149,7 +148,7 @@ def render_tenant_admin_panel(db, user):
                 c3.write("🟢" if active else "🔴")
 
         # ---------------------------------
-        # PORTFOLIO ASSIGNMENTS (GLOBAL)
+        # PORTFOLIO ASSIGNMENTS
         # ---------------------------------
         st.divider()
         st.subheader("Portfolio Assignments")
@@ -175,10 +174,6 @@ def render_tenant_admin_panel(db, user):
             format_func=lambda x: user_map[x]
         )
 
-        # DEBUG
-        #st.write("DEBUG TENANT:", tenant_id)
-        #st.write("DEBUG SELECTED USER:", selected_user)
-
         portfolios = db.execute(text("""
             SELECT id, name
             FROM portfolios
@@ -191,16 +186,12 @@ def render_tenant_admin_panel(db, user):
 
         portfolio_map = {p[0]: p[1] for p in portfolios}
 
-        # ✅ FIXED ORDER
         assigned = assignment_service.get_user_portfolios(
             tenant_id=tenant_id,
             user_id=selected_user
         )
 
         assigned_ids = [p["id"] for p in assigned]
-
-        # DEBUG
-        #st.write("DEBUG CURRENT ASSIGNED IDS:", assigned_ids)
 
         selected_portfolios = st.multiselect(
             "Assign Portfolios",
@@ -211,7 +202,6 @@ def render_tenant_admin_panel(db, user):
 
         if st.button("Save Assignments"):
 
-            # REMOVE UNCHECKED
             for pid in assigned_ids:
                 if pid not in selected_portfolios:
                     assignment_service.remove_assignment(
@@ -220,7 +210,6 @@ def render_tenant_admin_panel(db, user):
                         portfolio_id=pid
                     )
 
-            # ADD NEW
             for pid in selected_portfolios:
                 if pid not in assigned_ids:
                     assignment_service.assign_portfolio_to_user(
@@ -232,9 +221,9 @@ def render_tenant_admin_panel(db, user):
             st.success("Assignments updated")
             st.rerun()
 
-    # ---------------------------------
-    # TENANT MANAGEMENT
-    # ---------------------------------
+    # ========================================
+    # TENANT MANAGEMENT TAB (Super Admin Only)
+    # ========================================
     if tab_tenants:
 
         with tab_tenants:
@@ -243,26 +232,42 @@ def render_tenant_admin_panel(db, user):
 
             service = TenantService(db)
 
+            # --- CREATE NEW TENANT ---
+            st.subheader("➕ Create New Tenant")
+            new_tenant_name = st.text_input(
+                "Tenant Name", 
+                key="new_tenant_name",
+                placeholder="Acme Corporation"
+            )
+
+            if st.button("Create Tenant", type="primary"):
+                if not new_tenant_name or new_tenant_name.strip() == "":
+                    st.error("Tenant name is required")
+                else:
+                    try:
+                        new_id = service.create_tenant(new_tenant_name.strip())
+                        st.success(f"✅ Tenant '{new_tenant_name}' created successfully! (ID: {new_id})")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to create tenant: {e}")
+
+            st.divider()
+
+            # --- LIST & MANAGE EXISTING TENANTS ---
+            st.subheader("Existing Tenants")
             tenants = service.list_tenants()
 
-            selected = next((t for t in tenants if t["id"] == tenant_id), None)
-
-            if not selected:
-                st.error("Selected tenant not found.")
-                return
-
-            st.markdown(f"### 🏢 Managing Tenant: {selected['name']}")
-
-            col1, col2, col3 = st.columns([3, 2, 1])
-
-            col1.write(selected["name"])
-            col2.write("🟢 Active" if selected["is_active"] else "🔴 Inactive")
-
-            if selected["is_active"]:
-                if col3.button("Deactivate Tenant"):
-                    service.deactivate_tenant(selected["id"])
-                    st.rerun()
-            else:
-                if col3.button("Activate Tenant"):
-                    service.activate_tenant(selected["id"])
-                    st.rerun()
+            for tenant in tenants:
+                col1, col2, col3 = st.columns([3, 2, 2])
+                col1.write(f"**{tenant['name']}** (ID: {tenant['id'][:8]}...)")
+                col2.write("🟢 Active" if tenant["is_active"] else "🔴 Inactive")
+                
+                if tenant["is_active"]:
+                    if col3.button("Deactivate", key=f"deact_{tenant['id']}"):
+                        service.deactivate_tenant(tenant["id"])
+                        st.rerun()
+                else:
+                    if col3.button("Activate", key=f"act_{tenant['id']}"):
+                        service.activate_tenant(tenant["id"])
+                        st.rerun()
+                st.divider()
