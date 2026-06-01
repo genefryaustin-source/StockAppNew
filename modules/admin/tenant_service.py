@@ -1,6 +1,7 @@
 from sqlalchemy import text
 import uuid
 
+
 class TenantService:
 
     def __init__(self, db):
@@ -31,12 +32,25 @@ class TenantService:
             VALUES (:id, :name, 1)
         """), {
             "id": tenant_id,
-            "name": name
+            "name": name,
         })
 
         self.db.commit()
 
         return tenant_id
+
+    # NEW: rename a tenant
+    def update_tenant(self, tenant_id: str, name: str):
+        self.db.execute(text("""
+            UPDATE tenants
+            SET name = :name
+            WHERE id = :id
+        """), {
+            "id": tenant_id,
+            "name": name,
+        })
+
+        self.db.commit()
 
     def deactivate_tenant(self, tenant_id: str):
         self.db.execute(text("""
@@ -53,4 +67,5 @@ class TenantService:
             SET is_active = 1
             WHERE id = :id
         """), {"id": tenant_id})
+
         self.db.commit()

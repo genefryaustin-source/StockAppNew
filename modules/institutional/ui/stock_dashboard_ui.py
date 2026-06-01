@@ -386,3 +386,22 @@ def render_stock_dashboard(db, user):
 
     else:
         st.warning("No news available.")
+    # ── AI Forecast, Congress Trades & Institutional Flow ──
+    st.divider()
+    try:
+        from modules.forecasting.forecast_ui import (
+            render_forecast_panel,
+            render_congress_panel,
+            render_institutional_panel,
+        )
+        tab_fc, tab_cong, tab_inst = st.tabs([
+            "🤖 AI Forecast", "🏛️ Congress Trades", "🏦 Institutional Flow"
+        ])
+        with tab_fc:
+            render_forecast_panel(db, user, symbol)
+        with tab_cong:
+            render_congress_panel(symbol)
+        with tab_inst:
+            render_institutional_panel(symbol)
+    except Exception as e:
+        st.warning(f"Market intelligence panels unavailable: {e}")

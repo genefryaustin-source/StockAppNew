@@ -4,6 +4,7 @@ pandas==2.2.2
 matplotlib==3.10.9
 altair==5.5.0
 annotated-types==0.7.0
+anthropic>=0.30.0
 anyio==4.13.0
 attrs==26.1.0
 beautifulsoup4==4.14.3
@@ -58,6 +59,7 @@ reportlab==4.5.1
 requests==2.34.2
 rich==13.9.4
 rpds-py==0.30.0
+quiverquant
 setuptools==82.0.1
 six==1.17.0
 smmap==5.0.3

@@ -317,7 +317,7 @@ else:
         "Analytics", "Rankings", "Universe", "Stock Dashboard", "Portfolio",
         "Portfolio Construction", "Portfolio Deployment", "Market Overview",
         "AI Rankings", "Strategy Lab", "Regime Engine", "Strategy Discovery",
-        "Strategy Library", "Alerts", "Admin","AI Portfolio", "Help"
+        "Strategy Library", "Alerts", "Admin","AI Portfolio","AI Forecast","Help"
     ]
 
 page = st.sidebar.selectbox("Go to", pages)
@@ -641,6 +641,14 @@ elif page == "AI Portfolio Command Center":
         )
 
         raise
+
+elif page == "AI Forecast":
+        try:
+            from modules.forecasting.forecast_ui import render_forecast_page
+            render_forecast_page(db, user)
+        except Exception as e:
+            st.error("AI Forecast module failed to load.")
+            st.exception(e)
 
 elif page == "Help":
     try:
