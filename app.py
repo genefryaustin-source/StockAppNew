@@ -317,7 +317,7 @@ else:
         "Analytics", "Rankings", "Universe", "Stock Dashboard", "Portfolio",
         "Portfolio Construction", "Portfolio Deployment", "Market Overview",
         "AI Rankings", "Strategy Lab", "Regime Engine", "Strategy Discovery",
-        "Strategy Library", "Alerts", "Admin","AI Portfolio","AI Forecast","Help"
+        "Strategy Library", "Alerts", "Admin", "AI Portfolio", "AI Forecast", "Help"
     ]
 
 page = st.sidebar.selectbox("Go to", pages)
@@ -353,6 +353,7 @@ strategy_library_mod = safe_import("modules.analytics.strategy_library")
 admin_mod = safe_import("modules.admin.admin_ui")
 ai_portfolio_mod = safe_import("modules.portfolio.ai_portfolio_ui")
 alerts_mod = safe_import("modules.institutional.ui.alerts_ui")
+ai_forecast_mod = safe_import("modules.institutional.ui.ai_forecast_ui")
 
 # ====================== PAGE ROUTING ======================
 if page == "Dashboard":

@@ -1,6 +1,0 @@
-To activate venv 
-
-cd C:\StockApp
-.venv\Scripts\activate
-
-python -m streamlit run app.py
