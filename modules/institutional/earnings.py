@@ -17,25 +17,11 @@ def _get_secret_api_key() -> str | None:
         import streamlit as st
         key = None
 
-        # Try top-level MASSIVE_API_KEY first
+        # Preferred: st.secrets["market_data"]["MASSIVE_API_KEY"]
         try:
-            key = st.secrets.get("MASSIVE_API_KEY")
+            key = st.secrets["market_data"].get("MASSIVE_API_KEY")
         except Exception:
             key = None
-
-        # Try nested market_data section
-        if not key:
-            try:
-                key = st.secrets["market_data"].get("MASSIVE_API_KEY")
-            except Exception:
-                key = None
-
-        # Try MARKETDATA_API_KEY (alternative naming)
-        if not key:
-            try:
-                key = st.secrets.get("MARKETDATA_API_KEY")
-            except Exception:
-                key = None
 
         # fallback: st.secrets["market_data"]["POLYGON_API_KEY"] (legacy)
         if not key:
@@ -45,15 +31,6 @@ def _get_secret_api_key() -> str | None:
                 key = None
 
         return key
-    except Exception:
-        return None
-
-
-def _get_openai_key() -> str | None:
-    """Get OpenAI API key from streamlit secrets."""
-    try:
-        import streamlit as st
-        return st.secrets.get("OPENAI_API_KEY") or st.secrets.get("openai_api_key")
     except Exception:
         return None
 
@@ -79,7 +56,7 @@ def ingest_massive_earnings(db: Session, tenant_id: str, symbol: str, limit: int
     """
     api_key = _get_secret_api_key()
     if not api_key:
-        raise Exception("Massive API key missing (set MASSIVE_API_KEY or MARKETDATA_API_KEY in secrets.toml)")
+        raise Exception("Massive API key missing (set market_data.MASSIVE_API_KEY in secrets.toml)")
 
     sym = symbol.upper()
 
@@ -141,6 +118,7 @@ def ingest_massive_earnings(db: Session, tenant_id: str, symbol: str, limit: int
             time_of_day=None,
             eps_est=_to_float_safe(eps_value),
             rev_est=_to_float_safe(rev_value),
+            
         )
 
         db.add(ev)
@@ -172,6 +150,15 @@ def list_upcoming(db: Session, tenant_id: str, limit: int = 200):
 # ============================================================
 # TRANSCRIPT FUNCTIONS (NEW)
 # ============================================================
+
+def _get_openai_key() -> str | None:
+    """Get OpenAI API key from streamlit secrets."""
+    try:
+        import streamlit as st
+        return st.secrets.get("OPENAI_API_KEY") or st.secrets.get("openai_api_key")
+    except Exception:
+        return None
+
 
 def fetch_earnings_transcript(
     db: Session,
