@@ -4,7 +4,7 @@ pandas==2.2.2
 matplotlib==3.10.9
 altair==5.5.0
 annotated-types==0.7.0
-anthropicapi>=0.30.0
+anthropic>=0.30.0
 anyio==4.13.0
 attrs==26.1.0
 beautifulsoup4==4.14.3
