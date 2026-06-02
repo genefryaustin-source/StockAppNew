@@ -276,11 +276,45 @@ def render_stock_dashboard(db, user):
     st.divider()
 
     st.markdown("### Price Chart")
+    px = None
     try:
         px = get_price_history(db, symbol, period="1y", interval="1d")
         _render_price_chart(px, symbol)
     except Exception as e:
         st.info(f"Price history unavailable: {e}")
+
+    # Pre-fetch news and sentiment so the Digest can use them
+    news_items, sentiment = [], {}
+    try:
+        news_items = get_finnhub_news(symbol) or []
+        sentiment  = get_finnhub_sentiment(symbol) or {}
+        if not sentiment:
+            def _derive_sentiment(items):
+                bull_words = ["beat","growth","strong","upgrade","outperform","record","surge","expansion","positive"]
+                bear_words = ["miss","weak","downgrade","decline","drop","cut","risk","concern","negative"]
+                b, bear = 0, 0
+                for n in items:
+                    txt = f"{n.get('headline','')} {n.get('summary','')}".lower()
+                    if any(w in txt for w in bull_words): b += 1
+                    if any(w in txt for w in bear_words): bear += 1
+                total = b + bear
+                return {"bullish": b, "bearish": bear, "score": (b - bear) / total if total else 0.0}
+            sentiment = _derive_sentiment(news_items)
+    except Exception:
+        pass
+
+    # ── AI Stock Digest ──────────────────────────────────────
+    try:
+        from modules.digest.stock_digest import render_stock_digest
+        render_stock_digest(
+            symbol=symbol,
+            snapshot=snapshot,
+            news_items=news_items if "news_items" in dir() else [],
+            sentiment=sentiment if "sentiment" in dir() else {},
+            price_df=px if "px" in dir() else None,
+        )
+    except Exception as _digest_err:
+        st.caption(f"Digest unavailable: {_digest_err}")
 
     st.divider()
     _render_financials(db, tenant_id, symbol)
@@ -386,22 +420,3 @@ def render_stock_dashboard(db, user):
 
     else:
         st.warning("No news available.")
-    # ── AI Forecast, Congress Trades & Institutional Flow ──
-    st.divider()
-    try:
-        from modules.forecasting.forecast_ui import (
-            render_forecast_panel,
-            render_congress_panel,
-            render_institutional_panel,
-        )
-        tab_fc, tab_cong, tab_inst = st.tabs([
-            "🤖 AI Forecast", "🏛️ Congress Trades", "🏦 Institutional Flow"
-        ])
-        with tab_fc:
-            render_forecast_panel(db, user, symbol)
-        with tab_cong:
-            render_congress_panel(symbol)
-        with tab_inst:
-            render_institutional_panel(symbol)
-    except Exception as e:
-        st.warning(f"Market intelligence panels unavailable: {e}")

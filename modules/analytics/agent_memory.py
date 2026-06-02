@@ -2,7 +2,7 @@
 """
 modules/analytics/agent_memory.py
 
-Long-term memory system for autonomous research agents.
+Long-term memory system for autonomous research agent.
 
 Tracks:
 - agent decisions

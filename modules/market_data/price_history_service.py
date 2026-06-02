@@ -153,37 +153,55 @@ def store_price_history(db, symbol, df):
 
     symbol = symbol.upper()
 
-    for _, row in df.iterrows():
+    # Batch upsert with per-row error recovery.
+    # Wraps each execute in try/except so a single bad row (duplicate cursor,
+    # type error, etc.) never poisons the entire session.
+    batch_size = 50
+    rows_list = list(df.iterrows())
 
-        stmt = insert(PriceHistory).values(
-            symbol=symbol,
-            date=pd.to_datetime(row["Date"]),
-            open=float(row["Open"]),
-            high=float(row["High"]),
-            low=float(row["Low"]),
-            close=float(row["Close"]),
-            volume=(
-                int(row["Volume"])
-                if (
-                        "Volume" in row
-                        and pd.notna(row["Volume"])
+    for batch_start in range(0, len(rows_list), batch_size):
+        batch = rows_list[batch_start:batch_start + batch_size]
+
+        for _, row in batch:
+            try:
+                stmt = insert(PriceHistory).values(
+                    symbol=symbol,
+                    date=pd.to_datetime(row["Date"]),
+                    open=float(row["Open"]),
+                    high=float(row["High"]),
+                    low=float(row["Low"]),
+                    close=float(row["Close"]),
+                    volume=(
+                        int(row["Volume"])
+                        if (
+                            "Volume" in row
+                            and pd.notna(row["Volume"])
+                        )
+                        else None
+                    ),
                 )
-                else None
-            ),
-        )
 
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["symbol", "date"],
-            set_={
-                "open": stmt.excluded.open,
-                "high": stmt.excluded.high,
-                "low": stmt.excluded.low,
-                "close": stmt.excluded.close,
-                "volume": stmt.excluded.volume,
-            },
-        )
+                stmt = stmt.on_conflict_do_nothing()
 
-        db.execute(stmt)
+                db.execute(stmt)
+
+            except Exception as _row_err:
+                # Roll back so the session is usable for the next row
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                print(f"[price_history] skip {symbol} {row.get('Date','?')}: {_row_err}")
+
+        # Commit each batch — smaller transactions = less cursor contention
+        try:
+            db.commit()
+        except Exception as _commit_err:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            print(f"[price_history] batch commit failed {symbol}: {_commit_err}")
 
 
 

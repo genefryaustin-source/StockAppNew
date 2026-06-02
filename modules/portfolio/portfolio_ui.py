@@ -145,6 +145,20 @@ def render_portfolio_ui(db_session, user, market_data_service):
     with tab_overview:
 
         st.subheader("Overview")
+
+        # ── Personalized Holdings Explainer ───────────────────
+        try:
+            from modules.digest.holdings_explainer import render_holdings_explainer
+            render_holdings_explainer(
+                db=db_session,
+                portfolio_id=portfolio_id,
+                tenant_id=tenant_id,
+            )
+        except Exception as _he_err:
+            st.caption(f"Holdings explainer unavailable: {_he_err}")
+
+        st.divider()
+
         from modules.utils.data_utils import normalize_timeseries_df
         try:
             cash = float(accounting.get_cash_balance(portfolio_id))
@@ -273,6 +287,20 @@ def render_portfolio_ui(db_session, user, market_data_service):
     with tab_intelligence:
 
         st.subheader("🧠 Portfolio Intelligence")
+
+        # ── Daily Portfolio Digest ────────────────────────────
+        try:
+            from modules.digest.portfolio_digest import render_portfolio_digest
+            render_portfolio_digest(
+                db=db_session,
+                portfolio_id=portfolio_id,
+                portfolio_name=portfolio_name or "Portfolio",
+                tenant_id=tenant_id,
+            )
+        except Exception as _digest_err:
+            st.caption(f"Portfolio Digest unavailable: {_digest_err}")
+
+        st.divider()
 
         try:
             # ---------------------------------

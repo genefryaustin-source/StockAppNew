@@ -3,6 +3,7 @@ import streamlit as st
 
 from modules.analytics.models import AnalyticsSnapshot
 from modules.screener.service import run_screener
+from modules.screener.nl_screener import render_nl_screener_input
 
 
 def _safe_float(x):
@@ -148,6 +149,44 @@ def render_screener(db, user: dict):
         st.warning("No analytics-backed symbols found. Run analytics first.")
         return
 
+    # ── Mode toggle ───────────────────────────────────────────
+    mode = st.radio(
+        "Search mode",
+        ["🎛️ Manual Filters", "🧠 Natural Language"],
+        horizontal=True,
+        key="screener_mode",
+    )
+
+    nl_filters = None
+    if mode == "🧠 Natural Language":
+        nl_filters = render_nl_screener_input(sectors)
+        if nl_filters:
+            with st.spinner("Running screener…"):
+                _max_price = nl_filters.pop("_max_price", None)
+                results = run_screener(
+                    db=db,
+                    tenant_id=tenant_id,
+                    symbols=symbols,
+                    **nl_filters,
+                )
+                if _max_price is not None:
+                    results = [r for r in results if r.get("price") and r["price"] <= _max_price]
+            if not results:
+                st.warning("No matches. Try broadening your query.")
+            else:
+                df = _format_results_df(results)
+                _render_summary(df)
+                _render_top_cards(df)
+                st.markdown("### Results")
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                csv = df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download CSV", data=csv,
+                    file_name="screener_results.csv", mime="text/csv",
+                )
+        return
+
+    st.markdown("---")
     with st.expander("Filters", expanded=True):
         r1c1, r1c2, r1c3 = st.columns(3)
         with r1c1:

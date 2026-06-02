@@ -1,4 +1,4 @@
-
+from __future__ import annotations
 import streamlit as st
 
 import pandas as pd
@@ -50,12 +50,22 @@ else:
 def get_db():
     try:
         from modules.db.core import init_database, SessionLocal
-        init_database()  # Creates tables if missing
+        init_database()
         return SessionLocal()
     except Exception as e:
         st.error(f"Database connection failed: {e}")
         st.stop()
+db = get_db()
 
+# Session recovery — clears broken transactions from duplicate price inserts
+try:
+    from sqlalchemy import text as _sql
+    db.execute(_sql("SELECT 1"))
+except Exception:
+    try:
+        db.rollback()
+    except Exception:
+        pass
 # ============================================================
 # 3. IMPORT MODELS + SERVICES
 # ============================================================
@@ -72,6 +82,7 @@ try:
     from modules.portfolio.nav_service import NavService
     from modules.portfolio.order_service import OrderService
     from modules.alerts.service import AlertService
+    import modules.portfolio.ai_portfolio_ui as ai_ui
 except Exception as e:
     st.error(f"Critical module import failed: {e}")
     st.stop()
@@ -291,6 +302,7 @@ if DEV_MODE:
 # 14. SCHEDULER
 # ============================================================
 if "last_scheduler_run" not in st.session_state:
+
     st.session_state["last_scheduler_run"] = 0
 
 try:
@@ -315,10 +327,11 @@ if role == "client":
 else:
     pages = [
         "Dashboard", "Watchlists", "Screener", "Earnings", "Market Data",
-        "Analytics", "Rankings", "Universe", "Stock Dashboard", "Portfolio",
+        "Analytics", "Rankings", "Indicator Builder", "Universe", "Stock Dashboard", "Portfolio",
         "Portfolio Construction", "Portfolio Deployment", "Market Overview",
         "AI Rankings", "Strategy Lab", "Regime Engine", "Strategy Discovery",
-        "Strategy Library", "Alerts", "Admin", "AI Portfolio", "AI Forecast", "Help"
+        "Strategy Library", "Alerts", "Admin", "AI Portfolio", "AI Forecast",
+        "AI Scanner", "AI Agent", "Options Flow",  "Smart Money", "Help"
     ]
 
 page = st.sidebar.selectbox("Go to", pages)
@@ -348,14 +361,14 @@ heatmap_mod = safe_import("modules.market.heatmap")
 regime_mod = safe_import("modules.market.regime_dashboard")
 factor_mod = safe_import("modules.analytics.factor_exposure")
 backtest_mod = safe_import("modules.analytics.backtesting")
-regime_engine_mod = safe_import("modules.market.regime_engine")
 strategy_discovery_mod = safe_import("modules.analytics.strategy_discovery")
 strategy_library_mod = safe_import("modules.analytics.strategy_library")
 admin_mod = safe_import("modules.admin.admin_ui")
 ai_portfolio_mod = safe_import("modules.portfolio.ai_portfolio_ui")
 alerts_mod = safe_import("modules.institutional.ui.alerts_ui")
 ai_forecast_mod = safe_import("modules.institutional.ui.ai_forecast_ui")
-
+smart_money_mod = safe_import("modules.institutional.ui.smart_money_ui")
+scanner_ui_mod = safe_import("modules.alerts.scanner_ui")
 # ====================== PAGE ROUTING ======================
 if page == "Dashboard":
     st.header("Institutional Research Dashboard")
@@ -405,6 +418,10 @@ elif page == "Rankings":
         st.exception(rankings_mod)
     elif hasattr(rankings_mod, "render_rankings"):
         rankings_mod.render_rankings(db, user)
+
+elif page == "Indicator Builder":
+    from modules.indicators.indicator_ui import render_indicator_builder
+    render_indicator_builder(db, user)
 
 elif page == "Universe":
     if isinstance(universe_mod, Exception):
@@ -482,7 +499,15 @@ elif page == "AI Rankings":
 elif page == "Regime Engine":
     st.header("Regime Engine Overview")
     if hasattr(regime_mod, "render_regime_dashboard"):
-        regime_mod.render_market_regime(db)
+        regime_mod.render_market_regime_dashboard(db)
+
+elif page in ("Strategy Lab", "Strategy Discovery", "Strategy Library"):
+    try:
+        from modules.analytics.strategy_lab_ui import render_strategy_lab
+        render_strategy_lab(db, user)
+    except Exception as e:
+        st.error("Strategy Lab failed to load.")
+        st.exception(e)
 
 
 
@@ -577,72 +602,13 @@ elif page == "Admin":
         )
 
 
-elif page == "AI Portfolio Command Center":
-
-    st.write(
-        "🚀 ENTERED AI PORTFOLIO PAGE BLOCK"
-    )
-
-    print(
-        "🚀 ENTERED AI PORTFOLIO PAGE BLOCK"
-    )
-
+elif page == "AI Portfolio":
     try:
-
-        import modules.portfolio.ai_portfolio_ui as ai_ui
-
-        st.success(
-            "✅ ai_portfolio_ui imported"
-        )
-
-        print(
-            "✅ ai_portfolio_ui imported"
-        )
-
+        from modules.portfolio.ai_portfolio_ui import render_ai_portfolio_center
+        render_ai_portfolio_center(db=db, user=user)
     except Exception as e:
-
-        st.error(
-            "❌ ai_portfolio_ui import failed"
-        )
-
+        st.error("AI Portfolio failed to load.")
         st.exception(e)
-
-        print(
-            "❌ IMPORT FAILED:",
-            e,
-        )
-
-        raise
-
-    try:
-
-        ai_ui.render_ai_portfolio_center(
-            db=db,
-            user=user,
-        )
-
-        st.success(
-            "✅ render_ai_portfolio_center completed"
-        )
-
-        print(
-            "✅ render_ai_portfolio_center completed"
-        )
-
-    except Exception as e:
-
-        st.error(
-            "❌ render_ai_portfolio_center failed"
-        )
-
-        st.exception(e)
-
-        print(
-            "❌ RENDER FAILED:",
-            e,
-        )
-
-        raise
 
 elif page == "AI Forecast":
         try:
@@ -651,6 +617,22 @@ elif page == "AI Forecast":
         except Exception as e:
             st.error("AI Forecast module failed to load.")
             st.exception(e)
+
+elif page == "AI Scanner":
+    from modules.alerts.scanner_ui import render_scanner_page
+    render_scanner_page(db, user)
+
+elif page == "AI Agent":
+    from modules.agent.agent_ui import render_agent_page
+    render_agent_page(db, user)
+
+elif page == "Options Flow":
+    from modules.options_flow.flow_ui import render_options_flow_page
+    render_options_flow_page(db, user)
+
+elif page == "Smart Money":
+    from modules.smc.smc_ui import render_smc_page
+    render_smc_page(db, user)
 
 elif page == "Help":
     try:

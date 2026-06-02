@@ -202,6 +202,203 @@ class AutonomousExecutionPlanner:
         self.execution_history: List[ExecutionPlanResult] = []
         self.action_history: List[ExecutableAnalyticsAction] = []
 
+    @staticmethod
+    def _as_dict(value):
+        if value is None:
+            return {}
+
+        if isinstance(value, dict):
+            return value
+
+        if hasattr(value, "as_dict"):
+            return value.as_dict()
+
+        if hasattr(value, "__dataclass_fields__"):
+            from dataclasses import asdict
+            return asdict(value)
+
+        if isinstance(value, list):
+            return {"items": value}
+
+        return {"value": str(value)}
+
+    def _action(
+            self,
+            *,
+            action_type,
+            title: str,
+            description: str,
+            severity,
+            expected_impact: float = 0.0,
+            confidence_score: float = 0.0,
+            parameters: Optional[Dict[str, Any]] = None,
+            source_recommendation_id: Optional[str] = None,
+    ) -> ExecutableAnalyticsAction:
+        return ExecutableAnalyticsAction(
+            action_id=f"aaction_{uuid.uuid4().hex}",
+            action_type=action_type.value if hasattr(action_type, "value") else str(action_type),
+            title=title,
+            description=description,
+            severity=severity.value if hasattr(severity, "value") else str(severity),
+            status=ExecutionActionStatus.PENDING.value,
+            expected_impact=float(expected_impact or 0.0),
+            confidence_score=float(confidence_score or 0.0),
+            parameters=parameters or {},
+            source_recommendation_id=source_recommendation_id,
+        )
+
+    def _replace_action(
+            self,
+            action: ExecutableAnalyticsAction,
+            **updates,
+    ) -> ExecutableAnalyticsAction:
+        data = action.as_dict()
+        data.update(updates)
+        return ExecutableAnalyticsAction(**data)
+
+    def _deduplicate_actions(
+            self,
+            actions: List[ExecutableAnalyticsAction],
+    ) -> List[ExecutableAnalyticsAction]:
+        seen = set()
+        deduped = []
+
+        for action in actions:
+            key = (
+                action.action_type,
+                action.title,
+                action.source_recommendation_id,
+            )
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+            deduped.append(action)
+
+        return deduped
+
+    def _calculate_readiness_score(
+            self,
+            actions: List[ExecutableAnalyticsAction],
+    ) -> float:
+        if not actions:
+            return 0.0
+
+        ready = len(
+            [
+                action for action in actions
+                if not action.requires_approval
+                   or action.status in {
+                       ExecutionActionStatus.READY.value,
+                       ExecutionActionStatus.APPROVED.value,
+                   }
+            ]
+        )
+
+        confidence_avg = sum(
+            action.confidence_score for action in actions
+        ) / len(actions)
+
+        readiness = (
+                (ready / len(actions)) * 70.0
+                + clamp(confidence_avg) * 30.0
+        )
+
+        return round(readiness, 2)
+
+    def _trim_history(self) -> None:
+        if len(self.plan_history) > 1000:
+            self.plan_history = self.plan_history[-1000:]
+
+        if len(self.execution_history) > 1000:
+            self.execution_history = self.execution_history[-1000:]
+
+        if len(self.action_history) > 5000:
+            self.action_history = self.action_history[-5000:]
+
+    def _severity_from_priority(
+            self,
+            priority: str,
+    ) -> str:
+        value = str(priority or "").upper()
+
+        if value in {"CRITICAL", "P0"}:
+            return ExecutionActionSeverity.CRITICAL.value
+
+        if value in {"HIGH", "P1"}:
+            return ExecutionActionSeverity.HIGH.value
+
+        if value in {"MEDIUM", "NORMAL", "P2"}:
+            return ExecutionActionSeverity.MEDIUM.value
+
+        if value in {"LOW", "P3"}:
+            return ExecutionActionSeverity.LOW.value
+
+        return ExecutionActionSeverity.INFO.value
+
+    def _is_autonomous_allowed(
+            self,
+            action: ExecutableAnalyticsAction,
+    ) -> bool:
+        if not self.policy.enabled:
+            return False
+
+        if action.confidence_score < self.policy.min_confidence_for_autonomous_action:
+            return False
+
+        action_type = str(action.action_type).upper()
+
+        if action_type in {
+            ExecutionActionType.SCALE_WORKERS.value,
+            ExecutionActionType.ADD_EXECUTION_NODES.value,
+        }:
+            if not self.policy.allow_autonomous_scaling:
+                return False
+
+            delta = abs(
+                float(
+                    action.parameters.get("capacity_delta")
+                    or action.parameters.get("delta")
+                    or 0
+                )
+            )
+
+            return delta <= self.policy.max_worker_scale_delta_without_approval
+
+        if action_type in {
+            ExecutionActionType.REBALANCE_PROVIDERS.value,
+            ExecutionActionType.SHIFT_PROVIDER_ALLOCATION.value,
+            ExecutionActionType.REDUCE_PROVIDER_SPEND.value,
+        }:
+            return self.policy.allow_autonomous_provider_rebalance
+
+        if action_type == ExecutionActionType.PAUSE_LOW_PRIORITY_UNIVERSES.value:
+            return self.policy.allow_autonomous_universe_pause
+
+        if action_type in {
+            ExecutionActionType.ADJUST_BATCH_SIZE.value,
+            ExecutionActionType.INCREASE_BATCH_SIZE.value,
+            ExecutionActionType.DECREASE_BATCH_SIZE.value,
+        }:
+            return self.policy.allow_autonomous_batch_adjustment
+
+        if action_type in {
+            ExecutionActionType.APPLY_GOVERNANCE_CONTROLS.value,
+            ExecutionActionType.ENABLE_CONSERVATIVE_MODE.value,
+        }:
+            return self.policy.allow_autonomous_governance_controls
+
+        if action_type in {
+            ExecutionActionType.SAVE_EXECUTIVE_SNAPSHOT.value,
+            ExecutionActionType.SAVE_CONTROL_TOWER_SNAPSHOT.value,
+        }:
+            return self.policy.allow_autonomous_snapshots
+
+        if action_type == ExecutionActionType.ENABLE_AGGRESSIVE_OPTIMIZATION.value:
+            return False
+
+        return False
     # ------------------------------------------------------------------
     # Plan Generation
     # ------------------------------------------------------------------

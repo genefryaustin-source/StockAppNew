@@ -1076,4 +1076,81 @@ class AIPortfolioCandidate:
         )
 
         return recommendations
+
+
+# ---------------------------------------------------
+# PORTFOLIO CONSTRUCTION
+# ---------------------------------------------------
+
+def construct_ai_portfolio(
+    candidates: List["AIPortfolioCandidate"],
+    max_positions: int = 20,
+    max_position_weight: float = 10.0,
+    sector_max_weight: float = 30.0,
+    cash_buffer: float = 5.0,
+) -> List["AIPortfolioCandidate"]:
+    """
+    Build a weighted portfolio from a list of AIPortfolioCandidate objects.
+
+    Steps:
+      1. Sort by risk-adjusted score descending
+      2. Apply sector concentration cap
+      3. Size positions using sizing_score (normalised)
+      4. Apply per-position weight cap
+      5. Reserve cash buffer
+      6. Re-normalise weights to (100 - cash_buffer)%
+    """
+    if not candidates:
+        return []
+
+    # 1. Sort by risk-adjusted score
+    ranked = sorted(
+        candidates,
+        key=lambda c: c.risk_adjusted_score,
+        reverse=True,
+    )[:max_positions]
+
+    # 2. Sector cap — keep running sector totals
+    sector_totals: Dict[str, float] = {}
+    selected: List[AIPortfolioCandidate] = []
+
+    for c in ranked:
+        sector = c.sector or "Unknown"
+        current_sector_w = sector_totals.get(sector, 0.0)
+        if current_sector_w >= sector_max_weight:
+            continue
+        selected.append(c)
+        # Placeholder weight — will be overwritten in step 3
+        sector_totals[sector] = current_sector_w + max_position_weight
+
+    if not selected:
+        return []
+
+    # 3. Size positions using sizing_score
+    total_score = sum(
+        max(c.sizing_score, 0.01) for c in selected
+    )
+    investable = 100.0 - _safe_float(cash_buffer, 5.0)
+
+    for c in selected:
+        raw_weight = (
+            max(c.sizing_score, 0.01) / total_score
+        ) * investable
+        # 4. Cap per-position weight
+        c.target_weight = round(
+            _clamp(raw_weight, 0.5, max_position_weight),
+            4,
+        )
+
+    # 5. Re-normalise so weights sum to investable %
+    total_w = sum(c.target_weight for c in selected)
+    if total_w > 0:
+        scale = investable / total_w
+        for c in selected:
+            c.target_weight = round(
+                _clamp(c.target_weight * scale, 0.5, max_position_weight),
+                4,
+            )
+
+    return selected
     

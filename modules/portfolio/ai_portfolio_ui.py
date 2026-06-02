@@ -17,7 +17,7 @@ This page integrates:
 - emergent strategies
 - market simulation tournaments
 """
-"""
+
 from __future__ import annotations
 
 import traceback
@@ -85,6 +85,13 @@ from modules.simulation.market_simulation_engine import (
 from modules.risk.autonomous_defense_engine import (
     generate_defense_directive,
 )
+from modules.portfolio.portfolio_construction_ui import (
+    render_portfolio_construction_panel,
+)
+from modules.portfolio.ai_portfolio_orchestrator import (
+    AIPortfolioCandidate,
+    construct_ai_portfolio,
+)
 
 # ---------------------------------------------------
 # HELPERS
@@ -132,9 +139,30 @@ def render_ai_portfolio_center(
         # LOAD RANKINGS
         # ---------------------------------------------------
 
+        # Pull symbols from user's universe, fall back to defaults
+        try:
+            from modules.universe.models import UniverseSymbol
+            _syms = (
+                db.query(UniverseSymbol)
+                .filter_by(tenant_id=tenant_id)
+                .limit(100)
+                .all()
+            )
+            symbols = [s.symbol for s in _syms if hasattr(s, "symbol") and s.symbol]
+        except Exception:
+            symbols = []
+
+        if not symbols:
+            symbols = [
+                "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN",
+                "META", "TSLA", "JPM", "V", "UNH", "BRK-B",
+                "XOM", "JNJ", "PG", "MA", "HD", "AVGO", "MRK", "COST", "CVX",
+            ]
+
         ranked_rows = rank_symbols(
             db=db,
             tenant_id=tenant_id,
+            symbols=symbols,
         )
 
         if not ranked_rows:
@@ -281,10 +309,69 @@ def render_ai_portfolio_center(
         )
 
         # ---------------------------------------------------
+        # PORTFOLIO CONSTRUCTION
+        # ---------------------------------------------------
+        def _get(row, *keys, default=0.0):
+            """Get a value from either a dict or object, trying multiple key names."""
+            for key in keys:
+                if isinstance(row, dict):
+                    val = row.get(key)
+                else:
+                    val = getattr(row, key, None)
+                if val is not None:
+                    try:
+                        return val
+                    except Exception:
+                        pass
+            return default
+
+        portfolio_candidates = []
+        for row in ai_rows:
+            try:
+                # Always convert to AIPortfolioCandidate so construct_ai_portfolio
+                # gets objects with risk_adjusted_score / sizing_score properties
+                c = AIPortfolioCandidate(
+                    symbol=str(_get(row, "symbol", default="")),
+                    sector=str(_get(row, "sector", default="Unknown") or "Unknown"),
+                    ai_score=float(_get(row, "ai_score", "score", default=50) or 50),
+                    consensus_score=float(_get(row, "consensus_score", "agent_consensus", default=50) or 50),
+                    confidence=float(_get(row, "confidence", "ai_confidence", default=50) or 50),
+                    risk_score=float(_get(row, "risk_score", "risk", default=50) or 50),
+                    volatility=float(_get(row, "volatility", default=25) or 25),
+                    expected_return=float(_get(row, "expected_return", default=0) or 0),
+                    expected_alpha=float(_get(row, "expected_alpha", default=0) or 0),
+                    downside_risk=float(_get(row, "downside_risk", default=0) or 0),
+                    conviction_label=str(_get(row, "conviction_label", default="Neutral") or "Neutral"),
+                    thesis=str(_get(row, "thesis", "ai_thesis", "rationale", default="") or ""),
+                    bullish_factors=list(_get(row, "bullish_factors", default=[]) or []),
+                    bearish_factors=list(_get(row, "bearish_factors", default=[]) or []),
+                    risk_flags=list(_get(row, "risk_flags", default=[]) or []),
+                )
+                if c.symbol:
+                    portfolio_candidates.append(c)
+            except Exception:
+                continue
+
+        built_portfolio = []
+        if portfolio_candidates:
+            try:
+                built_portfolio = construct_ai_portfolio(
+                    candidates=portfolio_candidates,
+                    max_positions=20,
+                    max_position_weight=12.0,
+                    sector_max_weight=30.0,
+                    cash_buffer=5.0,
+                )
+            except Exception as _pe:
+                st.warning(f"Portfolio construction warning: {_pe}")
+
+        # ---------------------------------------------------
         # LAYOUT
         # ---------------------------------------------------
 
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+        tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+
+            "🏗️ Portfolio",
 
             "Mission",
 
@@ -302,6 +389,18 @@ def render_ai_portfolio_center(
 
             "Simulation",
         ])
+
+        # ===================================================
+        # PORTFOLIO CONSTRUCTION
+        # ===================================================
+
+        with tab0:
+            render_portfolio_construction_panel(
+                candidates=built_portfolio,
+                mission_decision=mission_decision,
+                regime_state=regime_state,
+                opportunities=opportunities,
+            )
 
         # ===================================================
         # MISSION
@@ -629,446 +728,3 @@ def render_ai_portfolio_center(
         st.exception(e)
 
         traceback.print_exc()
-"""
-"""
-modules/portfolio/ai_portfolio_ui.py
-
-MINIMAL DEBUG VERSION
-
-Purpose:
-- Verify page renders
-- Verify imports
-- Identify failing engine/module
-- Prevent full-page crashes
-"""
-
-from __future__ import annotations
-
-import traceback
-import streamlit as st
-
-
-# ---------------------------------------------------
-# SAFE IMPORT
-# ---------------------------------------------------
-
-def safe_import(
-    module_name: str,
-):
-
-    try:
-
-        module = __import__(
-            module_name,
-            fromlist=["*"],
-        )
-
-        st.success(
-            f"✅ Imported: {module_name}"
-        )
-
-        print(
-            f"✅ Imported: {module_name}"
-        )
-
-        return module
-
-    except Exception as e:
-
-        st.error(
-            f"❌ Failed importing: {module_name}"
-        )
-
-        st.exception(e)
-
-        traceback.print_exc()
-
-        return None
-
-
-# ---------------------------------------------------
-# MAIN UI
-# ---------------------------------------------------
-
-def render_ai_portfolio_center(
-    db=None,
-    user=None,
-):
-
-    st.title(
-        "AI Portfolio Command Center"
-    )
-
-    st.write(
-        "🚀 Starting AI Portfolio UI..."
-    )
-
-    # ---------------------------------------------------
-    # USER DEBUG
-    # ---------------------------------------------------
-
-    st.subheader(
-        "User Context"
-    )
-
-    st.write(user)
-
-    tenant_id = None
-
-    try:
-
-        if isinstance(user, dict):
-
-            tenant_id = user.get(
-                "tenant_id"
-            )
-
-        st.success(
-            f"✅ Tenant ID: {tenant_id}"
-        )
-
-    except Exception as e:
-
-        st.error(
-            "❌ Failed extracting tenant_id"
-        )
-
-        st.exception(e)
-
-    # ---------------------------------------------------
-    # IMPORT TESTS
-    # ---------------------------------------------------
-
-    st.subheader(
-        "Import Tests"
-    )
-
-    ranking_mod = safe_import(
-        "modules.analytics.ranking_engine"
-    )
-
-    ai_ranking_mod = safe_import(
-        "modules.analytics.ai_ranking_engine"
-    )
-
-    sentiment_mod = safe_import(
-        "modules.analytics.news_sentiment_engine"
-    )
-
-    regime_mod = safe_import(
-        "modules.market.regime_detection_engine"
-    )
-
-    predictive_mod = safe_import(
-        "modules.market.predictive_regime_engine"
-    )
-
-    mission_mod = safe_import(
-        "modules.portfolio.mission_rotation_engine"
-    )
-
-    defense_mod = safe_import(
-        "modules.risk.autonomous_defense_engine"
-    )
-
-    opportunity_mod = safe_import(
-        "modules.opportunity.opportunity_detection_engine"
-    )
-
-    execution_mod = safe_import(
-        "modules.execution.autonomous_execution_engine"
-    )
-
-    lifecycle_mod = safe_import(
-        "modules.lifecycle.investment_lifecycle_engine"
-    )
-
-    reinforcement_mod = safe_import(
-        "modules.reinforcement.reinforcement_learning_engine"
-    )
-
-    strategy_mod = safe_import(
-        "modules.strategy.emergent_strategy_engine"
-    )
-
-    simulation_mod = safe_import(
-        "modules.simulation.market_simulation_engine"
-    )
-
-    runtime_mod = safe_import(
-        "modules.runtime.autonomous_portfolio_runtime"
-    )
-
-    # ---------------------------------------------------
-    # RANKING TEST
-    # ---------------------------------------------------
-
-    st.subheader(
-        "Ranking Engine Test"
-    )
-
-    ranked_rows = []
-
-    try:
-
-        if (
-            ranking_mod
-            and hasattr(
-                ranking_mod,
-                "rank_symbols",
-            )
-        ):
-
-            st.write(
-                "🚀 Calling rank_symbols()..."
-            )
-
-            ranked_rows = (
-                ranking_mod.rank_symbols(
-                    db=db,
-                    tenant_id=tenant_id,
-                )
-            )
-
-            st.success(
-                f"✅ rank_symbols() returned "
-                f"{len(ranked_rows)} rows"
-            )
-
-            if ranked_rows:
-
-                preview = []
-
-                for row in ranked_rows[:5]:
-
-                    try:
-
-                        preview.append({
-
-                            "symbol":
-                                getattr(
-                                    row,
-                                    "symbol",
-                                    "UNKNOWN",
-                                ),
-
-                            "score":
-                                getattr(
-                                    row,
-                                    "composite",
-                                    None,
-                                ),
-                        })
-
-                    except Exception:
-
-                        pass
-
-                st.write(
-                    preview
-                )
-
-        else:
-
-            st.warning(
-                "⚠️ ranking_engine missing rank_symbols()"
-            )
-
-    except Exception as e:
-
-        st.error(
-            "❌ rank_symbols() failed"
-        )
-
-        st.exception(e)
-
-        traceback.print_exc()
-
-    # ---------------------------------------------------
-    # SENTIMENT TEST
-    # ---------------------------------------------------
-
-    st.subheader(
-        "Sentiment Engine Test"
-    )
-
-    try:
-
-        if (
-            sentiment_mod
-            and hasattr(
-                sentiment_mod,
-                "build_sentiment_overlay_map",
-            )
-        ):
-
-            st.write(
-                "🚀 Calling build_sentiment_overlay_map()..."
-            )
-
-            overlay = (
-                sentiment_mod.build_sentiment_overlay_map(
-                    ranked_rows
-                )
-            )
-
-            st.success(
-                f"✅ Sentiment overlay built: "
-                f"{len(overlay)} symbols"
-            )
-
-            st.write(
-                dict(
-                    list(
-                        overlay.items()
-                    )[:5]
-                )
-            )
-
-        else:
-
-            st.warning(
-                "⚠️ build_sentiment_overlay_map missing"
-            )
-
-    except Exception as e:
-
-        st.error(
-            "❌ Sentiment overlay failed"
-        )
-
-        st.exception(e)
-
-        traceback.print_exc()
-
-    # ---------------------------------------------------
-    # REGIME TEST
-    # ---------------------------------------------------
-
-    st.subheader(
-        "Regime Detection Test"
-    )
-
-    try:
-
-        if (
-            regime_mod
-            and hasattr(
-                regime_mod,
-                "detect_market_regime",
-            )
-        ):
-
-            st.write(
-                "🚀 Calling detect_market_regime()..."
-            )
-
-            regime = (
-                regime_mod.detect_market_regime(
-
-                    volatility=35.0,
-
-                    breadth=58.0,
-
-                    sentiment=62.0,
-
-                    drawdown=8.0,
-
-                    liquidity_risk=32.0,
-
-                    downside_momentum=25.0,
-
-                    trend_strength=68.0,
-
-                    ai_confidence=72.0,
-                )
-            )
-
-            st.success(
-                "✅ Regime detection succeeded"
-            )
-
-            if hasattr(
-                regime,
-                "to_dict",
-            ):
-
-                st.json(
-                    regime.to_dict()
-                )
-
-            else:
-
-                st.write(
-                    regime
-                )
-
-        else:
-
-            st.warning(
-                "⚠️ detect_market_regime missing"
-            )
-
-    except Exception as e:
-
-        st.error(
-            "❌ Regime detection failed"
-        )
-
-        st.exception(e)
-
-        traceback.print_exc()
-
-    # ---------------------------------------------------
-    # RUNTIME TEST
-    # ---------------------------------------------------
-
-    st.subheader(
-        "Runtime Test"
-    )
-
-    try:
-
-        if (
-            runtime_mod
-            and hasattr(
-                runtime_mod,
-                "run_autonomous_cycle",
-            )
-        ):
-
-            st.write(
-                "🚀 Runtime available"
-            )
-
-            st.success(
-                "✅ Autonomous runtime detected"
-            )
-
-        else:
-
-            st.warning(
-                "⚠️ run_autonomous_cycle missing"
-            )
-
-    except Exception as e:
-
-        st.error(
-            "❌ Runtime test failed"
-        )
-
-        st.exception(e)
-
-        traceback.print_exc()
-
-    # ---------------------------------------------------
-    # FINAL STATUS
-    # ---------------------------------------------------
-
-    st.subheader(
-        "Debug Complete"
-    )
-
-    st.success(
-        "✅ AI Portfolio UI rendered successfully"
-    )

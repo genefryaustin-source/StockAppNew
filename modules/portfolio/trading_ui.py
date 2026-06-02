@@ -37,6 +37,14 @@ from modules.portfolio.event_engine import EventDrivenExecutionEngine
 from modules.portfolio.event_processor import EventProcessor
 
 from modules.api.api_ui import render_api_ui
+try:
+    from modules.portfolio.trade_preview import (
+        generate_trade_preview,
+        render_trade_preview,
+    )
+    _TRADE_PREVIEW_AVAILABLE = True
+except Exception:
+    _TRADE_PREVIEW_AVAILABLE = False
 from modules.portfolio.nav_service import NavService
 import plotly.express as px
 from modules.market_data.service import get_latest_price_map
@@ -97,6 +105,16 @@ def _safe_price_from_quote(quote) -> float | None:
 
 def render_trading_ui(db_session, market_data_service, portfolio_id: int, user_id: int | None = None,
                       risk_report_df=None, alert_service=None):
+    # ── Session recovery — clears broken transactions from duplicate price inserts
+    try:
+        from sqlalchemy import text as _sql_check
+        db_session.execute(_sql_check("SELECT 1"))
+    except Exception:
+        try:
+            db_session.rollback()
+        except Exception:
+            pass
+
     if user_id is None and st.session_state.get("user", {}).get("role") == "client":
         st.warning("Trading is disabled for client accounts.")
         return
@@ -188,9 +206,21 @@ def render_trading_ui(db_session, market_data_service, portfolio_id: int, user_i
         submitted = st.form_submit_button("Submit Order")
 
     if submitted:
-        try:
-            service = OrderService(db_session, broker, market_data_service)
-            order = service.submit_order(
+        if _TRADE_PREVIEW_AVAILABLE:
+            # ── AI Trade Preview — intercept before execution ──
+            with st.spinner(f"Generating AI trade preview for {symbol}…"):
+                preview = generate_trade_preview(
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    order_type=order_type,
+                    limit_price=limit_price,
+                    stop_price=stop_price,
+                    portfolio_id=portfolio_id,
+                    db=db_session,
+                )
+            st.session_state["pending_trade_preview"] = preview
+            st.session_state["pending_trade_params"] = dict(
                 portfolio_id=portfolio_id,
                 user_id=user_id,
                 symbol=symbol,
@@ -201,13 +231,33 @@ def render_trading_ui(db_session, market_data_service, portfolio_id: int, user_i
                 limit_price=limit_price,
                 stop_price=stop_price,
             )
-            st.success(
-                f"Order submitted: {order.symbol} {order.side} {order.qty} "
-                f"| status={order.status} | broker_order_id={order.broker_order_id}"
-            )
-            st.rerun()
-        except Exception as e:
-            st.error(f"Trade submission failed: {e}")
+        else:
+            # Fallback — submit directly if preview unavailable
+            try:
+                service = OrderService(db_session, broker, market_data_service)
+                order = service.submit_order(
+                    portfolio_id=portfolio_id,
+                    user_id=user_id,
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    order_type=order_type,
+                    tif=tif,
+                    limit_price=limit_price,
+                    stop_price=stop_price,
+                )
+                st.success(
+                    f"Order submitted: {order.symbol} {order.side} {order.qty} "
+                    f"| status={order.status} | broker_order_id={order.broker_order_id}"
+                )
+                st.rerun()
+            except Exception as e:
+                st.error(f"Trade submission failed: {e}")
+
+    # ── Render pending trade preview (approve / reject gate) ──
+    if _TRADE_PREVIEW_AVAILABLE and st.session_state.get("pending_trade_preview"):
+        service = OrderService(db_session, broker, market_data_service)
+        render_trade_preview(db_session, service)
 
     st.markdown("### Equity Curve")
     snapshots = (

@@ -5,7 +5,7 @@ Institutional multi-agent research intelligence system.
 
 Phase 1:
 - base agent framework
-- specialized research agents
+- specialized research agent
 - consensus orchestration
 - institutional rationale synthesis
 
