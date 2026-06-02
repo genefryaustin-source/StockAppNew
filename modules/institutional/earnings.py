@@ -17,11 +17,25 @@ def _get_secret_api_key() -> str | None:
         import streamlit as st
         key = None
 
-        # Preferred: st.secrets["market_data"]["MASSIVE_API_KEY"]
+        # Try top-level MASSIVE_API_KEY first
         try:
-            key = st.secrets["market_data"].get("MASSIVE_API_KEY")
+            key = st.secrets.get("MASSIVE_API_KEY")
         except Exception:
             key = None
+
+        # Try nested market_data section
+        if not key:
+            try:
+                key = st.secrets["market_data"].get("MASSIVE_API_KEY")
+            except Exception:
+                key = None
+
+        # Try MARKETDATA_API_KEY (alternative naming)
+        if not key:
+            try:
+                key = st.secrets.get("MARKETDATA_API_KEY")
+            except Exception:
+                key = None
 
         # fallback: st.secrets["market_data"]["POLYGON_API_KEY"] (legacy)
         if not key:
@@ -65,7 +79,7 @@ def ingest_massive_earnings(db: Session, tenant_id: str, symbol: str, limit: int
     """
     api_key = _get_secret_api_key()
     if not api_key:
-        raise Exception("Massive API key missing (set market_data.MASSIVE_API_KEY in secrets.toml)")
+        raise Exception("Massive API key missing (set MASSIVE_API_KEY or MARKETDATA_API_KEY in secrets.toml)")
 
     sym = symbol.upper()
 
