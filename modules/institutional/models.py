@@ -4,7 +4,7 @@
 # ============================================================
 
 from datetime import datetime, UTC
-from sqlalchemy import Column, String, DateTime, Float, Index, UniqueConstraint, ForeignKey
+from sqlalchemy import Column, String, DateTime, Float, Index, UniqueConstraint, ForeignKey, Text, Boolean
 from modules.db.core import Base
 from modules.db.models import gen_uuid
 from sqlalchemy.orm import relationship
@@ -89,7 +89,7 @@ class FinancialPeriod(Base):
 
 
 # ============================================================
-# EARNINGS EVENTS
+# EARNINGS EVENTS + TRANSCRIPTS
 # ============================================================
 def gen_uuid():
     return str(uuid.uuid4())
@@ -113,20 +113,26 @@ class EarningsEvent(Base):
 
     source = Column(String, nullable=True)
 
-
-
     eps_est = Column(Float, nullable=True)
     rev_est = Column(Float, nullable=True)
     rev_actual = Column(Float, nullable=True)
     rev_estimate = Column(Float, nullable=True)
 
-    #created_at = Column(DateTime, default=datetime.utcnow)
+    # ===== TRANSCRIPT FIELDS (NEW) =====
+    transcript_text = Column(Text, nullable=True)  # Raw transcript content
+    transcript_url = Column(String, nullable=True)  # Source URL
+    transcript_fetched_at = Column(DateTime, nullable=True)  # When transcript was fetched
+    transcript_chunks_indexed = Column(Boolean, default=False)  # Flag: chunks stored in vector DB
+    transcript_source = Column(String, nullable=True)  # e.g., "seeking_alpha", "investor_relations"
+    # ===================================
+
     created_at = Column(
         DateTime,
         default=lambda: datetime.now(UTC)
     )
     __table_args__ = (
         Index("ix_earn_tenant_sym_date", "tenant_id", "symbol", "event_date"),
+        Index("ix_earn_transcript_indexed", "tenant_id", "symbol", "transcript_chunks_indexed"),
     )
 
     # ---------------------------------------
