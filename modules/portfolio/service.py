@@ -7,6 +7,11 @@ def create_portfolio(db, tenant_id, name):
 
     db.execute(
         text("""
+        print("PORTFOLIO INSERT")
+        print(type(tenant_id))
+        print(repr(tenant_id))
+        print(type(name))
+        print(repr(name))
         INSERT INTO portfolios (id, tenant_id, name, created_at)
         VALUES (:id, :tenant_id, :name, :created_at)
         """),
@@ -14,7 +19,7 @@ def create_portfolio(db, tenant_id, name):
             "id": str(uuid.uuid4()),
             "tenant_id": tenant_id,
             "name": name.strip(),
-            "created_at": datetime.now(UTC),
+            "created_at": datetime.now(UTC).isoformat(),
         },
     )
 

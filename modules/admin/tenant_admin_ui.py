@@ -1,5 +1,5 @@
 import streamlit as st
-from sqlalchemy import text
+from sqlalchemy import text as sql_text
 import uuid
 import hashlib
 from modules.admin.tenant_service import TenantService
@@ -58,7 +58,7 @@ def render_tenant_admin_panel(db, user):
                 st.warning("Enter a portfolio name.")
             else:
                 try:
-                    db.execute(text("""
+                    db.execute(sql_text("""
                         INSERT INTO portfolios (
                             id,
                             name,
@@ -117,7 +117,7 @@ def render_tenant_admin_panel(db, user):
                 st.warning("Email and password are required.")
             else:
                 try:
-                    db.execute(text("""
+                    db.execute(sql_text("""
                         INSERT INTO users (
                             id,
                             email,
@@ -155,7 +155,7 @@ def render_tenant_admin_panel(db, user):
         st.divider()
         st.subheader("Tenant Users")
 
-        user_rows = db.execute(text("""
+        user_rows = db.execute(sql_text("""
             SELECT id, email, role, is_active
             FROM users
             WHERE tenant_id = :tenant
@@ -191,7 +191,7 @@ def render_tenant_admin_panel(db, user):
                     # Save
                     if b1.button("Save", key=f"tenant_ui_save_{uid}"):
                         try:
-                            db.execute(text("""
+                            db.execute(sql_text("""
                                 UPDATE users
                                 SET email = :email,
                                     role  = :role
@@ -216,7 +216,7 @@ def render_tenant_admin_panel(db, user):
                         key=f"tenant_ui_toggle_{uid}",
                     ):
                         try:
-                            db.execute(text("""
+                            db.execute(sql_text("""
                                 UPDATE users
                                 SET is_active = :val
                                 WHERE id = :id
@@ -244,7 +244,7 @@ def render_tenant_admin_panel(db, user):
                             st.warning("Enter a new password first.")
                         else:
                             try:
-                                db.execute(text("""
+                                db.execute(sql_text("""
                                     UPDATE users
                                     SET password_hash = :pw
                                     WHERE id = :id
@@ -270,7 +270,7 @@ def render_tenant_admin_panel(db, user):
                             )
                         else:
                             try:
-                                db.execute(text("""
+                                db.execute(sql_text("""
                                     DELETE FROM users
                                     WHERE id = :id
                                 """), {"id": uid})
@@ -290,7 +290,7 @@ def render_tenant_admin_panel(db, user):
 
         assignment_service = PortfolioAssignmentService(db)
 
-        client_rows = db.execute(text("""
+        client_rows = db.execute(sql_text("""
             SELECT id, email
             FROM users
             WHERE tenant_id = :tenant
@@ -310,9 +310,9 @@ def render_tenant_admin_panel(db, user):
                 key="tenant_ui_assignment_client",
             )
 
-            portfolios = db.execute(text("""
+            portfolios = db.execute(("""
                 SELECT id, name
-                FROM portfolios
+                FROM portfoliossql_text
                 WHERE tenant_id = :tenant
                 ORDER BY name
             """), {"tenant": tenant_id}).fetchall()
@@ -410,6 +410,15 @@ def render_tenant_admin_panel(db, user):
             # activate/deactivate for full CRUD on tenants.
             st.subheader("Existing Tenants")
 
+
+            debug_rows = db.execute(sql_text("""
+                SELECT id, name, created_at
+                FROM tenants
+                ORDER BY created_at DESC
+                """)
+            ).fetchall()
+
+            st.write("TENANT DEBUG:", debug_rows)
             tenants = service.list_tenants()
 
             if not tenants:

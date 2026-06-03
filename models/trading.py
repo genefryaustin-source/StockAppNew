@@ -15,7 +15,7 @@ from models.base import Base
 class Portfolio(Base):
     __tablename__ = "portfolios"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(String(36), primary_key=True)
     tenant_id = Column(String(100), nullable=True, index=True)
     name = Column(String(120), nullable=False, index=True)
     description = Column(Text, nullable=True)

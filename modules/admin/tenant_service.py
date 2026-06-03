@@ -28,8 +28,18 @@ class TenantService:
         tenant_id = str(uuid.uuid4())
 
         self.db.execute(text("""
-            INSERT INTO tenants (id, name, is_active)
-            VALUES (:id, :name, 1)
+            INSERT INTO tenants (
+                id,
+                name,
+                is_active,
+                created_at
+            )
+            VALUES (
+                :id,
+                :name,
+                1,
+                CURRENT_TIMESTAMP
+            )
         """), {
             "id": tenant_id,
             "name": name,
