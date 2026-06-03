@@ -260,6 +260,7 @@ def render_market_refresh(db, user):
                 progress_bar.progress(pct)
                 status.text(f"{i}/{total} - {sym}")
 
+            st.write("Refresh symbol count:", len(symbols))
             result = update_latest_prices(
                 db,
                 symbols,
