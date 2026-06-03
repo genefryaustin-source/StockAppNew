@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 from modules.market_data.service import get_price_history
 import numpy as np
+from modules.market.macro_dashboard import render_macro_dashboard
+
 MARKET_UNIVERSE = [
     "AAPL","MSFT","NVDA","AMZN","META",
     "GOOGL","TSLA","JPM","XOM","AVGO"
@@ -9,6 +11,13 @@ MARKET_UNIVERSE = [
 
 
 def render_market_dashboard(db):
+
+    try:
+        render_macro_dashboard(db)
+    except Exception as e:
+        st.warning(f"Macro dashboard unavailable: {e}")
+
+    st.divider()
 
     st.subheader("Top Movers")
 

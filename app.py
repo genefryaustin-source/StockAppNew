@@ -327,11 +327,12 @@ if role == "client":
 else:
     pages = [
         "Dashboard", "Watchlists", "Screener", "Earnings", "Market Data",
-        "Analytics", "Rankings", "Indicator Builder", "Universe", "Stock Dashboard", "Portfolio",
-        "Portfolio Construction", "Portfolio Deployment", "Market Overview",
+        "Analytics", "Rankings", "Indicator Builder", "Universe", "Stock Dashboard", "Intraday Charts",
+        "Portfolio","Portfolio Construction", "Portfolio Deployment", "Market Overview",
         "AI Rankings", "Strategy Lab", "Regime Engine", "Strategy Discovery",
         "Strategy Library", "Alerts", "Admin", "AI Portfolio", "AI Forecast",
-        "AI Scanner", "AI Agent", "Options Flow",  "Smart Money", "Help"
+        "AI Scanner", "AI Agent", "Options Flow", "Analyst Consensus", "Smart Money",
+        "Export / Sheets", "Research Reports", "Social Sentiment", "Team Collaboration", "Crypto", "Help"
     ]
 
 page = st.sidebar.selectbox("Go to", pages)
@@ -437,6 +438,10 @@ elif page == "Stock Dashboard":
     elif hasattr(stock_dashboard_mod, "render_stock_dashboard"):
         stock_dashboard_mod.render_stock_dashboard(db, user)
 
+elif page == "Intraday Charts":
+    from modules.intraday.intraday_ui import render_intraday_page
+    render_intraday_page(db, user)
+
 elif page == "Portfolio":
     if isinstance(portfolio_mod, Exception):
         st.error("Portfolio module failed to load.")
@@ -497,9 +502,10 @@ elif page == "AI Rankings":
         )
 
 elif page == "Regime Engine":
-    st.header("Regime Engine Overview")
-    if hasattr(regime_mod, "render_regime_dashboard"):
-        regime_mod.render_market_regime_dashboard(db)
+
+    from modules.market.regime_engine import render_regime_engine
+
+    render_regime_engine(db, user)
 
 elif page in ("Strategy Lab", "Strategy Discovery", "Strategy Library"):
     try:
@@ -630,9 +636,42 @@ elif page == "Options Flow":
     from modules.options_flow.flow_ui import render_options_flow_page
     render_options_flow_page(db, user)
 
+elif page == "Analyst Consensus":
+    from modules.analyst.analyst_ui import render_analyst_page
+    render_analyst_page(db, user)
+
 elif page == "Smart Money":
     from modules.smc.smc_ui import render_smc_page
     render_smc_page(db, user)
+
+elif page == "Export / Sheets":
+    try:
+        from modules.export.export_ui import render_export_page
+        render_export_page(db, user)
+    except Exception as e:
+        st.error("Export page failed to load.")
+        st.exception(e)
+
+
+elif page == "Research Reports":
+    from modules.reports.report_ui import render_reports_page
+    render_reports_page(db, user)
+
+elif page == "Social Sentiment":
+    from modules.sentiment.sentiment_ui import render_sentiment_page
+    render_sentiment_page(db, user)
+
+elif page == "Team Collaboration":
+    from modules.collab.collab_ui import render_team_page
+    render_team_page(db, user)
+
+elif page == "Crypto":
+    try:
+        from modules.crypto.service import render_crypto_page
+        render_crypto_page(db, user)
+    except Exception as e:
+        st.error(f"Crypto module failed: {e}")
+        st.exception(e)
 
 elif page == "Help":
     try:

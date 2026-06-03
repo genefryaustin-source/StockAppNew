@@ -2,6 +2,9 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta, UTC
 
+class PolygonRateLimitException(Exception):
+    """Raised when Polygon/Massive returns a rate limit response."""
+    pass
 def fetch_ohlcv(symbol: str, period: str, interval: str, api_key: str, timeout: int):
     if not api_key:
         raise RuntimeError("Polygon API key missing")
@@ -27,7 +30,14 @@ def fetch_ohlcv(symbol: str, period: str, interval: str, api_key: str, timeout: 
     r = requests.get(url, params={"apiKey": api_key, "adjusted": "true", "sort": "asc"}, timeout=timeout)
     j = r.json()
     if "results" not in j:
-        raise RuntimeError(f"Polygon failed: {j}")
+        error_text = str(j)
+
+        if (
+                "maximum requests per minute" in error_text.lower()
+                or "rate limit" in error_text.lower()
+        ):
+            raise PolygonRateLimitException(error_text)
+
 
     df = pd.DataFrame(j["results"])
     df["Date"] = pd.to_datetime(df["t"], unit="ms")

@@ -6,39 +6,144 @@ from typing import List
 
 from sqlalchemy.orm import Session
 
-from modules.market_data.service import massive_fetch_ohlc
+
 from modules.market_data.price_history_service import store_price_history
 
+
+
+from modules.utils.config import get_secret
+from modules.market_data.providers.marketdata_provider import (
+    get_history as marketdata_history
+)
+
+from modules.market_data.providers.finnhub_provider import (
+    get_history as finnhub_history
+)
+
+from modules.market_data.providers.alpha_vantage_provider import (
+    get_history as alpha_history
+)
+
+from modules.market_data.providers.twelvedata_provider import (
+    get_history as twelvedata_history
+)
+
+from modules.market_data.providers.yahoo import (
+    fetch_ohlcv as yahoo_history
+)
+
+from modules.market_data.providers.polygon import (
+    fetch_ohlcv as polygon_history,
+    PolygonRateLimitException,
+)
 
 # ---------------------------------------
 # Safe fetch with retry + backoff
 # ---------------------------------------
 
-def fetch_with_retry(symbol: str, retries: int = 5):
+def fetch_with_retry(symbol: str, retries: int = 2):
+    POLYGON_AVAILABLE = True
 
-    delay = 1.5
+    POLYGON_API_KEY = get_secret("POLYGON_API_KEY")
 
-    for attempt in range(retries):
-        try:
-            df = massive_fetch_ohlc(symbol, period="5d")
+    providers = []
 
-            if df is not None and not df.empty:
-                return df
+    if POLYGON_AVAILABLE:
+        providers.append(
+            (
+                "POLYGON",
+                lambda: polygon_history(
+                    symbol,
+                    period="5d",
+                    interval="1d",
+                    api_key=POLYGON_API_KEY,
+                    timeout=30,
+                ),
+            )
+        )
 
-        except Exception as e:
+    providers.extend([
+        (
+            "MARKETDATA",
+            lambda: marketdata_history(
+                symbol,
+                period="5d",
+                interval="1d",
+            ),
+        ),
+        (
+            "FINNHUB",
+            lambda: finnhub_history(
+                symbol,
+                period="5d",
+                interval="D",
+            ),
+        ),
+        (
+            "ALPHAVANTAGE",
+            lambda: alpha_history(
+                symbol,
+                period="5d",
+                interval="1d",
+            ),
+        ),
+        (
+            "TWELVEDATA",
+            lambda: twelvedata_history(
+                symbol,
+                period="5d",
+                interval="1day",
+            ),
+        ),
+        (
+            "YAHOO",
+            lambda: yahoo_history(
+                symbol,
+                period="5d",
+            ),
+        ),
+    ])
 
-            msg = str(e)
+    for provider_name, provider_func in providers:
 
-            # Handle rate limits
-            if "429" in msg or "Too Many Requests" in msg:
-                sleep_time = delay + random.uniform(0.5, 2.0)
-                print(f"[RATE LIMIT] {symbol} retrying in {sleep_time:.1f}s")
-                time.sleep(sleep_time)
-                delay *= 2
+        for attempt in range(retries):
+
+            try:
+
+                df = provider_func()
+
+                if df is not None and not df.empty:
+
+                    print(
+                        f"[SUCCESS] {symbol} "
+                        f"via {provider_name}"
+                    )
+
+                    return df
+
+
+            except PolygonRateLimitException:
+
+                POLYGON_AVAILABLE = False
+
+                print(
+
+                    "[POLYGON DISABLED] "
+
+                    "Provider entered cooldown."
+
+                )
+
+                break
+
+            except Exception as e:
+
+                print(
+                    f"[FAIL] {provider_name} "
+                    f"{symbol}: {e}"
+                )
+
                 continue
-
-            print(f"[ERROR] {symbol} {e}")
-            return None
 
     return None
 
@@ -52,7 +157,11 @@ def update_latest_prices(
     symbols: List[str],
     progress_callback=None,
 ):
-
+    print("=" * 80)
+    print("UPDATE_LATEST_PRICES")
+    print("SYMBOL COUNT:", len(symbols))
+    print("FIRST 20:", symbols[:20])
+    print("=" * 80)
     total = len(symbols)
 
     updated = 0
@@ -72,6 +181,8 @@ def update_latest_prices(
             df = df.reset_index()
 
             store_price_history(db, sym, df)
+            updated += 1
+            updated_symbols.append(sym)
 
             if updated % BATCH_COMMIT == 0:
                 try:

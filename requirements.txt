@@ -39,6 +39,7 @@ mdurl==0.1.2
 multitasking==0.0.13
 narwhals==2.21.2
 openai==1.63.0
+openpyxl
 packaging==24.2
 pandas-stubs==2.3.3.260113
 peewee==4.0.5
@@ -55,6 +56,7 @@ pyparsing==3.3.2
 python-dateutil==2.9.0.post0
 pytz==2026.2
 PyYAML==6.0.3
+pycoingecko>=3.2.0
 referencing==0.37.0
 reportlab==4.5.1
 requests==2.34.2
