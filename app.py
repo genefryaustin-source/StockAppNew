@@ -105,6 +105,12 @@ engine = db.get_bind()
 # Create ALL tables including universe_equities (Option C)
 Base.metadata.create_all(bind=engine)
 
+from modules.admin.bootstrap import (
+    bootstrap_super_admin,
+)
+
+bootstrap_super_admin(db)
+
 # ============================================================
 # 5. SAFE SCHEMA MIGRATIONS
 # ============================================================
@@ -150,61 +156,17 @@ safe_migration("""
 """, "ALTER TABLE tenants ADD COLUMN is_active")
 
 # ============================================================
-# 6. SAFE SEEDING (only after tables exist)
+# 6. SYSTEM BOOTSTRAP
 # ============================================================
-_db_path = os.path.join(os.getcwd(), "stockapp.db")
-print("=" * 80)
-print("DB PATH:", _db_path)
-print("CWD:", os.getcwd())
-print("DB EXISTS:", os.path.exists(_db_path))
-print("DB SIZE:", os.path.getsize(_db_path) if os.path.exists(_db_path) else 0)
-print("=" * 80)
-_seed_path = os.path.join(os.getcwd(), "seed_data.sql")
+try:
+    from modules.admin.bootstrap import bootstrap_super_admin
 
-conn = sqlite3.connect(_db_path)
-cur = conn.cursor()
+    bootstrap_super_admin(db)
 
-cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-existing_tables = {row[0] for row in cur.fetchall()}
+except Exception as e:
+    print(f"[bootstrap] FAILED: {e}")
+    st.sidebar.error(f"Bootstrap failed: {e}")
 
-missing = [t for t in REQUIRED_TABLES if t not in existing_tables]
-
-if missing:
-    print(f"[seeder] Skipping seeding — missing tables: {missing}")
-    conn.close()
-else:
-    cur.execute("SELECT COUNT(*) FROM users")
-    user_count = cur.fetchone()[0]
-    conn.close()
-    conn = sqlite3.connect(_db_path)
-    cur = conn.cursor()
-
-    cur.execute("SELECT COUNT(*) FROM tenants")
-    print("TENANTS:", cur.fetchone()[0])
-
-    cur.execute("SELECT COUNT(*) FROM users")
-    print("USERS:", cur.fetchone()[0])
-
-    conn.close()
-    if user_count == 0:
-        print("[seeder] Seeding reference data...")
-        try:
-            conn = sqlite3.connect(_db_path, timeout=30)
-            with open(_seed_path, "r", encoding="utf-8") as f:
-                sql = f.read()
-
-            inserts = "\n".join(
-                line for line in sql.splitlines()
-                if line.strip().upper().startswith("INSERT")
-            )
-
-            conn.executescript(inserts)
-            conn.commit()
-            conn.close()
-            print("[seeder] Done.")
-        except Exception as e:
-            print(f"[seeder] FAILED: {e}")
-            st.sidebar.error(f"Seeder failed: {e}")
 
 # ============================================================
 # 7. MARKET DATA SERVICE
