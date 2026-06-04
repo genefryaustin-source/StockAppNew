@@ -104,6 +104,8 @@ try:
         print(u)
     print("=" * 80)
 
+
+
 except Exception as e:
     print("USER DEBUG FAILED:", e)
 
@@ -172,9 +174,21 @@ market_data_service = get_market_data_service()
 
 
 
+
+
+
+def _hash_password(password: str) -> str:
+    return hashlib.sha256(
+        password.encode("utf-8")
+    ).hexdigest()
+
+
 def temporary_bootstrap_admin(db):
 
-    db.rollback()
+    try:
+        db.rollback()
+    except Exception:
+        pass
 
     user_count = db.execute(
         text("SELECT COUNT(*) FROM users")
@@ -183,52 +197,65 @@ def temporary_bootstrap_admin(db):
     if user_count and int(user_count) > 0:
         return
 
-    tenant_count = db.execute(
-        text("SELECT COUNT(*) FROM tenants")
-    ).scalar()
-
-    if not tenant_count:
-
-        db.execute(text("""
+    db.execute(
+        text("""
             INSERT INTO tenants (
                 id,
                 name,
+                created_at
+            )
+            VALUES (
+                :id,
+                :name,
+                CURRENT_TIMESTAMP
+            )
+        """),
+        {
+            "id": "default_tenant",
+            "name": "Default Tenant",
+        }
+    )
+
+    db.execute(
+        text("""
+            INSERT INTO users (
+                id,
+                tenant_id,
+                email,
+                role,
+                created_at,
+                password_hash,
                 is_active
             )
             VALUES (
-                'default_tenant',
-                'Default Tenant',
+                :id,
+                :tenant_id,
+                :email,
+                :role,
+                CURRENT_TIMESTAMP,
+                :password_hash,
                 1
             )
-        """))
-
-    db.execute(text("""
-        INSERT INTO users (
-            id,
-            tenant_id,
-            email,
-            role,
-            password_hash,
-            is_active
-        )
-        VALUES (
-            :id,
-            'default_tenant',
-            :email,
-            'super_admin',
-            :password_hash,
-            1
-        )
-    """), {
-        "id": str(uuid.uuid4()),
-        "email": "admin@test.com",
-        "password_hash": _hash_password("password")
-    })
+        """),
+        {
+            "id": str(uuid.uuid4()),
+            "tenant_id": "default_tenant",
+            "email": "admin@test.com",
+            "role": "super_admin",
+            "password_hash": _hash_password("password"),
+        }
+    )
 
     db.commit()
 
-temporary_bootstrap_admin(db)
+    print("BOOTSTRAP ADMIN CREATED")
+try:
+    temporary_bootstrap_admin(db)
+except Exception as e:
+    db.rollback()
 
+    st.error(str(e))
+    raise
 # ============================================================
 # AUTH GATE
 # ============================================================
