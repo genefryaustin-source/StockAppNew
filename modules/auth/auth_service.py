@@ -12,13 +12,21 @@ def hash_password(password: str) -> str:
 
 
 def authenticate(db, email, password):
+
+    try:
+        db.rollback()
+    except Exception:
+        pass
+
     user = db.execute(text("""
         SELECT *
         FROM users
         WHERE lower(trim(email)) = :email
           AND COALESCE(is_active, 1) = 1
         LIMIT 1
-    """), {"email": email.lower().strip()}).fetchone()
+    """), {
+        "email": email.lower().strip()
+    }).fetchone()
 
     # print("DEBUG LOGIN EMAIL:", email)
 
