@@ -309,6 +309,20 @@ if DEV_MODE:
         st.sidebar.write("TENANTS", tenant_count)
         st.sidebar.write("USERS", user_count)
 
+
+        st.sidebar.write(
+            "DB MODIFIED",
+            datetime.fromtimestamp(
+                os.path.getmtime(DB_PATH)
+            )
+        )
+        with open(DB_PATH, "rb") as f:
+            import hashlib
+
+            st.sidebar.write(
+                "DB SHA256",
+                hashlib.sha256(f.read()).hexdigest()[:16]
+            )
         tables = {
             row[0]
             for row in db.execute(text("""
@@ -331,6 +345,23 @@ if DEV_MODE:
         ).scalar()
 
         st.sidebar.write("UNIVERSES", universe_count)
+
+   
+
+        st.sidebar.write("CWD", os.getcwd())
+
+        data_dir = os.path.join(os.getcwd(), "data")
+
+        st.sidebar.write(
+            "DATA DIR EXISTS",
+            os.path.exists(data_dir)
+        )
+
+        if os.path.exists(data_dir):
+            st.sidebar.write(
+                "DATA DIR FILES",
+                os.listdir(data_dir)
+            )
     except Exception as e:
         st.sidebar.error(f"DB debug failed: {e}")
 
