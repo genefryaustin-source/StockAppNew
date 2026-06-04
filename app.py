@@ -66,7 +66,7 @@ try:
 
 except Exception as e:
     st.sidebar.error(f"PRAGMA database_list failed: {e}")
-initialize_system_if_empty(db)
+
 
 try:
     db.execute(text("SELECT 1"))
