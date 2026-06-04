@@ -2,7 +2,8 @@ import os
 from datetime import datetime, UTC
 
 from sqlalchemy import create_engine, event, text
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker
+from models.base import Base
 from sqlalchemy.pool import StaticPool
 
 # ---------------------------------------------------
@@ -80,11 +81,6 @@ SessionLocal = sessionmaker(
     expire_on_commit=False  # disables this entire class of bugs
 )
 
-# ---------------------------------------------------
-# Base
-# ---------------------------------------------------
-
-Base = declarative_base()
 
 # ---------------------------------------------------
 # Init Database
@@ -104,6 +100,11 @@ def init_database():
 
     # Create all tables from models first
     Base.metadata.create_all(bind=engine)
+    print("=" * 80)
+    print("REGISTERED TABLES")
+    for t in sorted(Base.metadata.tables.keys()):
+        print(t)
+    print("=" * 80)
 
     # ---------------------------------------------------
     # Database Health Check
