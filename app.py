@@ -26,16 +26,21 @@ sys.path.insert(0, BASE_DIR)
 # ============================================================
 # DATABASE
 # ============================================================
-@st.cache_resource
-def get_db():
-    try:
-        from modules.db.core import init_database, SessionLocal
-        init_database()
-        return SessionLocal()
-    except Exception as e:
-        st.error(f"Database connection failed: {e}")
-        st.stop()
 
+@st.cache_resource
+def init_db_once():
+    from modules.db.core import init_database
+    init_database()
+
+init_db_once()
+
+from modules.db.core import SessionLocal
+
+db = SessionLocal()
+try:
+    db.rollback()
+except Exception:
+    pass
 
 def _secret(name: str, default: str = "") -> str:
     try:
@@ -51,19 +56,23 @@ def _hash_password(password: str) -> str:
 
 
 
-db = get_db()
+
 
 
 st.sidebar.markdown("## PRE-LOGIN DB DEBUG")
 
 try:
-    user_count = db.execute(
-        text("SELECT COUNT(*) FROM users")
-    ).scalar()
+    from modules.db.core import SessionLocal
 
-    tenant_count = db.execute(
-        text("SELECT COUNT(*) FROM tenants")
-    ).scalar()
+    with SessionLocal() as debug_db:
+
+        user_count = debug_db.execute(
+            text("SELECT COUNT(*) FROM users")
+        ).scalar()
+
+        tenant_count = debug_db.execute(
+            text("SELECT COUNT(*) FROM tenants")
+        ).scalar()
 
     st.sidebar.write("USER COUNT", user_count)
     st.sidebar.write("TENANT COUNT", tenant_count)
