@@ -170,69 +170,64 @@ market_data_service = get_market_data_service()
 
 
 
+
+
 def temporary_bootstrap_admin(db):
-    try:
-        db.rollback()
-    except Exception:
-        pass
+
+    db.rollback()
 
     user_count = db.execute(
         text("SELECT COUNT(*) FROM users")
     ).scalar()
 
-    user_count = db.execute(text("SELECT COUNT(*) FROM users")).scalar()
-
     if user_count and int(user_count) > 0:
         return
 
-    db.execute(text("""
-        INSERT INTO tenants (id, name, created_at, is_active)
-        VALUES ('default_tenant', 'Default Tenant', CURRENT_TIMESTAMP, 1)
-    """))
+    tenant_count = db.execute(
+        text("SELECT COUNT(*) FROM tenants")
+    ).scalar()
+
+    if not tenant_count:
+
+        db.execute(text("""
+            INSERT INTO tenants (
+                id,
+                name,
+                is_active
+            )
+            VALUES (
+                'default_tenant',
+                'Default Tenant',
+                1
+            )
+        """))
 
     db.execute(text("""
         INSERT INTO users (
-            id, tenant_id, email, role, created_at,
-            password_hash, is_active, updated_at
+            id,
+            tenant_id,
+            email,
+            role,
+            password_hash,
+            is_active
         )
         VALUES (
-            :id, 'default_tenant', :email, 'super_admin',
-            CURRENT_TIMESTAMP, :password_hash, 1, CURRENT_TIMESTAMP
+            :id,
+            'default_tenant',
+            :email,
+            'super_admin',
+            :password_hash,
+            1
         )
     """), {
         "id": str(uuid.uuid4()),
         "email": "admin@test.com",
-        "password_hash": _hash_password("password"),
+        "password_hash": _hash_password("password")
     })
 
     db.commit()
 
-
-
-try:
-    db.rollback()
-except Exception:
-    pass
-
-try:
-    count = db.execute(
-        text("SELECT COUNT(*) FROM users")
-    ).scalar()
-
-    st.write("PRE BOOTSTRAP USER COUNT:", count)
-
-except Exception as e:
-    st.error(f"PRE BOOTSTRAP FAILED: {e}")
-    raise
-
-#try:
-    #temporary_bootstrap_admin(db)
-except Exception as e:
-    import traceback
-
-    st.error(str(e))
-    st.code(traceback.format_exc())
-    raise
+temporary_bootstrap_admin(db)
 
 # ============================================================
 # AUTH GATE
