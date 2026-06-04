@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 # Database URL
 # ---------------------------------------------------
 
-DB_PATH = os.path.join(os.getcwd(), "stockapp.db")
+DB_PATH = "data/stockapp.db"
 
 DB_URL = f"sqlite:///{DB_PATH}"
 
@@ -103,7 +103,12 @@ def init_database():
     print("=" * 80)
     print("PRE-ENGINE CHECK")
     print("DB EXISTS:", os.path.exists(DB_PATH))
+    print("CWD:", os.getcwd())
+    print("DB PATH:", DB_PATH)
+    print("DB EXISTS:", os.path.exists(DB_PATH))
 
+    if os.path.exists(DB_PATH):
+        print("DB SIZE:", os.path.getsize(DB_PATH))
     if os.path.exists(DB_PATH):
         print("DB SIZE:", os.path.getsize(DB_PATH))
 
