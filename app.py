@@ -391,6 +391,17 @@ if DEV_MODE:
         except Exception as e:
             st.error(f"VERSION FAILED: {e}")
 
+        cols = db.execute(text("""
+            SELECT
+                column_name,
+                data_type
+            FROM information_schema.columns
+            WHERE table_name = 'portfolios'
+            ORDER BY ordinal_position
+        """)).fetchall()
+
+        st.write(cols)
+
 
 
 

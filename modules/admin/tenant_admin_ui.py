@@ -58,6 +58,11 @@ def render_tenant_admin_panel(db, user):
                 st.warning("Enter a portfolio name.")
             else:
                 try:
+                    portfolio_id = str(uuid.uuid4())
+
+                    st.write("PORTFOLIO ID:", portfolio_id)
+                    st.write("TENANT ID:", tenant_id)
+
                     db.execute(sql_text("""
                         INSERT INTO portfolios (
                             id,
@@ -84,7 +89,7 @@ def render_tenant_admin_panel(db, user):
                             CURRENT_TIMESTAMP
                         )
                     """), {
-                        "id": str(uuid.uuid4()),
+                        "id": portfolio_id,
                         "tenant_id": tenant_id,
                         "name": pname.strip(),
                         "description": "",
@@ -92,11 +97,19 @@ def render_tenant_admin_panel(db, user):
                         "base_currency": "USD",
                         "starting_cash": 100000.0,
                     })
+
                     db.commit()
+
                     st.success(f"Portfolio '{pname}' created.")
                     st.rerun()
+
                 except Exception as e:
-                    st.error(f"Failed to create portfolio: {e}")
+                    db.rollback()
+
+                    import traceback
+
+                    st.error(f"PORTFOLIO CREATE ERROR: {e}")
+                    st.code(traceback.format_exc())
 
         # ---------------------------------
         # CREATE USER
