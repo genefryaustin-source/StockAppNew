@@ -259,7 +259,7 @@ if DEV_MODE:
 user = st.session_state.get("user")
 
 if user is None:
-    render_login()
+    render_login(db)
     st.stop()
 
 
