@@ -57,6 +57,7 @@ python-dateutil==2.9.0.post0
 pytz==2026.2
 PyYAML==6.0.3
 pycoingecko>=3.2.0
+psycopg[binary]>=3.2
 referencing==0.37.0
 reportlab==4.5.1
 requests==2.34.2

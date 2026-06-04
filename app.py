@@ -54,17 +54,7 @@ def _hash_password(password: str) -> str:
 db = get_db()
 
 
-sentinel = "data/persistence_test.txt"
 
-if not os.path.exists(sentinel):
-    with open(sentinel, "w") as f:
-        f.write(str(datetime.now()))
-
-with open(sentinel) as f:
-    st.sidebar.write(
-        "SENTINEL",
-        f.read()
-    )
 
 user_count = db.execute(
     text("SELECT COUNT(*) FROM users")
@@ -154,7 +144,7 @@ try:
         text("PRAGMA database_list")
     ).fetchall()
 
-    st.sidebar.subheader("SQLALCHEMY DATABASE LIST")
+    st.sidebar.subheader("PostGres DATABASE LIST")
     count = db.execute(
         text("SELECT COUNT(*) FROM users")
     ).scalar()
@@ -288,9 +278,10 @@ if DEV_MODE:
     try:
         st.sidebar.markdown("### DB Debug")
 
-        from modules.db.core import DB_PATH
+        from modules.db.core import DB_PATH, DB_URL
 
-
+        print("DATABASE URL:", DB_URL.split("@")[1])
+        print("CONNECTED TO POSTGRES")
 
         st.sidebar.write(
             "ROOT DB EXISTS",
