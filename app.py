@@ -117,14 +117,9 @@ except Exception as e:
 # IMPORT MODELS + SERVICES
 # ============================================================
 try:
-    import modules.db.models
-    import modules.institutional.models
-    import modules.analytics.models
-    import modules.alerts.models
-    import modules.universe.models
-    import modules.jobs.models
-    import modules.market_data.models
-    import modules.analytics.strategy_models
+
+
+    
 
     from modules.auth.login_ui import render_login
     from modules.help.help_ui import render_help
