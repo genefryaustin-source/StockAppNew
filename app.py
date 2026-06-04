@@ -308,6 +308,17 @@ if DEV_MODE:
 
         st.sidebar.write("TENANTS", tenant_count)
         st.sidebar.write("USERS", user_count)
+
+        portfolio_count = db.execute(
+            text("SELECT COUNT(*) FROM portfolios")
+        ).scalar()
+
+        st.sidebar.write("PORTFOLIOS", portfolio_count)
+        universe_count = db.execute(
+            text("SELECT COUNT(*) FROM universes")
+        ).scalar()
+
+        st.sidebar.write("UNIVERSES", universe_count)
     except Exception as e:
         st.sidebar.error(f"DB debug failed: {e}")
 
