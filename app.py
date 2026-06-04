@@ -17,7 +17,7 @@ from sqlalchemy import text
 st.set_page_config(page_title="Equity Research Terminal", layout="wide")
 
 VERSION = "2.4.0"
-DEV_MODE = False
+DEV_MODE = True
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
@@ -293,7 +293,21 @@ if DEV_MODE:
             """)
         ).fetchall()
         st.sidebar.write("TABLES:", table_rows)
+        st.sidebar.write("DB FILE", DB_PATH)
+        st.sidebar.write("ABS DB FILE", os.path.abspath(DB_PATH))
+        st.sidebar.write("DB EXISTS", os.path.exists(DB_PATH))
+        st.sidebar.write("DB SIZE", os.path.getsize(DB_PATH))
 
+        tenant_count = db.execute(
+            text("SELECT COUNT(*) FROM tenants")
+        ).scalar()
+
+        user_count = db.execute(
+            text("SELECT COUNT(*) FROM users")
+        ).scalar()
+
+        st.sidebar.write("TENANTS", tenant_count)
+        st.sidebar.write("USERS", user_count)
     except Exception as e:
         st.sidebar.error(f"DB debug failed: {e}")
 
