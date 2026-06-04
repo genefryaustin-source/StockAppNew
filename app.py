@@ -54,6 +54,44 @@ def _hash_password(password: str) -> str:
 db = get_db()
 
 
+st.sidebar.markdown("## PRE-LOGIN DB DEBUG")
+
+try:
+    user_count = db.execute(
+        text("SELECT COUNT(*) FROM users")
+    ).scalar()
+
+    tenant_count = db.execute(
+        text("SELECT COUNT(*) FROM tenants")
+    ).scalar()
+
+    st.sidebar.write("USER COUNT", user_count)
+    st.sidebar.write("TENANT COUNT", tenant_count)
+
+    users = db.execute(
+        text("""
+            SELECT email, role, tenant_id
+            FROM users
+            ORDER BY email
+        """)
+    ).fetchall()
+
+    st.sidebar.write("USERS")
+    st.sidebar.json([str(x) for x in users])
+
+except Exception as e:
+    st.sidebar.error(f"DEBUG FAILED: {e}")
+
+try:
+    db_name = db.execute(
+        text("SELECT current_database()")
+    ).scalar()
+
+    st.sidebar.write("DATABASE", db_name)
+
+except Exception as e:
+    st.sidebar.error(f"DB NAME FAILED: {e}")
+
 try:
     users = db.execute(text("""
         SELECT email, role
@@ -125,6 +163,42 @@ def get_market_data_service():
 
 market_data_service = get_market_data_service()
 
+# ============================================================
+# Initialize Db User
+# ============================================================
+
+from sqlalchemy import text
+
+
+def temporary_bootstrap_admin(db):
+    user_count = db.execute(text("SELECT COUNT(*) FROM users")).scalar()
+
+    if user_count and int(user_count) > 0:
+        return
+
+    db.execute(text("""
+        INSERT INTO tenants (id, name, created_at, is_active)
+        VALUES ('default_tenant', 'Default Tenant', CURRENT_TIMESTAMP, 1)
+    """))
+
+    db.execute(text("""
+        INSERT INTO users (
+            id, tenant_id, email, role, created_at,
+            password_hash, is_active, updated_at
+        )
+        VALUES (
+            :id, 'default_tenant', :email, 'super_admin',
+            CURRENT_TIMESTAMP, :password_hash, 1, CURRENT_TIMESTAMP
+        )
+    """), {
+        "id": str(uuid.uuid4()),
+        "email": "admin@test.com",
+        "password_hash": _hash_password("password"),
+    })
+
+    db.commit()
+
+temporary_bootstrap_admin(db)
 
 # ============================================================
 # AUTH GATE
