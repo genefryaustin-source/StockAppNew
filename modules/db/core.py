@@ -1,4 +1,6 @@
 import os
+from datetime import datetime, UTC
+
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy.pool import StaticPool
@@ -10,6 +12,28 @@ from sqlalchemy.pool import StaticPool
 DB_PATH = os.path.join(os.getcwd(), "stockapp.db")
 
 DB_URL = f"sqlite:///{DB_PATH}"
+
+print("=" * 80)
+print("DATABASE DEBUG")
+print("CWD:", os.getcwd())
+print("DB PATH:", DB_PATH)
+print("ABS DB PATH:", os.path.abspath(DB_PATH))
+print("DB EXISTS:", os.path.exists(DB_PATH))
+
+if os.path.exists(DB_PATH):
+    try:
+        print("DB SIZE:", os.path.getsize(DB_PATH))
+        print(
+            "DB MODIFIED:",
+            datetime.fromtimestamp(
+                os.path.getmtime(DB_PATH)
+            )
+        )
+    except Exception as e:
+        print("DB FILE INFO ERROR:", e)
+
+print("DB URL:", DB_URL)
+print("=" * 80)
 
 # ---------------------------------------------------
 # Engine
@@ -24,6 +48,11 @@ engine = create_engine(
     poolclass=StaticPool,
     echo=False
 )
+
+print("=" * 80)
+print("SQLALCHEMY URL:", engine.url)
+print("DATABASE FILE:", DB_PATH)
+print("=" * 80)
 
 # ---------------------------------------------------
 # SQLite Performance + Lock Fixes
@@ -62,6 +91,7 @@ Base = declarative_base()
 # ---------------------------------------------------
 
 def init_database():
+
     import modules.db.models
     import modules.institutional.models
     import modules.analytics.models
@@ -74,16 +104,42 @@ def init_database():
     # Create all tables from models first
     Base.metadata.create_all(bind=engine)
 
+    # ---------------------------------------------------
+    # Database Health Check
+    # ---------------------------------------------------
+
+    try:
+        with engine.connect() as conn:
+
+            tenant_count = conn.execute(
+                text("SELECT COUNT(*) FROM tenants")
+            ).scalar()
+
+            user_count = conn.execute(
+                text("SELECT COUNT(*) FROM users")
+            ).scalar()
+
+            print("=" * 80)
+            print("DATABASE CONTENTS")
+            print("TENANTS:", tenant_count)
+            print("USERS:", user_count)
+            print("=" * 80)
+
+    except Exception as e:
+        print("DATABASE CONTENT CHECK FAILED:", e)
+
     # Safe migrations
     migrations = [
         # users
         "ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1",
         "ALTER TABLE users ADD COLUMN created_at TEXT",
         "ALTER TABLE users ADD COLUMN updated_at TEXT",
+
         # universes
         "ALTER TABLE universes ADD COLUMN description TEXT",
         "ALTER TABLE universes ADD COLUMN created_by_user_id VARCHAR",
         "ALTER TABLE universes ADD COLUMN updated_at TEXT",
+
         # tenants
         "ALTER TABLE tenants ADD COLUMN updated_at TEXT",
         "ALTER TABLE tenants ADD COLUMN tenant_id VARCHAR",
@@ -92,6 +148,7 @@ def init_database():
     ]
 
     with engine.connect() as conn:
+
         for sql in migrations:
             try:
                 conn.execute(text(sql))
@@ -99,10 +156,13 @@ def init_database():
             except Exception:
                 pass
 
-from datetime import datetime, UTC
+# ---------------------------------------------------
+# UTC Helper
+# ---------------------------------------------------
 
 @event.listens_for(engine, "connect")
 def set_sqlite_utc(dbapi_connection, connection_record):
+
     dbapi_connection.create_function(
         "utcnow",
         0,
