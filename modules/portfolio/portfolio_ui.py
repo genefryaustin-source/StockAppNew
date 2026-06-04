@@ -13,7 +13,10 @@ from models.trading import PortfolioPosition, TradeOrder
 
 
 def render_portfolio_ui(db_session, user, market_data_service):
-
+    try:
+        db_session.rollback()
+    except Exception:
+        pass
     print("🔥 NEW PORTFOLIO UI LOADED")
 
     role = (user.get("role") or "").lower()
