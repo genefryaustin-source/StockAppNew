@@ -100,6 +100,7 @@ def init_database():
     import modules.jobs.models
     import modules.market_data.models
     import modules.analytics.strategy_models
+    import models.trading
 
     # Create all tables from models first
     Base.metadata.create_all(bind=engine)

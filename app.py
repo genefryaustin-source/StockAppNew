@@ -309,9 +309,21 @@ if DEV_MODE:
         st.sidebar.write("TENANTS", tenant_count)
         st.sidebar.write("USERS", user_count)
 
-        portfolio_count = db.execute(
-            text("SELECT COUNT(*) FROM portfolios")
-        ).scalar()
+        tables = {
+            row[0]
+            for row in db.execute(text("""
+                SELECT name
+                FROM sqlite_master
+                WHERE type='table'
+            """)).fetchall()
+        }
+
+        if "portfolios" in tables:
+            portfolio_count = db.execute(
+                text("SELECT COUNT(*) FROM portfolios")
+            ).scalar()
+        else:
+            portfolio_count = "TABLE MISSING"
 
         st.sidebar.write("PORTFOLIOS", portfolio_count)
         universe_count = db.execute(
