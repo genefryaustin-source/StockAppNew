@@ -228,6 +228,30 @@ if DEV_MODE:
 
         from modules.db.core import DB_PATH
 
+
+
+        st.sidebar.write(
+            "ROOT DB EXISTS",
+            os.path.exists("/mount/src/stockapp/stockapp.db")
+        )
+
+        if os.path.exists("/mount/src/stockapp/stockapp.db"):
+            st.sidebar.write(
+                "ROOT DB SIZE",
+                os.path.getsize("/mount/src/stockapp/stockapp.db")
+            )
+
+        st.sidebar.write(
+            "DATA DB EXISTS",
+            os.path.exists("/mount/src/stockapp/data/stockapp.db")
+        )
+
+        if os.path.exists("/mount/src/stockapp/data/stockapp.db"):
+            st.sidebar.write(
+                "DATA DB SIZE",
+                os.path.getsize("/mount/src/stockapp/data/stockapp.db")
+            )
+
         st.sidebar.write("DB PATH:", str(DB_PATH))
 
         db_list = db.execute(text("PRAGMA database_list")).fetchall()
