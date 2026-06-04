@@ -179,7 +179,7 @@ if DEV_MODE:
 
 
 
-       
+
     except Exception as e:
         st.sidebar.error(f"DB debug failed: {e}")
 
