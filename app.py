@@ -202,7 +202,13 @@ market_data_service = get_market_data_service()
 # ============================================================
 # 8. AUTH GATE
 # ============================================================
+user = st.session_state.get("user")
 
+if user is None:
+    render_login(db)
+    st.stop()
+
+current_user_id = user.get("user_id")
 
 
 
