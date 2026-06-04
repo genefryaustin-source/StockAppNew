@@ -65,6 +65,25 @@ tables = db.execute(
 
 st.sidebar.write("TABLE COUNT", len(tables))
 
+
+
+for table in [
+    "users",
+    "tenants",
+    "security_master",
+    "price_history",
+    "universes",
+]:
+    try:
+        cnt = db.execute(
+            text(f"SELECT COUNT(*) FROM {table}")
+        ).scalar()
+
+        st.sidebar.write(f"{table}: {cnt}")
+
+    except Exception as e:
+        st.sidebar.write(f"{table}: {e}")
+
 for t in tables:
     st.sidebar.write(t[0])
 
