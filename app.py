@@ -54,6 +54,18 @@ def _hash_password(password: str) -> str:
 db = get_db()
 
 
+sentinel = "data/persistence_test.txt"
+
+if not os.path.exists(sentinel):
+    with open(sentinel, "w") as f:
+        f.write(str(datetime.now()))
+
+with open(sentinel) as f:
+    st.sidebar.write(
+        "SENTINEL",
+        f.read()
+    )
+
 user_count = db.execute(
     text("SELECT COUNT(*) FROM users")
 ).scalar()
