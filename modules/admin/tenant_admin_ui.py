@@ -63,6 +63,17 @@ def render_tenant_admin_panel(db, user):
                     st.write("PORTFOLIO ID:", portfolio_id)
                     st.write("TENANT ID:", tenant_id)
 
+                    cols = db.execute(sql_text("""
+                        SELECT
+                            column_name,
+                            data_type
+                        FROM information_schema.columns
+                        WHERE table_name = 'portfolios'
+                        ORDER BY ordinal_position
+                    """)).fetchall()
+
+                    st.write(cols)
+
                     db.execute(sql_text("""
                         INSERT INTO portfolios (
                             id,
@@ -103,13 +114,20 @@ def render_tenant_admin_panel(db, user):
                     st.success(f"Portfolio '{pname}' created.")
                     st.rerun()
 
+
                 except Exception as e:
+
                     db.rollback()
 
                     import traceback
 
-                    st.error(f"PORTFOLIO CREATE ERROR: {e}")
+                    st.error("PORTFOLIO CREATE FAILED")
+
+                    st.code(str(e))
+
                     st.code(traceback.format_exc())
+
+                    raise
 
         # ---------------------------------
         # CREATE USER
