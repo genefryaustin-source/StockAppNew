@@ -206,7 +206,7 @@ market_data_service = get_market_data_service()
 
 
 
-user = st.session_state.get("user")
+
 
 
 
@@ -223,6 +223,7 @@ except Exception:
 # ============================================================
 # 10. USER SWITCH RESET
 # ============================================================
+user = st.session_state.get("user")
 current_user_id = user.get("user_id")
 if st.session_state.get("_last_user_id") != current_user_id:
     st.session_state.clear()
