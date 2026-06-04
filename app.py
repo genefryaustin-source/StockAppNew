@@ -136,6 +136,40 @@ def initialize_system_if_empty(db) -> None:
 
 
 db = get_db()
+
+
+try:
+    row = db.execute(
+        text("PRAGMA database_list")
+    ).fetchall()
+
+    st.sidebar.subheader("SQLALCHEMY DATABASE LIST")
+
+    for r in row:
+        st.sidebar.write(str(r))
+
+except Exception as e:
+    st.sidebar.error(f"PRAGMA database_list failed: {e}")
+
+    try:
+        page_count = db.execute(
+            text("PRAGMA page_count")
+        ).scalar()
+
+        page_size = db.execute(
+            text("PRAGMA page_size")
+        ).scalar()
+
+        st.sidebar.write("PAGE COUNT", page_count)
+        st.sidebar.write("PAGE SIZE", page_size)
+        st.sidebar.write(
+            "CALCULATED DB SIZE",
+            page_count * page_size
+        )
+
+    except Exception as e:
+        st.sidebar.error(f"PRAGMA size failed: {e}")
+        
 initialize_system_if_empty(db)
 
 try:
