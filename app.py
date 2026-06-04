@@ -150,26 +150,6 @@ try:
 
 except Exception as e:
     st.sidebar.error(f"PRAGMA database_list failed: {e}")
-
-    try:
-        page_count = db.execute(
-            text("PRAGMA page_count")
-        ).scalar()
-
-        page_size = db.execute(
-            text("PRAGMA page_size")
-        ).scalar()
-
-        st.sidebar.write("PAGE COUNT", page_count)
-        st.sidebar.write("PAGE SIZE", page_size)
-        st.sidebar.write(
-            "CALCULATED DB SIZE",
-            page_count * page_size
-        )
-
-    except Exception as e:
-        st.sidebar.error(f"PRAGMA size failed: {e}")
-        
 initialize_system_if_empty(db)
 
 try:
@@ -344,6 +324,21 @@ if DEV_MODE:
         st.sidebar.write("USERS", user_count)
 
 
+        tenant_count_sql = db.execute(
+            text("SELECT COUNT(*) FROM tenants")
+        ).scalar()
+
+        user_count_sql = db.execute(
+            text("SELECT COUNT(*) FROM users")
+        ).scalar()
+
+        st.sidebar.write("SQL TENANTS", tenant_count_sql)
+        st.sidebar.write("SQL USERS", user_count_sql)
+        tenant_rows = db.execute(
+            text("SELECT id, name FROM tenants")
+        ).fetchall()
+
+        st.sidebar.write("RAW TENANTS", tenant_rows)
         st.sidebar.write(
             "DB MODIFIED",
             datetime.fromtimestamp(
