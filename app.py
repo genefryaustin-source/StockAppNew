@@ -167,7 +167,7 @@ market_data_service = get_market_data_service()
 # Initialize Db User
 # ============================================================
 
-from sqlalchemy import text
+
 
 
 def temporary_bootstrap_admin(db):
@@ -198,7 +198,14 @@ def temporary_bootstrap_admin(db):
 
     db.commit()
 
-temporary_bootstrap_admin(db)
+try:
+    temporary_bootstrap_admin(db)
+except Exception as e:
+    import traceback
+
+    st.error(str(e))
+    st.code(traceback.format_exc())
+    raise
 
 # ============================================================
 # AUTH GATE
