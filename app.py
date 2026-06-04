@@ -54,6 +54,20 @@ def _hash_password(password: str) -> str:
 db = get_db()
 
 
+tables = db.execute(
+    text("""
+        SELECT name
+        FROM sqlite_master
+        WHERE type='table'
+        ORDER BY name
+    """)
+).fetchall()
+
+st.sidebar.write("TABLE COUNT", len(tables))
+
+for t in tables:
+    st.sidebar.write(t[0])
+
 try:
     row = db.execute(
         text("PRAGMA database_list")
