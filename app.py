@@ -54,6 +54,21 @@ def _hash_password(password: str) -> str:
 db = get_db()
 
 
+try:
+    users = db.execute(text("""
+        SELECT email, role
+        FROM users
+    """)).fetchall()
+
+    print("=" * 80)
+    print("POSTGRES USERS")
+    for u in users:
+        print(u)
+    print("=" * 80)
+
+except Exception as e:
+    print("USER DEBUG FAILED:", e)
+
 
 
 
