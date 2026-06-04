@@ -160,8 +160,7 @@ safe_migration("""
 safe_migration("""
     ALTER TABLE tenants ADD COLUMN is_active INTEGER DEFAULT 1
 """, "ALTER TABLE tenants ADD COLUMN is_active")
-if "user" not in st.session_state:
-    st.session_state["user"] = None
+
 # ============================================================
 # 6. SYSTEM BOOTSTRAP
 # ============================================================
@@ -203,64 +202,13 @@ market_data_service = get_market_data_service()
 # ============================================================
 # 8. AUTH GATE
 # ============================================================
-if DEV_MODE:
-    from sqlalchemy import text
-    import os
 
-    st.sidebar.markdown("## DATABASE DEBUG")
-
-    st.sidebar.write("CWD:", os.getcwd())
-
-    try:
-        db_rows = db.execute(
-            text("PRAGMA database_list")
-        ).fetchall()
-
-        st.sidebar.write("DATABASES:", db_rows)
-
-
-
-
-
-    except Exception as e:
-        st.sidebar.error(f"PRAGMA ERROR: {e}")
-
-    try:
-        tenant_count = db.execute(
-            text("SELECT COUNT(*) FROM tenants")
-        ).scalar()
-
-        user_count = db.execute(
-            text("SELECT COUNT(*) FROM users")
-        ).scalar()
-
-        st.sidebar.write("TENANTS:", tenant_count)
-        st.sidebar.write("USERS:", user_count)
-
-    except Exception as e:
-        st.sidebar.error(f"COUNT ERROR: {e}")
-
-    try:
-        tenant_rows = db.execute(
-            text("""
-                SELECT id, name, is_active
-                FROM tenants
-                ORDER BY name
-            """)
-        ).fetchall()
-
-        st.sidebar.write("TENANT ROWS:", tenant_rows)
-
-    except Exception as e:
-        st.sidebar.error(f"TENANT QUERY ERROR: {e}")
 
 
 
 user = st.session_state.get("user")
 
-if user is None:
-    render_login(db)
-    st.stop()
+
 
 
 # ============================================================
