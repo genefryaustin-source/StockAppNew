@@ -14,14 +14,16 @@ def gen_uuid():
 # ------------------------------------
 
 class Tenant(Base):
-
     __tablename__ = "tenants"
 
     id = Column(String, primary_key=True, default=gen_uuid)
 
     name = Column(String)
 
+    is_active = Column(Integer, nullable=False, default=1)
+
     created_at = Column(DateTime, default=datetime.utcnow)
+
 
 
 # ------------------------------------

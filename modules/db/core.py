@@ -97,6 +97,19 @@ def init_database():
     except Exception as e:
         print("DATABASE CONTENT CHECK FAILED:", e)
 
+    
+
+    # PostgreSQL tenant migration
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                ALTER TABLE tenants
+                ADD COLUMN IF NOT EXISTS is_active INTEGER DEFAULT 1
+            """))
+        print("TENANT is_active migration complete")
+    except Exception as e:
+        print("TENANT is_active migration skipped:", e)
+
     # Safe migrations
     #migrations = [
         # users
