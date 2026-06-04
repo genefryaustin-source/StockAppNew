@@ -201,23 +201,57 @@ market_data_service = get_market_data_service()
 # 8. AUTH GATE
 # ============================================================
 if DEV_MODE:
-    if "user" not in st.session_state:
-        st.session_state.user = {
-            "user_id": "local_user",
-            "tenant_id": "default_tenant",
-            "role": "super_admin",
-            "email": "dev@local",
-            "is_active": 1,
-        }
-else:
-    if "user" not in st.session_state:
-        try:
-            from modules.auth.login_ui import render_login
-            render_login(db)
-            st.stop()
-        except Exception as e:
-            st.error(f"Login screen failed to load: {e}")
-            st.stop()
+    from sqlalchemy import text
+    import os
+
+    st.sidebar.markdown("## DATABASE DEBUG")
+
+    st.sidebar.write("CWD:", os.getcwd())
+
+    try:
+        db_rows = db.execute(
+            text("PRAGMA database_list")
+        ).fetchall()
+
+        st.sidebar.write("DATABASES:", db_rows)
+
+
+
+
+
+    except Exception as e:
+        st.sidebar.error(f"PRAGMA ERROR: {e}")
+
+    try:
+        tenant_count = db.execute(
+            text("SELECT COUNT(*) FROM tenants")
+        ).scalar()
+
+        user_count = db.execute(
+            text("SELECT COUNT(*) FROM users")
+        ).scalar()
+
+        st.sidebar.write("TENANTS:", tenant_count)
+        st.sidebar.write("USERS:", user_count)
+
+    except Exception as e:
+        st.sidebar.error(f"COUNT ERROR: {e}")
+
+    try:
+        tenant_rows = db.execute(
+            text("""
+                SELECT id, name, is_active
+                FROM tenants
+                ORDER BY name
+            """)
+        ).fetchall()
+
+        st.sidebar.write("TENANT ROWS:", tenant_rows)
+
+    except Exception as e:
+        st.sidebar.error(f"TENANT QUERY ERROR: {e}")
+
+
 
 user = st.session_state.user
 
@@ -270,7 +304,8 @@ if st.sidebar.button("Logout", key="sidebar_logout"):
 # 13. DEV_MODE DEBUG PRAGMA OUTPUT
 # ============================================================
 if DEV_MODE:
-    conn = sqlite3.connect(_db_path)
+    from modules.db.core import DB_PATH
+    conn = sqlite3.connect(str(DB_PATH))
     cur = conn.cursor()
 
     for table in ["universes", "users", "tenants", "universe_symbols", "universe_equities"]:
