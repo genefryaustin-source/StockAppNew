@@ -109,7 +109,7 @@ from models.base import Base
 engine = db.get_bind()
 
 # Create ALL tables including universe_equities (Option C)
-Base.metadata.create_all(bind=engine)
+
 
 from modules.admin.bootstrap import (
     bootstrap_super_admin,
