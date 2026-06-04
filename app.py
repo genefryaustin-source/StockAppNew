@@ -171,6 +171,15 @@ market_data_service = get_market_data_service()
 
 
 def temporary_bootstrap_admin(db):
+    try:
+        db.rollback()
+    except Exception:
+        pass
+
+    user_count = db.execute(
+        text("SELECT COUNT(*) FROM users")
+    ).scalar()
+
     user_count = db.execute(text("SELECT COUNT(*) FROM users")).scalar()
 
     if user_count and int(user_count) > 0:
@@ -198,8 +207,26 @@ def temporary_bootstrap_admin(db):
 
     db.commit()
 
+
+
 try:
-    temporary_bootstrap_admin(db)
+    db.rollback()
+except Exception:
+    pass
+
+try:
+    count = db.execute(
+        text("SELECT COUNT(*) FROM users")
+    ).scalar()
+
+    st.write("PRE BOOTSTRAP USER COUNT:", count)
+
+except Exception as e:
+    st.error(f"PRE BOOTSTRAP FAILED: {e}")
+    raise
+
+#try:
+    #temporary_bootstrap_admin(db)
 except Exception as e:
     import traceback
 
