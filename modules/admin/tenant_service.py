@@ -9,7 +9,11 @@ class TenantService:
 
     def list_tenants(self):
         rows = self.db.execute(text("""
-            SELECT id, name, created_at
+            SELECT
+                id,
+                name,
+                COALESCE(is_active, 1),
+                created_at
             FROM tenants
             ORDER BY name
         """)).fetchall()
@@ -18,7 +22,8 @@ class TenantService:
             {
                 "id": r[0],
                 "name": r[1],
-                "created_at": r[2],
+                "is_active": bool(r[2]),
+                "created_at": r[3],
             }
             for r in rows
         ]

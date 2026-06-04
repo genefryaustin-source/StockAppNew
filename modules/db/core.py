@@ -97,7 +97,7 @@ def init_database():
     except Exception as e:
         print("DATABASE CONTENT CHECK FAILED:", e)
 
-    
+
 
     # PostgreSQL tenant migration
     try:
