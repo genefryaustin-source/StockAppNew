@@ -54,6 +54,56 @@ def _hash_password(password: str) -> str:
 db = get_db()
 
 
+user_count = db.execute(
+    text("SELECT COUNT(*) FROM users")
+).scalar()
+
+if not user_count:
+
+    db.execute(text("""
+        INSERT INTO tenants (
+            id,
+            name,
+            created_at,
+            is_active
+        )
+        VALUES (
+            'default_tenant',
+            'Default Tenant',
+            CURRENT_TIMESTAMP,
+            1
+        )
+    """))
+
+    db.execute(text("""
+        INSERT INTO users (
+            id,
+            tenant_id,
+            email,
+            role,
+            password_hash,
+            is_active,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            :id,
+            'default_tenant',
+            :email,
+            'super_admin',
+            :password_hash,
+            1,
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
+        )
+    """), {
+        "id": str(uuid.uuid4()),
+        "email": "admin@test.com",
+        "password_hash": _hash_password("password")
+    })
+
+    db.commit()
+
 tables = db.execute(
     text("""
         SELECT name
