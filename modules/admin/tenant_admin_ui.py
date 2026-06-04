@@ -326,12 +326,16 @@ def render_tenant_admin_panel(db, user):
                 key="tenant_ui_assignment_client",
             )
 
-            portfolios = db.execute(("""
-                SELECT id, name
-                FROM portfoliossql_text
-                WHERE tenant_id = :tenant
-                ORDER BY name
-            """), {"tenant": tenant_id}).fetchall()
+            portfolios = db.execute(
+                sql_text("""
+                    SELECT id, name
+                    FROM portfolios
+                    WHERE tenant_id = :tenant
+                """),
+                {
+                    "tenant": tenant_id
+                }
+            )
 
             if not portfolios:
                 st.warning(
