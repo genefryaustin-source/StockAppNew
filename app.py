@@ -185,10 +185,86 @@ if DEV_MODE:
     try:
         st.sidebar.markdown("### DB Debug")
 
-        from modules.db.core import DB_PATH, DB_URL
+        from sqlalchemy import text
 
-        print("DATABASE URL:", DB_URL.split("@")[1])
-        print("CONNECTED TO POSTGRES")
+        st.subheader("POSTGRES DEBUG")
+
+        try:
+            user_count = db.execute(
+                text("SELECT COUNT(*) FROM users")
+            ).scalar()
+
+            tenant_count = db.execute(
+                text("SELECT COUNT(*) FROM tenants")
+            ).scalar()
+
+            st.write("USER COUNT", user_count)
+            st.write("TENANT COUNT", tenant_count)
+
+            users = db.execute(
+                text("""
+                    SELECT
+                        email,
+                        role,
+                        tenant_id,
+                        is_active
+                    FROM users
+                    ORDER BY email
+                """)
+            ).fetchall()
+
+            st.write("USERS")
+
+            st.json([
+                str(u)
+                for u in users
+            ])
+
+        except Exception as e:
+            st.error(f"USER DEBUG FAILED: {e}")
+
+        try:
+            tenants = db.execute(
+                text("""
+                    SELECT
+                        id,
+                        name,
+                        is_active
+                    FROM tenants
+                    ORDER BY name
+                """)
+            ).fetchall()
+
+            st.write("TENANTS")
+
+            st.json([
+                str(t)
+                for t in tenants
+            ])
+
+        except Exception as e:
+            st.error(f"TENANT DEBUG FAILED: {e}")
+
+        try:
+            db_name = db.execute(
+                text("SELECT current_database()")
+            ).scalar()
+
+            st.write("POSTGRES DATABASE", db_name)
+
+        except Exception as e:
+            st.error(f"DB NAME FAILED: {e}")
+
+        try:
+            version = db.execute(
+                text("SELECT version()")
+            ).scalar()
+
+            st.write("POSTGRES VERSION")
+            st.code(version)
+
+        except Exception as e:
+            st.error(f"VERSION FAILED: {e}")
 
 
 
