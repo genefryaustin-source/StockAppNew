@@ -60,7 +60,11 @@ try:
     ).fetchall()
 
     st.sidebar.subheader("SQLALCHEMY DATABASE LIST")
+    count = db.execute(
+        text("SELECT COUNT(*) FROM users")
+    ).scalar()
 
+    st.sidebar.write("USER COUNT", count)
     for r in row:
         st.sidebar.write(str(r))
 
