@@ -153,6 +153,12 @@ safe_migration("""
 # 6. SAFE SEEDING (only after tables exist)
 # ============================================================
 _db_path = os.path.join(os.getcwd(), "stockapp.db")
+print("=" * 80)
+print("DB PATH:", _db_path)
+print("CWD:", os.getcwd())
+print("DB EXISTS:", os.path.exists(_db_path))
+print("DB SIZE:", os.path.getsize(_db_path) if os.path.exists(_db_path) else 0)
+print("=" * 80)
 _seed_path = os.path.join(os.getcwd(), "seed_data.sql")
 
 conn = sqlite3.connect(_db_path)
@@ -170,7 +176,16 @@ else:
     cur.execute("SELECT COUNT(*) FROM users")
     user_count = cur.fetchone()[0]
     conn.close()
+    conn = sqlite3.connect(_db_path)
+    cur = conn.cursor()
 
+    cur.execute("SELECT COUNT(*) FROM tenants")
+    print("TENANTS:", cur.fetchone()[0])
+
+    cur.execute("SELECT COUNT(*) FROM users")
+    print("USERS:", cur.fetchone()[0])
+
+    conn.close()
     if user_count == 0:
         print("[seeder] Seeding reference data...")
         try:
