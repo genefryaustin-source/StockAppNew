@@ -64,8 +64,8 @@ def enable_sqlite_wal(dbapi_connection, connection_record):
 
     cursor = dbapi_connection.cursor()
 
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA journal_mode=DELETE")
+    cursor.execute("PRAGMA synchronous=FULL")
     cursor.execute("PRAGMA busy_timeout=30000")
     cursor.execute("PRAGMA temp_store=MEMORY")
     cursor.execute("PRAGMA cache_size=10000")
