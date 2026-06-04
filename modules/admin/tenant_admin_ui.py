@@ -61,20 +61,36 @@ def render_tenant_admin_panel(db, user):
                     db.execute(sql_text("""
                         INSERT INTO portfolios (
                             id,
-                            name,
                             tenant_id,
-                            created_at
+                            name,
+                            description,
+                            benchmark,
+                            base_currency,
+                            starting_cash,
+                            is_active,
+                            created_at,
+                            updated_at
                         )
                         VALUES (
                             :id,
+                            :tenant_id,
                             :name,
-                            :tenant,
+                            :description,
+                            :benchmark,
+                            :base_currency,
+                            :starting_cash,
+                            1,
+                            CURRENT_TIMESTAMP,
                             CURRENT_TIMESTAMP
                         )
                     """), {
                         "id": str(uuid.uuid4()),
-                        "name": pname,
-                        "tenant": tenant_id,
+                        "tenant_id": tenant_id,
+                        "name": pname.strip(),
+                        "description": "",
+                        "benchmark": "SPY",
+                        "base_currency": "USD",
+                        "starting_cash": 100000.0,
                     })
                     db.commit()
                     st.success(f"Portfolio '{pname}' created.")
