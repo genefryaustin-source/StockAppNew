@@ -359,7 +359,7 @@ if DEV_MODE:
                     SELECT
                         id,
                         name,
-                        is_active
+                        created_at
                     FROM tenants
                     ORDER BY name
                 """)
