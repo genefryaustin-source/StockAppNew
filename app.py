@@ -278,6 +278,24 @@ if DEV_MODE:
         st.sidebar.write("DB PATH:", str(DB_PATH))
 
         db_list = db.execute(text("PRAGMA database_list")).fetchall()
+        wal_file = DB_PATH + "-wal"
+        shm_file = DB_PATH + "-shm"
+
+        st.sidebar.write("WAL EXISTS", os.path.exists(wal_file))
+
+        if os.path.exists(wal_file):
+            st.sidebar.write(
+                "WAL SIZE",
+                os.path.getsize(wal_file)
+            )
+
+        st.sidebar.write("SHM EXISTS", os.path.exists(shm_file))
+
+        if os.path.exists(shm_file):
+            st.sidebar.write(
+                "SHM SIZE",
+                os.path.getsize(shm_file)
+            )
         st.sidebar.write("DB LIST:", db_list)
 
         tenant_rows = db.execute(
