@@ -95,7 +95,7 @@ def render_tenant_admin_panel(db, user):
                             :benchmark,
                             :base_currency,
                             :starting_cash,
-                            1,
+                            TRUE,
                             CURRENT_TIMESTAMP,
                             CURRENT_TIMESTAMP
                         )

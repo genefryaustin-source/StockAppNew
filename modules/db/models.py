@@ -1,5 +1,14 @@
 import uuid
-from sqlalchemy import Column, String, DateTime, Integer
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Float,
+    DateTime,
+    ForeignKey,
+    Text,
+    Boolean,
+)
 from datetime import datetime, UTC
 
 from modules.db.core import Base
@@ -20,7 +29,7 @@ class Tenant(Base):
 
     name = Column(String)
 
-    is_active = Column(Integer, nullable=False, default=1)
+    is_active = Column(Boolean, nullable=False, default=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -45,4 +54,4 @@ class User(Base):
     password_hash = Column(String, nullable=True)
 
     # REQUIRED — your migrations add this
-    is_active = Column(Integer, nullable=False, default=1)
+    is_active = Column(Boolean, nullable=False, default=True)
