@@ -119,7 +119,7 @@ except Exception as e:
 try:
 
 
-    
+
 
     from modules.auth.login_ui import render_login
     from modules.help.help_ui import render_help
@@ -244,13 +244,13 @@ def temporary_bootstrap_admin(db):
     db.commit()
 
     print("BOOTSTRAP ADMIN CREATED")
-try:
-    temporary_bootstrap_admin(db)
-except Exception as e:
-    db.rollback()
+#try:
+    #temporary_bootstrap_admin(db)
+#except Exception as e:
+    #db.rollback()
 
-    st.error(str(e))
-    raise
+    #st.error(str(e))
+    #raise
 # ============================================================
 # AUTH GATE
 # ============================================================
