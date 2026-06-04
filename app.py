@@ -18,8 +18,7 @@ from modules.auth.login_ui import render_login
 VERSION = "2.4.0"
 
 st.set_page_config(page_title="Equity Research Terminal", layout="wide")
-if "user" not in st.session_state:
-    st.session_state["user"] = None
+
 # ============================================================
 # 0. DEV MODE FLAG (controls debug output)
 # ============================================================
@@ -161,7 +160,8 @@ safe_migration("""
 safe_migration("""
     ALTER TABLE tenants ADD COLUMN is_active INTEGER DEFAULT 1
 """, "ALTER TABLE tenants ADD COLUMN is_active")
-
+if "user" not in st.session_state:
+    st.session_state["user"] = None
 # ============================================================
 # 6. SYSTEM BOOTSTRAP
 # ============================================================
