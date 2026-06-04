@@ -10,6 +10,21 @@ from sqlalchemy.pool import StaticPool
 # Database URL
 # ---------------------------------------------------
 
+
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
+
+DB_PATH = os.path.join(DATA_DIR, "stockapp.db")
+DB_URL = f"sqlite:///{DB_PATH}"
+
+print("=" * 80)
+print("DATA DIR EXISTS:", os.path.exists(DATA_DIR))
+print("DB PATH:", DB_PATH)
+print("ABS DB PATH:", os.path.abspath(DB_PATH))
+print("=" * 80)
+
+
+
 DB_PATH = "data/stockapp.db"
 
 DB_URL = f"sqlite:///{DB_PATH}"
