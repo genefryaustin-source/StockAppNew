@@ -9,7 +9,7 @@ class TenantService:
 
     def list_tenants(self):
         rows = self.db.execute(text("""
-            SELECT id, name, is_active, created_at
+            SELECT id, name, created_at
             FROM tenants
             ORDER BY name
         """)).fetchall()
@@ -18,8 +18,7 @@ class TenantService:
             {
                 "id": r[0],
                 "name": r[1],
-                "is_active": r[2],
-                "created_at": r[3],
+                "created_at": r[2],
             }
             for r in rows
         ]
