@@ -346,7 +346,7 @@ if DEV_MODE:
 
         st.sidebar.write("UNIVERSES", universe_count)
 
-   
+
 
         st.sidebar.write("CWD", os.getcwd())
 

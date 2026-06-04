@@ -99,6 +99,23 @@ def init_database():
     import models.trading
 
     # Create all tables from models first
+
+    print("=" * 80)
+    print("PRE-ENGINE CHECK")
+    print("DB EXISTS:", os.path.exists(DB_PATH))
+
+    if os.path.exists(DB_PATH):
+        print("DB SIZE:", os.path.getsize(DB_PATH))
+
+        with open(DB_PATH, "rb") as f:
+            import hashlib
+            print(
+                "DB SHA256:",
+                hashlib.sha256(f.read()).hexdigest()[:16]
+            )
+
+    print("=" * 80)
+
     Base.metadata.create_all(bind=engine)
     print("=" * 80)
     print("REGISTERED TABLES")
