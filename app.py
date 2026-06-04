@@ -13,10 +13,13 @@ import sys
 import sqlite3
 import matplotlib
 
+from modules.auth.login_ui import render_login
+
 VERSION = "2.4.0"
 
 st.set_page_config(page_title="Equity Research Terminal", layout="wide")
-
+if "user" not in st.session_state:
+    st.session_state["user"] = None
 # ============================================================
 # 0. DEV MODE FLAG (controls debug output)
 # ============================================================
@@ -253,7 +256,12 @@ if DEV_MODE:
 
 
 
-user = st.session_state.user
+user = st.session_state.get("user")
+
+if user is None:
+    render_login()
+    st.stop()
+
 
 # ============================================================
 # 9. SESSION TIMEOUT
