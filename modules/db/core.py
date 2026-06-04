@@ -125,15 +125,3 @@ def init_database():
             #except Exception:
                 #pass
 
-# ---------------------------------------------------
-# UTC Helper
-# ---------------------------------------------------
-
-@event.listens_for(engine, "connect")
-def set_sqlite_utc(dbapi_connection, connection_record):
-
-    dbapi_connection.create_function(
-        "utcnow",
-        0,
-        lambda: datetime.now(UTC).isoformat()
-    )
