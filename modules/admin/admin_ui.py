@@ -176,29 +176,14 @@ def render_admin_panel(db, user):
         # ---------------------------------------------------------
         # USER LIST
         # ---------------------------------------------------------
+        st.divider()
+        st.subheader("Users")
 
-        if role == "super_admin":
-
-            rows = db.execute(text("""
-                SELECT *
-                FROM users
-                WHERE tenant_id = :tenant
-                ORDER BY email
-            """), {
-                "tenant": tenant_id
-            }).fetchall()
-
-        else:
-
-            rows = db.execute(text("""
-                SELECT *
-                FROM users
-                WHERE tenant_id = :tenant
-                  AND role <> 'super_admin'
-                ORDER BY email
-            """), {
-                "tenant": tenant_id
-            }).fetchall()
+        rows = db.execute(text("""
+            SELECT *
+            FROM users
+            WHERE tenant_id = :tenant
+        """), {"tenant": tenant_id}).fetchall()
 
         if not rows:
             st.info("No users found.")

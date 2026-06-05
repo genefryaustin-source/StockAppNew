@@ -202,12 +202,36 @@ def render_tenant_admin_panel(db, user):
         st.divider()
         st.subheader("Tenant Users")
 
-        user_rows = db.execute(sql_text("""
-            SELECT id, email, role, is_active
-            FROM users
-            WHERE tenant_id = :tenant
-            ORDER BY email
-        """), {"tenant": tenant_id}).fetchall()
+        if role == "super_admin":
+
+            user_rows = db.execute(sql_text("""
+                SELECT
+                    id,
+                    email,
+                    role,
+                    is_active
+                FROM users
+                WHERE tenant_id = :tenant
+                ORDER BY email
+            """), {
+                "tenant": tenant_id
+            }).fetchall()
+
+        else:
+
+            user_rows = db.execute(sql_text("""
+                SELECT
+                    id,
+                    email,
+                    role,
+                    is_active
+                FROM users
+                WHERE tenant_id = :tenant
+                  AND role <> 'super_admin'
+                ORDER BY email
+            """), {
+                "tenant": tenant_id
+            }).fetchall()
 
         if not user_rows:
             st.info("No users yet.")
