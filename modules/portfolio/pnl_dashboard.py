@@ -19,15 +19,15 @@ from modules.market_data.service import get_price_history
 def _table_exists(db, table_name: str) -> bool:
     try:
         row = db.execute(
-            text(
-                """
-                SELECT name
-                FROM sqlite_master
-                WHERE type='table' AND name=:table_name
-                """
-            ),
+            text("""
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name = :table_name
+            """),
             {"table_name": table_name},
         ).fetchone()
+
         return row is not None
     except Exception as e:
         print(f"PNL DASHBOARD table_exists error for {table_name}: {e}")
