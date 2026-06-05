@@ -475,6 +475,14 @@ def _build_normalized_comparison(equity_curve: pd.DataFrame, benchmark_curve: pd
 # ---------------------------------------------------------
 
 def render_pnl_dashboard(db_session, portfolio_id: str):
+    try:
+        db_session.rollback()
+    except Exception:
+        pass
+
+    st.write("🔥 PNL DASHBOARD CALLED")
+
+    
     # ---------------------------------
     # ✅ PREVENT DOUBLE RENDER PER RUN
     # ---------------------------------
