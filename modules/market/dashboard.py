@@ -20,64 +20,71 @@ def render_market_dashboard(db):
     st.divider()
 
     st.subheader("Top Movers")
+    from sqlalchemy import text
+    import pandas as pd
 
+    rows = db.execute(text("""
+    WITH ranked AS (
+        SELECT
+            symbol,
+            date,
+            close,
+            ROW_NUMBER() OVER (
+                PARTITION BY symbol
+                ORDER BY date DESC
+            ) AS rn
+        FROM price_history
+        WHERE symbol IN (
+            'AAPL','MSFT','NVDA','AMZN','META',
+            'GOOGL','TSLA','JPM','XOM','AVGO'
+        )
+    )
+    SELECT
+        c.symbol,
+        c.close AS current_price,
+        p.close AS previous_price
+    FROM ranked c
+    JOIN ranked p
+        ON c.symbol = p.symbol
+    WHERE c.rn = 1
+      AND p.rn = 2
+    """)).fetchall()
 
+    rows_out = []
 
-    from modules.market_data.service import get_price_history
+    for r in rows:
 
-    price_cache = {}
-
-    for sym in MARKET_UNIVERSE:
-        try:
-            df = get_price_history(db, sym, period="1mo")
-
-            if df is not None and not df.empty:
-
-                col = None
-                for c in ["close", "Close", "adj_close", "Adj Close"]:
-                    if c in df.columns:
-                        col = c
-                        break
-
-                if col:
-                    price_cache[sym] = df[col]
-                else:
-                    print(f"⚠️ No price column for {sym}: {df.columns}")
-
-        except Exception as e:
-            print(f"Market data error for {sym}:", e)
-
-    print("🔥 PRICE CACHE SIZE:", len(price_cache))
-
-    rows = []
-
-    for ticker, series in price_cache.items():
-
-        if series is None or len(series) < 2:
+        if not r.previous_price:
             continue
 
-        last_px = float(series.iloc[-1])
-        prev_px = float(series.iloc[-2])
+        change_pct = (
+                             (float(r.current_price) - float(r.previous_price))
+                             / float(r.previous_price)
+                     ) * 100.0
 
-        if prev_px == 0:
-            continue
-
-        change_pct = ((last_px / prev_px) - 1.0) * 100
-
-        rows.append({
-            "Ticker": ticker,
-            "Price": last_px,
-            "Change %": change_pct,
+        rows_out.append({
+            "Ticker": r.symbol,
+            "Price": round(float(r.current_price), 2),
+            "Change %": round(change_pct, 2),
         })
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows_out)
 
     if df.empty:
-        st.warning("Market data unavailable.")
+        st.warning("No market history available.")
         return
 
-    gainers = df.sort_values("Change %", ascending=False).head(10)
-    losers = df.sort_values("Change %", ascending=True).head(10)
+    gainers = df.sort_values(
+        "Change %",
+        ascending=False
+    ).head(10)
+
+    losers = df.sort_values(
+        "Change %",
+        ascending=True
+    ).head(10)
+
+    
 
     col1, col2 = st.columns(2)
 
