@@ -3,6 +3,7 @@ import pandas as pd
 from modules.market_data.service import get_price_history
 import numpy as np
 from modules.market.macro_dashboard import render_macro_dashboard
+from sqlalchemy import text
 
 MARKET_UNIVERSE = [
     "AAPL","MSFT","NVDA","AMZN","META",
@@ -20,35 +21,27 @@ def render_market_dashboard(db):
     st.divider()
 
     st.subheader("Top Movers")
-    from sqlalchemy import text
-    import pandas as pd
 
-    rows = db.execute(text("""
-    WITH ranked AS (
-        SELECT
-            symbol,
-            date,
-            close,
-            ROW_NUMBER() OVER (
-                PARTITION BY symbol
-                ORDER BY date DESC
-            ) AS rn
-        FROM price_history
-        WHERE symbol IN (
-            'AAPL','MSFT','NVDA','AMZN','META',
-            'GOOGL','TSLA','JPM','XOM','AVGO'
-        )
-    )
-    SELECT
-        c.symbol,
-        c.close AS current_price,
-        p.close AS previous_price
-    FROM ranked c
-    JOIN ranked p
-        ON c.symbol = p.symbol
-    WHERE c.rn = 1
-      AND p.rn = 2
-    """)).fetchall()
+
+
+
+    try:
+
+        count = db.execute(
+            text("SELECT COUNT(*) FROM price_history")
+        ).scalar()
+
+        st.write("PRICE HISTORY ROWS:", count)
+
+    except Exception as e:
+
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+        st.error(f"PRICE HISTORY ERROR: {repr(e)}")
+        st.stop()
 
     rows_out = []
 
@@ -84,7 +77,7 @@ def render_market_dashboard(db):
         ascending=True
     ).head(10)
 
-    
+
 
     col1, col2 = st.columns(2)
 
