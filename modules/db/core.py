@@ -94,8 +94,12 @@ def init_database():
             print("USERS:", user_count)
             print("=" * 80)
 
+
     except Exception as e:
-        print("DATABASE CONTENT CHECK FAILED:", e)
+
+        db.rollback()
+
+        st.error(...)
 
 
 
