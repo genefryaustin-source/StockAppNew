@@ -21,6 +21,12 @@ CREDIT_SERIES = {
     "IG OAS": "BAMLC0A0CM",
 }
 
+INFLATION_SERIES = {
+    "CPI": "CPIAUCSL",
+    "5Y Breakeven": "T5YIE",
+    "10Y Breakeven": "T10YIE",
+}
+
 YAHOO_YIELD_FALLBACKS = {
     "3M": "^IRX",
     "5Y": "^FVX",
@@ -28,9 +34,9 @@ YAHOO_YIELD_FALLBACKS = {
     "30Y": "^TYX",
 }
 
-FRED_TIMEOUT_SECONDS = 5
-YAHOO_TIMEOUT_SECONDS = 5
-MAX_WORKERS = 8
+FRED_TIMEOUT_SECONDS = 8
+YAHOO_TIMEOUT_SECONDS = 8
+MAX_WORKERS = 6
 
 
 def _safe_float(value):
@@ -58,17 +64,37 @@ def _latest_non_null(df, col):
     return float(values.iloc[-1])
 
 
-@st.cache_data(ttl=60 * 60, show_spinner=False)
-def _load_fred_series(series_id: str) -> pd.DataFrame:
-    empty = pd.DataFrame(columns=["Date", "Value"])
+def _empty_fred_df() -> pd.DataFrame:
+    return pd.DataFrame(columns=["Date", "Value"])
+
+
+def _empty_yahoo_df() -> pd.DataFrame:
+    return pd.DataFrame(columns=["Date", "Close"])
+
+
+def _fetch_fred_series_raw(series_id: str) -> pd.DataFrame:
+    """
+    Raw FRED fetch used inside worker threads.
+
+    Important:
+    This function is intentionally NOT decorated with st.cache_data because
+    Streamlit cache calls from worker threads can produce incomplete / empty
+    results in deployed apps.
+    """
+    empty = _empty_fred_df()
 
     try:
         import requests
         from io import StringIO
 
+        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+
         response = requests.get(
-            f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
-            headers={"User-Agent": "StockApp/1.0", "Accept": "text/csv,*/*"},
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 StockApp",
+                "Accept": "text/csv,text/plain,*/*",
+            },
             timeout=FRED_TIMEOUT_SECONDS,
         )
 
@@ -90,16 +116,24 @@ def _load_fred_series(series_id: str) -> pd.DataFrame:
         return empty
 
 
-@st.cache_data(ttl=15 * 60, show_spinner=False)
-def _load_yahoo_history(symbol: str, period: str = "1y") -> pd.DataFrame:
-    empty = pd.DataFrame(columns=["Date", "Close"])
+def _fetch_yahoo_history_raw(symbol: str, period: str = "1y") -> pd.DataFrame:
+    """
+    Raw Yahoo chart fetch used inside worker threads.
+    """
+    empty = _empty_yahoo_df()
 
     try:
         import requests
         import time as _time
         import urllib.parse
 
-        period_map = {"3mo": 90, "6mo": 180, "1y": 365, "2y": 730}
+        period_map = {
+            "3mo": 90,
+            "6mo": 180,
+            "1y": 365,
+            "2y": 730,
+        }
+
         days = period_map.get(period, 365)
         end_ts = int(_time.time())
         start_ts = end_ts - days * 86400
@@ -155,14 +189,17 @@ def _parallel_load_fred(series_ids: list[str]) -> dict[str, pd.DataFrame]:
         return results
 
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(unique_ids))) as executor:
-        future_map = {executor.submit(_load_fred_series, sid): sid for sid in unique_ids}
+        future_map = {
+            executor.submit(_fetch_fred_series_raw, series_id): series_id
+            for series_id in unique_ids
+        }
 
         for future in as_completed(future_map):
-            sid = future_map[future]
+            series_id = future_map[future]
             try:
-                results[sid] = future.result()
+                results[series_id] = future.result()
             except Exception:
-                results[sid] = pd.DataFrame(columns=["Date", "Value"])
+                results[series_id] = _empty_fred_df()
 
     return results
 
@@ -176,7 +213,7 @@ def _parallel_load_yahoo(requests_: list[tuple[str, str]]) -> dict[tuple[str, st
 
     with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(unique_requests))) as executor:
         future_map = {
-            executor.submit(_load_yahoo_history, symbol, period): (symbol, period)
+            executor.submit(_fetch_yahoo_history_raw, symbol, period): (symbol, period)
             for symbol, period in unique_requests
         }
 
@@ -185,7 +222,7 @@ def _parallel_load_yahoo(requests_: list[tuple[str, str]]) -> dict[tuple[str, st
             try:
                 results[key] = future.result()
             except Exception:
-                results[key] = pd.DataFrame(columns=["Date", "Close"])
+                results[key] = _empty_yahoo_df()
 
     return results
 
@@ -197,7 +234,10 @@ def _yield_from_yahoo_history(hist: pd.DataFrame):
     return value / 10.0 if value > 20 else value
 
 
-def _build_yield_curve(fred_data: dict[str, pd.DataFrame], yahoo_data: dict[tuple[str, str], pd.DataFrame]) -> pd.DataFrame:
+def _build_yield_curve(
+    fred_data: dict[str, pd.DataFrame],
+    yahoo_data: dict[tuple[str, str], pd.DataFrame],
+) -> pd.DataFrame:
     rows = []
 
     for tenor, series_id in YIELD_SERIES.items():
@@ -207,7 +247,7 @@ def _build_yield_curve(fred_data: dict[str, pd.DataFrame], yahoo_data: dict[tupl
         if value is None and tenor in YAHOO_YIELD_FALLBACKS:
             fallback_symbol = YAHOO_YIELD_FALLBACKS[tenor]
             value = _yield_from_yahoo_history(
-                yahoo_data.get((fallback_symbol, "6mo"), pd.DataFrame())
+                yahoo_data.get((fallback_symbol, "6mo"), _empty_yahoo_df())
             )
             source = "Yahoo fallback"
 
@@ -220,11 +260,14 @@ def _build_yield_curve(fred_data: dict[str, pd.DataFrame], yahoo_data: dict[tupl
     return pd.DataFrame(rows)
 
 
-def _build_fred_metric_map(series_map: dict[str, str], fred_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
+def _build_fred_metric_map(
+    series_map: dict[str, str],
+    fred_data: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
     rows = []
 
     for label, series_id in series_map.items():
-        df = fred_data.get(series_id, pd.DataFrame(columns=["Date", "Value"]))
+        df = fred_data.get(series_id, _empty_fred_df())
         latest = _latest_non_null(df, "Value")
         prev = _latest_non_null(df.iloc[:-21], "Value") if len(df) > 21 else None
 
@@ -239,7 +282,7 @@ def _build_fred_metric_map(series_map: dict[str, str], fred_data: dict[str, pd.D
 
 
 def _build_cpi_yoy(fred_data: dict[str, pd.DataFrame]):
-    cpi = fred_data.get("CPIAUCSL", pd.DataFrame(columns=["Date", "Value"]))
+    cpi = fred_data.get("CPIAUCSL", _empty_fred_df())
 
     if cpi.empty or len(cpi) < 13:
         return None
@@ -251,11 +294,19 @@ def _build_cpi_yoy(fred_data: dict[str, pd.DataFrame]):
 
 
 def _build_vix_term_structure(yahoo_data: dict[tuple[str, str], pd.DataFrame]) -> pd.DataFrame:
-    tickers = {"VIX": "^VIX", "VIX 3M": "^VIX3M", "VIX 6M": "^VIX6M"}
+    tickers = {
+        "VIX": "^VIX",
+        "VIX 3M": "^VIX3M",
+        "VIX 6M": "^VIX6M",
+    }
+
     rows = []
 
     for label, symbol in tickers.items():
-        value = _latest_non_null(yahoo_data.get((symbol, "3mo"), pd.DataFrame()), "Close")
+        value = _latest_non_null(
+            yahoo_data.get((symbol, "3mo"), _empty_yahoo_df()),
+            "Close",
+        )
         rows.append({"Contract": label, "Value": value})
 
     return pd.DataFrame(rows)
@@ -274,7 +325,7 @@ def _build_proxy_price_metrics(yahoo_data: dict[tuple[str, str], pd.DataFrame]) 
     rows = []
 
     for symbol, label in proxies.items():
-        hist = yahoo_data.get((symbol, "6mo"), pd.DataFrame(columns=["Date", "Close"]))
+        hist = yahoo_data.get((symbol, "6mo"), _empty_yahoo_df())
         latest = _latest_non_null(hist, "Close")
         prev = _latest_non_null(hist.iloc[:-21], "Close") if len(hist) > 21 else None
 
@@ -370,6 +421,7 @@ def _yield_curve_chart(yield_df):
             y=plot_df["Yield"],
             mode="lines+markers",
             name="Current Yield",
+            line={"color": "#1f77b4", "width": 2.5},
         )
     )
 
@@ -417,6 +469,11 @@ def _bar_chart(df, x_col, y_col, title, y_suffix="", color_positive=True):
 
 @st.cache_data(ttl=30 * 60, show_spinner=False)
 def _load_macro_snapshot() -> dict:
+    """
+    Load all macro data concurrently and cache the completed snapshot.
+
+    The raw worker functions are intentionally not Streamlit cached.
+    """
     fred_ids = list(YIELD_SERIES.values())
     fred_ids += list(CREDIT_SERIES.values())
     fred_ids += ["T5YIE", "T10YIE", "CPIAUCSL", "FEDFUNDS"]
@@ -442,7 +499,13 @@ def _load_macro_snapshot() -> dict:
 
     yield_df = _build_yield_curve(fred_data, yahoo_data)
     credit_df = _build_fred_metric_map(CREDIT_SERIES, fred_data)
-    inflation_df = _build_fred_metric_map({"5Y Breakeven": "T5YIE", "10Y Breakeven": "T10YIE"}, fred_data)
+    inflation_df = _build_fred_metric_map(
+        {
+            "5Y Breakeven": "T5YIE",
+            "10Y Breakeven": "T10YIE",
+        },
+        fred_data,
+    )
     inflation_yoy = _build_cpi_yoy(fred_data)
     fed_df = _build_fred_metric_map({"Effective Fed Funds": "FEDFUNDS"}, fred_data)
     vix_df = _build_vix_term_structure(yahoo_data)
@@ -459,10 +522,27 @@ def _load_macro_snapshot() -> dict:
         "vix_df": vix_df,
         "proxy_df": proxy_df,
         "regime": regime,
+        "fred_loaded": {
+            key: not value.empty
+            for key, value in fred_data.items()
+        },
+        "yahoo_loaded": {
+            f"{key[0]}:{key[1]}": not value.empty
+            for key, value in yahoo_data.items()
+        },
     }
 
 
 def render_macro_dashboard(db=None):
+    """
+    Macro Dashboard.
+
+    HTTP fetches are:
+    - deferred behind a button
+    - cached as one aggregate snapshot
+    - loaded concurrently
+    - bounded by short request timeouts
+    """
     st.subheader("🌍 Macro Dashboard")
     st.caption(
         "Yield curve · Credit spreads · Inflation · VIX term structure · "
@@ -473,10 +553,18 @@ def render_macro_dashboard(db=None):
         col_btn, col_note = st.columns([1, 4])
 
         with col_btn:
-            load_btn = st.button("📡 Load Macro Data", type="primary", key="macro_load_btn", use_container_width=True)
+            load_btn = st.button(
+                "📡 Load Macro Data",
+                type="primary",
+                key="macro_load_btn",
+                use_container_width=True,
+            )
 
         with col_note:
-            st.info("Click to load macro data. Data is fetched on demand, cached, and loaded concurrently.")
+            st.info(
+                "Click to load macro data. Data is fetched on demand, cached, "
+                "and loaded concurrently to keep the rest of the app fast."
+            )
 
         if not load_btn:
             return
@@ -489,8 +577,6 @@ def render_macro_dashboard(db=None):
         if st.button("↺ Refresh", key="macro_refresh"):
             st.session_state["macro_loaded"] = False
             try:
-                _load_fred_series.clear()
-                _load_yahoo_history.clear()
                 _load_macro_snapshot.clear()
             except Exception:
                 pass
@@ -530,15 +616,29 @@ def render_macro_dashboard(db=None):
     with tab_curve:
         if yield_df["Yield"].notna().any():
             st.plotly_chart(_yield_curve_chart(yield_df), use_container_width=True)
+
         st.dataframe(
-            yield_df.style.format({"Yield": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}%"}),
+            yield_df.style.format({
+                "Yield": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}%"
+            }),
             use_container_width=True,
             hide_index=True,
         )
 
     with tab_credit:
         if credit_df["Value"].notna().any():
-            st.plotly_chart(_bar_chart(credit_df, "Metric", "Value", "Credit Spreads", "%", color_positive=False), use_container_width=True)
+            st.plotly_chart(
+                _bar_chart(
+                    credit_df,
+                    "Metric",
+                    "Value",
+                    "Credit Spreads",
+                    "%",
+                    color_positive=False,
+                ),
+                use_container_width=True,
+            )
+
         st.dataframe(
             credit_df.style.format({
                 "Value": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}%",
@@ -557,7 +657,16 @@ def render_macro_dashboard(db=None):
             target.metric(row["Metric"], _fmt_pct(row["Value"]))
 
         if inflation_df["Value"].notna().any():
-            st.plotly_chart(_bar_chart(inflation_df, "Metric", "Value", "Inflation Expectations", "%"), use_container_width=True)
+            st.plotly_chart(
+                _bar_chart(
+                    inflation_df,
+                    "Metric",
+                    "Value",
+                    "Inflation Expectations",
+                    "%",
+                ),
+                use_container_width=True,
+            )
 
         st.dataframe(
             inflation_df.style.format({
@@ -570,23 +679,42 @@ def render_macro_dashboard(db=None):
 
     with tab_vol:
         fed_proxy_rows = pd.DataFrame([
-            {"Metric": "Effective Fed Funds", "Value": _safe_float(fed_df.iloc[0]["Value"]) if not fed_df.empty else None, "Readthrough": "Current policy-rate anchor"},
-            {"Metric": "10Y - 3M Curve", "Value": regime["10Y-3M"], "Readthrough": "Negative implies restrictive / recessionary pressure"},
-            {"Metric": "10Y - 2Y Curve", "Value": regime["10Y-2Y"], "Readthrough": "Positive steepening often supports cyclicals"},
+            {
+                "Metric": "Effective Fed Funds",
+                "Value": _safe_float(fed_df.iloc[0]["Value"]) if not fed_df.empty else None,
+                "Readthrough": "Current policy-rate anchor",
+            },
+            {
+                "Metric": "10Y - 3M Curve",
+                "Value": regime["10Y-3M"],
+                "Readthrough": "Negative implies restrictive / recessionary pressure",
+            },
+            {
+                "Metric": "10Y - 2Y Curve",
+                "Value": regime["10Y-2Y"],
+                "Readthrough": "Positive steepening often supports cyclicals",
+            },
         ])
 
         if vix_df["Value"].notna().any():
-            st.plotly_chart(_bar_chart(vix_df, "Contract", "Value", "VIX Term Structure", ""), use_container_width=True)
+            st.plotly_chart(
+                _bar_chart(vix_df, "Contract", "Value", "VIX Term Structure", ""),
+                use_container_width=True,
+            )
 
         st.dataframe(
-            vix_df.style.format({"Value": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}"}),
+            vix_df.style.format({
+                "Value": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}"
+            }),
             use_container_width=True,
             hide_index=True,
         )
 
         st.markdown("#### Fed Path Proxies")
         st.dataframe(
-            fed_proxy_rows.style.format({"Value": lambda v: "N/A" if pd.isna(v) else f"{v:+.2f} pts"}),
+            fed_proxy_rows.style.format({
+                "Value": lambda v: "N/A" if pd.isna(v) else f"{v:+.2f} pts"
+            }),
             use_container_width=True,
             hide_index=True,
         )
@@ -595,7 +723,17 @@ def render_macro_dashboard(db=None):
         if proxy_df["1M Change"].notna().any():
             plot_df = proxy_df.copy()
             plot_df["1M Change %"] = plot_df["1M Change"] * 100.0
-            st.plotly_chart(_bar_chart(plot_df, "Symbol", "1M Change %", "Macro Proxy 1M Performance", "%"), use_container_width=True)
+
+            st.plotly_chart(
+                _bar_chart(
+                    plot_df,
+                    "Symbol",
+                    "1M Change %",
+                    "Macro Proxy 1M Performance",
+                    "%",
+                ),
+                use_container_width=True,
+            )
 
         st.dataframe(
             proxy_df.style.format({
@@ -605,3 +743,9 @@ def render_macro_dashboard(db=None):
             use_container_width=True,
             hide_index=True,
         )
+
+    with st.expander("Macro data load diagnostics", expanded=False):
+        st.write("FRED series loaded")
+        st.json(snapshot.get("fred_loaded", {}))
+        st.write("Yahoo series loaded")
+        st.json(snapshot.get("yahoo_loaded", {}))
