@@ -181,7 +181,7 @@ def get_team_members(db, tenant_id: str) -> list[dict]:
         rows = db.execute(text("""
             SELECT id, email, role, created_at
             FROM users
-            WHERE tenant_id = :tid AND COALESCE(is_active, true) = true
+            WHERE tenant_id = :tid AND COALESCE(is_active, 1) = 1
             ORDER BY email
         """), {"tid": tenant_id}).fetchall()
         return [{"id": str(r[0]), "email": str(r[1]),

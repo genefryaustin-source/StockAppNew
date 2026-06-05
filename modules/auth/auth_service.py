@@ -22,7 +22,7 @@ def authenticate(db, email, password):
         SELECT *
         FROM users
         WHERE lower(trim(email)) = :email
-          AND COALESCE(is_active, true) = true
+          AND COALESCE(is_active, 1) = 1
         LIMIT 1
     """), {
         "email": email.lower().strip()
