@@ -22,7 +22,7 @@ def authenticate(db, email, password):
         SELECT *
         FROM users
         WHERE lower(trim(email)) = :email
-          AND COALESCE(is_active, 1) = 1
+          AND COALESCE(is_active, true) = true
         LIMIT 1
     """), {
         "email": email.lower().strip()
@@ -97,13 +97,13 @@ def list_users_for_scope(db, current_user: dict):
 
     if role == "super_admin":
         rows = db.execute(text("""
-            SELECT id, email, role, tenant_id, COALESCE(is_active, 1) AS is_active, created_at
+            SELECT id, email, role, tenant_id, COALESCE(is_active, true) AS is_active, created_at
             FROM users
             ORDER BY created_at DESC, email ASC
         """)).fetchall()
     elif role == "tenant_admin":
         rows = db.execute(text("""
-            SELECT id, email, role, tenant_id, COALESCE(is_active, 1) AS is_active, created_at
+            SELECT id, email, role, tenant_id, COALESCE(is_active, true) AS is_active, created_at
             FROM users
             WHERE tenant_id = :tenant_id
             ORDER BY created_at DESC, email ASC
@@ -116,7 +116,7 @@ def list_users_for_scope(db, current_user: dict):
 
 def get_user_by_id(db, user_id: str):
     row = db.execute(text("""
-        SELECT id, email, role, tenant_id, COALESCE(is_active, 1) AS is_active, created_at
+        SELECT id, email, role, tenant_id, COALESCE(is_active, true) AS is_active, created_at
         FROM users
         WHERE id = :user_id
         LIMIT 1

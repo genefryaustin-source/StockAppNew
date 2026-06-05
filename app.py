@@ -429,6 +429,7 @@ else:
         "Dashboard",
         "Watchlists",
         "Screener",
+        "Formula Builder",
         "Earnings",
         "Market Data",
         "Analytics",
@@ -544,6 +545,15 @@ elif page == "Screener":
         render_module_error("Screener", screener_mod)
     elif hasattr(screener_mod, "render_screener"):
         run_page("Screener", screener_mod.render_screener, db, user)
+
+elif page == "Formula Builder":
+    try:
+        from modules.screener.formula_ui import render_formula_page
+        run_page("Formula Builder", render_formula_page, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error(f"Formula Builder failed: {e}")
+        st.exception(e)
 
 elif page == "Earnings":
     if isinstance(earnings_mod, Exception):

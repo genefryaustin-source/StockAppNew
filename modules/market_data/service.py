@@ -613,11 +613,16 @@ def get_price_history_internal(
                     latency_ms=latency_ms,
                 )
 
-                _save_history_to_db(
-                    db,
-                    sym,
-                    df,
-                )
+                if interval == "1d":
+                    _save_history_to_db(
+                        db,
+                        sym,
+                        df,
+                    )
+                else:
+                    print(
+                        f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}"
+                    )
 
                 CACHE[cache_key] = df
 
@@ -665,7 +670,13 @@ def get_price_history_internal(
                     latency_ms=(time.time() - start_time) * 1000,
                 )
 
-                _save_history_to_db(db, sym, df)
+                if interval == "1d":
+                    _save_history_to_db(db, sym, df)
+                else:
+                    print(
+                        f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}"
+                    )
+
                 CACHE[cache_key] = df
                 return df
 
@@ -704,7 +715,13 @@ def get_price_history_internal(
                     latency_ms=(time.time() - start_time) * 1000,
                 )
 
-                _save_history_to_db(db, sym, df)
+                if interval == "1d":
+                    _save_history_to_db(db, sym, df)
+                else:
+                    print(
+                        f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}"
+                    )
+
                 CACHE[cache_key] = df
                 return df
 
@@ -741,7 +758,13 @@ def get_price_history_internal(
                     latency_ms=(time.time() - start_time) * 1000,
                 )
 
-                _save_history_to_db(db, sym, df)
+                if interval == "1d":
+                    _save_history_to_db(db, sym, df)
+                else:
+                    print(
+                        f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}"
+                    )
+
                 CACHE[cache_key] = df
                 return df
 
@@ -1135,6 +1158,13 @@ def _save_history_to_db(
     symbol: str,
     df: pd.DataFrame,
 ):
+    """
+    Persist normalized daily price history.
+
+    PostgreSQL price_history uses PRIMARY KEY (symbol, date), so this function
+    collapses intraday/provider duplicate rows down to one row per date before
+    attempting inserts or updates.
+    """
 
     if df is None or df.empty:
         return 0
@@ -1147,19 +1177,78 @@ def _save_history_to_db(
     rows_saved = 0
 
     try:
+        work_df = df.copy()
 
-        for _, row in df.iterrows():
+        if "Date" not in work_df.columns:
+            print("PRICE HISTORY SAVE SKIPPED - missing Date column:", sym)
+            return 0
 
+        # ---------------------------------------------------
+        # Normalize provider timestamps to daily dates
+        # ---------------------------------------------------
+        work_df["Date"] = pd.to_datetime(
+            work_df["Date"],
+            errors="coerce",
+        )
+
+        try:
+            if getattr(work_df["Date"].dt, "tz", None) is not None:
+                work_df["Date"] = work_df["Date"].dt.tz_convert(None)
+        except Exception:
             try:
+                work_df["Date"] = work_df["Date"].dt.tz_localize(None)
+            except Exception:
+                pass
 
-                dt = pd.to_datetime(
-                    row["Date"]
-                ).date()
+        work_df = work_df.dropna(subset=["Date"])
+
+        if work_df.empty:
+            return 0
+
+        # ---------------------------------------------------
+        # Ensure required numeric columns exist
+        # ---------------------------------------------------
+        for col in ["Open", "High", "Low", "Close", "Volume"]:
+            if col not in work_df.columns:
+                work_df[col] = 0.0
+
+            work_df[col] = pd.to_numeric(
+                work_df[col],
+                errors="coerce",
+            )
+
+        work_df = work_df.dropna(subset=["Close"])
+
+        if work_df.empty:
+            return 0
+
+        # ---------------------------------------------------
+        # Collapse intraday/provider duplicates to one row/day.
+        # ---------------------------------------------------
+        work_df["Date"] = work_df["Date"].dt.date
+        work_df = (
+            work_df
+            .sort_values("Date")
+            .groupby("Date", as_index=False)
+            .agg({
+                "Open": "first",
+                "High": "max",
+                "Low": "min",
+                "Close": "last",
+                "Volume": "sum",
+            })
+        )
+
+        # ---------------------------------------------------
+        # Upsert row-by-row through ORM to preserve compatibility
+        # with the existing SQLAlchemy model/session setup.
+        # ---------------------------------------------------
+        for _, row in work_df.iterrows():
+            try:
+                dt = row["Date"]
 
                 existing = (
-                    db.query(
-                        PriceHistory
-                    )
+                    db.query(PriceHistory)
                     .filter(
                         PriceHistory.symbol == sym,
                         PriceHistory.date == dt,
@@ -1167,64 +1256,35 @@ def _save_history_to_db(
                     .first()
                 )
 
+                open_value = float(row["Open"] or 0.0)
+                high_value = float(row["High"] or 0.0)
+                low_value = float(row["Low"] or 0.0)
+                close_value = float(row["Close"] or 0.0)
+                volume_value = float(row["Volume"] or 0.0)
+
                 if existing:
-
-                    existing.open = float(
-                        row["Open"]
-                    )
-
-                    existing.high = float(
-                        row["High"]
-                    )
-
-                    existing.low = float(
-                        row["Low"]
-                    )
-
-                    existing.close = float(
-                        row["Close"]
-                    )
-
-                    existing.volume = float(
-                        row["Volume"]
-                    )
+                    existing.open = open_value
+                    existing.high = high_value
+                    existing.low = low_value
+                    existing.close = close_value
+                    existing.volume = volume_value
 
                 else:
-
                     db.add(
-
                         PriceHistory(
-
                             symbol=sym,
-
                             date=dt,
-
-                            open=float(
-                                row["Open"]
-                            ),
-
-                            high=float(
-                                row["High"]
-                            ),
-
-                            low=float(
-                                row["Low"]
-                            ),
-
-                            close=float(
-                                row["Close"]
-                            ),
-
-                            volume=float(
-                                row["Volume"]
-                            ),
+                            open=open_value,
+                            high=high_value,
+                            low=low_value,
+                            close=close_value,
+                            volume=volume_value,
                         )
                     )
 
                 rows_saved += 1
 
             except Exception as row_error:
-
                 print(
                     "PRICE ROW SAVE ERROR:",
                     sym,
@@ -1239,8 +1299,10 @@ def _save_history_to_db(
         )
 
     except Exception as e:
-
-        #db.rollback()
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
         print(
             "PRICE HISTORY SAVE ERROR:",
