@@ -200,6 +200,17 @@ def render_admin_panel(db, user):
                 "tenant": tenant_id
             }).fetchall()
 
+        if not rows:
+            st.info("No users found.")
+        else:
+            df = pd.DataFrame([dict(r._mapping) for r in rows])
+
+            st.dataframe(
+                df.copy(),
+                use_container_width=True,
+                hide_index=True,
+            )
+
             # ---------------------------------------------------------
             # USER MANAGEMENT
             # ---------------------------------------------------------
