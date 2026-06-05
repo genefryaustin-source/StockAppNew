@@ -1221,6 +1221,7 @@ def _render_dcf_builder(db, tenant_id, symbol, price_df=None):
 
 
 def _render_snapshot(snapshot):
+
     if not snapshot:
         st.warning("No analytics snapshot found for this symbol.")
         return

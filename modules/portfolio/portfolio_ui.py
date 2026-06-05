@@ -311,8 +311,8 @@ def render_portfolio_ui(db_session, user, market_data_service):
             # ---------------------------------
             df_pos = pd.read_sql("""
                 SELECT symbol, qty, market_value
-                FROM portfolio_positions
-                WHERE portfolio_id = :pid
+                    FROM portfolio_positions
+                    WHERE portfolio_id = :pid
             """, db_session.bind, params={"pid": portfolio_id})
 
             if df_pos.empty:
