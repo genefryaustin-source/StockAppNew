@@ -83,3 +83,5 @@ urllib3==2.7.0
 watchdog==6.0.0
 wheel==0.47.0
 yfinance==0.2.54
+
+scipy>=1.11.0

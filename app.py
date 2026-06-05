@@ -199,8 +199,8 @@ if DEV_MODE:
     except Exception as e:
         st.sidebar.error(f"DEBUG FAILED: {e}")
 
-    try:
-        st.sidebar.write("DATABASE", db_scalar("SELECT current_database()"))
+    #try:
+        # st.sidebar.write("DATABASE", db_scalar("SELECT current_database()"))
     except Exception as e:
         st.sidebar.error(f"DB NAME FAILED: {e}")
 
@@ -369,8 +369,8 @@ if DEV_MODE:
         except Exception as e:
             st.error(f"TENANT DEBUG FAILED: {e}")
 
-        try:
-            st.write("POSTGRES DATABASE", db_scalar("SELECT current_database()"))
+        #try:
+            # st.write("POSTGRES DATABASE", db_scalar("SELECT current_database()"))
         except Exception as e:
             st.error(f"DB NAME FAILED: {e}")
 
@@ -453,6 +453,7 @@ else:
         "AI Scanner",
         "AI Agent",
         "Options Flow",
+        "Options Trading",
         "Analyst Consensus",
         "Smart Money",
         "Export / Sheets",
@@ -735,6 +736,15 @@ elif page == "AI Agent":
     except Exception as e:
         safe_rollback(db)
         st.error("AI Agent failed.")
+        st.exception(e)
+
+elif page == "Options Trading":
+    try:
+        from modules.options.options_ui import render_options_trading_page
+        run_page("Options Trading", render_options_trading_page, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error(f"Options Trading failed: {e}")
         st.exception(e)
 
 elif page == "Options Flow":
