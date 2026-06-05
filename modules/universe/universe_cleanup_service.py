@@ -35,16 +35,25 @@ class UniverseCleanupService:
     # -------------------------------------------------
     # UNIVERSES
     # -------------------------------------------------
-    def get_universes(self):
-        rows = self.db.execute(text("""
-            SELECT
-                id,
-                name
-            FROM universes
-            ORDER BY name
-        """)).fetchall()
+    def get_universes(self, tenant_id: str):
+        rows = self.db.execute(
+            text("""
+                SELECT
+                    id,
+                    name
+                FROM universes
+                WHERE tenant_id = :tenant_id
+                ORDER BY name
+            """),
+            {
+                "tenant_id": tenant_id,
+            }
+        ).fetchall()
 
-        return pd.DataFrame(rows, columns=["id", "name"])
+        return pd.DataFrame(
+            rows,
+            columns=["id", "name"]
+        )
 
     # -------------------------------------------------
     # SYMBOLS

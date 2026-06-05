@@ -18,7 +18,14 @@ def render_universe_cleanup_ui(db):
 
     service = UniverseCleanupService(db)
 
-    universes_df = service.get_universes()
+    tenant_id = st.session_state.get(
+        "tenant_id",
+        "default_tenant"
+    )
+
+    universes_df = service.get_universes(
+        tenant_id=tenant_id
+    )
 
     if universes_df.empty:
         st.warning("No universes found.")
