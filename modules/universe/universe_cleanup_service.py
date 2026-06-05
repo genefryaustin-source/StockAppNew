@@ -5,27 +5,29 @@ import pandas as pd
 from sqlalchemy import text
 
 from modules.universe.symbol_validator import (
-    normalize_symbol,
-    validate_symbol,
+normalize_symbol,
+validate_symbol,
 )
 
-
 class UniverseCleanupService:
+
 
     def __init__(self, db):
 
         self.db = db
-
+    
         self._ensure_tables()
 
-    # -------------------------------------------------
-    # TABLES
-    # -------------------------------------------------
-    def _ensure_tables(self):
+# -------------------------------------------------
+# TABLES
+# -------------------------------------------------
+def _ensure_tables(self):
+
+    try:
 
         self.db.execute(text("""
             CREATE TABLE IF NOT EXISTS symbol_blacklist (
-                symbol TEXT PRIMARY KEY,
+                symbol VARCHAR(32) PRIMARY KEY,
                 reason TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -33,54 +35,60 @@ class UniverseCleanupService:
 
         self.db.commit()
 
-    # -------------------------------------------------
-    # UNIVERSES
-    # -------------------------------------------------
-    def get_universes(self):
+    except Exception:
+        self.db.rollback()
+        raise
 
-        rows = self.db.execute(text("""
-            SELECT
-                id,
-                name
-            FROM universes
-            ORDER BY name
-        """)).fetchall()
+# -------------------------------------------------
+# UNIVERSES
+# -------------------------------------------------
+def get_universes(self):
 
-        return pd.DataFrame(rows, columns=[
-            "id",
-            "name",
-        ])
+    rows = self.db.execute(text("""
+        SELECT
+            id,
+            name
+        FROM universes
+        ORDER BY name
+    """)).fetchall()
 
-    # -------------------------------------------------
-    # SYMBOLS
-    # -------------------------------------------------
-    def get_universe_symbols(self, universe_id: str):
+    return pd.DataFrame(rows, columns=[
+        "id",
+        "name",
+    ])
 
-        rows = self.db.execute(text("""
-            SELECT
-                symbol
-            FROM universe_symbols
-            WHERE universe_id = :uid
-            ORDER BY symbol
-        """), {
-            "uid": universe_id,
-        }).fetchall()
+# -------------------------------------------------
+# SYMBOLS
+# -------------------------------------------------
+def get_universe_symbols(self, universe_id: str):
 
-        return pd.DataFrame(rows, columns=["symbol"])
+    rows = self.db.execute(text("""
+        SELECT
+            symbol
+        FROM universe_symbols
+        WHERE universe_id = :uid
+        ORDER BY symbol
+    """), {
+        "uid": universe_id,
+    }).fetchall()
 
-    # -------------------------------------------------
-    # DELETE SYMBOL
-    # -------------------------------------------------
-    def delete_symbol(
-            self,
-            universe_id: str,
-            symbol: str,
-            purge_snapshots: bool = True,
-            blacklist: bool = False,
-            reason: str = "Manual cleanup",
-    ):
+    return pd.DataFrame(rows, columns=["symbol"])
 
-        sym = normalize_symbol(symbol)
+# -------------------------------------------------
+# DELETE SYMBOL
+# -------------------------------------------------
+def delete_symbol(
+        self,
+        universe_id: str,
+        symbol: str,
+        purge_snapshots: bool = True,
+        blacklist: bool = False,
+        reason: str = "Manual cleanup",
+):
+
+    sym = normalize_symbol(symbol)
+
+    try:
 
         self.db.execute(text("""
             DELETE FROM universe_symbols
@@ -95,24 +103,31 @@ class UniverseCleanupService:
 
         if purge_snapshots:
 
-            deleted_snapshots = self.db.execute(text("""
-                DELETE FROM analytics_snapshots
+            result = self.db.execute(text("""
+                DELETE
+                FROM analytics_snapshots
                 WHERE UPPER(symbol) = :sym
             """), {
                 "sym": sym,
-            }).rowcount
+            })
+
+            deleted_snapshots = result.rowcount or 0
 
         if blacklist:
 
             self.db.execute(text("""
-                INSERT OR IGNORE INTO symbol_blacklist (
+                INSERT INTO symbol_blacklist
+                (
                     symbol,
                     reason
                 )
-                VALUES (
+                VALUES
+                (
                     :sym,
                     :reason
                 )
+                ON CONFLICT (symbol)
+                DO NOTHING
             """), {
                 "sym": sym,
                 "reason": reason,
@@ -125,101 +140,107 @@ class UniverseCleanupService:
             "deleted_snapshots": deleted_snapshots,
         }
 
-    # -------------------------------------------------
-    # BLACKLIST
-    # -------------------------------------------------
-    def get_blacklist(self):
+    except Exception:
 
-        rows = self.db.execute(text("""
-            SELECT
-                symbol,
-                reason,
-                created_at
-            FROM symbol_blacklist
-            ORDER BY created_at DESC
-        """)).fetchall()
+        self.db.rollback()
+        raise
 
-        return pd.DataFrame(rows, columns=[
-            "symbol",
-            "reason",
-            "created_at",
-        ])
+# -------------------------------------------------
+# BLACKLIST
+# -------------------------------------------------
+def get_blacklist(self):
 
-    def is_blacklisted(self, symbol: str):
+    rows = self.db.execute(text("""
+        SELECT
+            symbol,
+            reason,
+            created_at
+        FROM symbol_blacklist
+        ORDER BY created_at DESC
+    """)).fetchall()
 
-        sym = normalize_symbol(symbol)
+    return pd.DataFrame(rows, columns=[
+        "symbol",
+        "reason",
+        "created_at",
+    ])
 
-        row = self.db.execute(text("""
-            SELECT 1
-            FROM symbol_blacklist
-            WHERE symbol = :sym
-        """), {
-            "sym": sym,
-        }).fetchone()
+def is_blacklisted(self, symbol: str):
 
-        return row is not None
+    sym = normalize_symbol(symbol)
 
-    # -------------------------------------------------
-    # AUTO CLEANUP PREVIEW
-    # -------------------------------------------------
-    def preview_suspicious_symbols(self, universe_id: str):
+    row = self.db.execute(text("""
+        SELECT 1
+        FROM symbol_blacklist
+        WHERE symbol = :sym
+    """), {
+        "sym": sym,
+    }).fetchone()
 
-        symbols_df = self.get_universe_symbols(universe_id)
+    return row is not None
 
-        if symbols_df.empty:
-            return pd.DataFrame()
+# -------------------------------------------------
+# AUTO CLEANUP PREVIEW
+# -------------------------------------------------
+def preview_suspicious_symbols(self, universe_id: str):
 
-        rows = []
+    symbols_df = self.get_universe_symbols(universe_id)
 
-        for symbol in symbols_df["symbol"].tolist():
+    if symbols_df.empty:
+        return pd.DataFrame()
 
-            valid, reason = validate_symbol(symbol)
+    rows = []
 
-            if not valid:
+    for symbol in symbols_df["symbol"].tolist():
 
-                rows.append({
-                    "symbol": symbol,
-                    "reason": reason,
-                })
+        valid, reason = validate_symbol(symbol)
 
-        return pd.DataFrame(rows)
+        if not valid:
 
-    # -------------------------------------------------
-    # AUTO CLEANUP EXECUTION
-    # -------------------------------------------------
-    def auto_cleanup_universe(
-            self,
-            universe_id: str,
-            purge_snapshots: bool = True,
-            blacklist: bool = True,
-    ):
+            rows.append({
+                "symbol": symbol,
+                "reason": reason,
+            })
 
-        suspicious = self.preview_suspicious_symbols(universe_id)
+    return pd.DataFrame(rows)
 
-        if suspicious.empty:
-            return {
-                "removed": 0,
-                "symbols": [],
-            }
+# -------------------------------------------------
+# AUTO CLEANUP EXECUTION
+# -------------------------------------------------
+def auto_cleanup_universe(
+        self,
+        universe_id: str,
+        purge_snapshots: bool = True,
+        blacklist: bool = True,
+):
 
-        removed = []
+    suspicious = self.preview_suspicious_symbols(universe_id)
 
-        for _, row in suspicious.iterrows():
-
-            symbol = row["symbol"]
-            reason = row["reason"]
-
-            self.delete_symbol(
-                universe_id=universe_id,
-                symbol=symbol,
-                purge_snapshots=purge_snapshots,
-                blacklist=blacklist,
-                reason=reason,
-            )
-
-            removed.append(symbol)
-
+    if suspicious.empty:
         return {
-            "removed": len(removed),
-            "symbols": removed,
+            "removed": 0,
+            "symbols": [],
         }
+
+    removed = []
+
+    for _, row in suspicious.iterrows():
+
+        symbol = row["symbol"]
+        reason = row["reason"]
+
+        self.delete_symbol(
+            universe_id=universe_id,
+            symbol=symbol,
+            purge_snapshots=purge_snapshots,
+            blacklist=blacklist,
+            reason=reason,
+        )
+
+        removed.append(symbol)
+
+    return {
+        "removed": len(removed),
+        "symbols": removed,
+    }
+
