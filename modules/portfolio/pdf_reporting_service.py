@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tempfile
 import os
+from sqlalchemy import text
 
 from modules.utils.data_utils import normalize_timeseries_df
 
@@ -78,11 +79,30 @@ class PDFReportingService:
             ann_return = (1 + total_return) ** (365 / max(days, 1)) - 1 if days > 0 else 0
 
         # Positions
-        df_pos = pd.read_sql("""
-            SELECT symbol, qty, market_value, unrealized_pnl
-            FROM portfolio_positions
-            WHERE portfolio_id = :pid
-        """, self.db.bind, params={"pid": portfolio_id})
+
+
+        rows = self.db.execute(
+            text("""
+                SELECT
+                    symbol,
+                    qty,
+                    market_value,
+                    unrealized_pnl
+                FROM portfolio_positions
+                WHERE portfolio_id = :pid
+            """),
+            {"pid": portfolio_id}
+        ).fetchall()
+
+        df_pos = pd.DataFrame(
+            rows,
+            columns=[
+                "symbol",
+                "qty",
+                "market_value",
+                "unrealized_pnl"
+            ]
+        )
 
         # Executive Summary
         elements.append(Paragraph("Executive Summary", self.styles["Heading2"]))

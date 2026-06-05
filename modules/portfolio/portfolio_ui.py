@@ -309,11 +309,17 @@ def render_portfolio_ui(db_session, user, market_data_service):
             # ---------------------------------
             # LOAD POSITIONS
             # ---------------------------------
-            df_pos = pd.read_sql("""
+            query = text("""
                 SELECT symbol, qty, market_value
-                    FROM portfolio_positions
-                    WHERE portfolio_id = :pid
-            """, db_session.bind, params={"pid": portfolio_id})
+                FROM portfolio_positions
+                WHERE portfolio_id = :pid
+            """)
+
+            df_pos = pd.read_sql(
+                query,
+                db_session.bind,
+                params={"pid": portfolio_id}
+            )
 
             if df_pos.empty:
                 st.info("No positions to analyze")
@@ -498,15 +504,22 @@ def render_portfolio_ui(db_session, user, market_data_service):
             # ---------------------------------
             # LOAD POSITIONS
             # ---------------------------------
-            df_pos = pd.read_sql("""
-                SELECT symbol, qty, market_value
-                FROM portfolio_positions
-                WHERE portfolio_id = :pid
-            """, db_session.bind, params={"pid": portfolio_id})
+            rows = db_session.execute(
+                text("""
+                    SELECT
+                        symbol,
+                        qty,
+                        market_value
+                    FROM portfolio_positions
+                    WHERE portfolio_id = :pid
+                """),
+                {"pid": portfolio_id}
+            ).fetchall()
 
-            if df_pos.empty:
-                st.info("No positions available")
-                st.stop()
+            df_pos = pd.DataFrame(
+                rows,
+                columns=["symbol", "qty", "market_value"]
+            )
 
             total_value = df_pos["market_value"].sum()
             df_pos["weight"] = df_pos["market_value"] / total_value
@@ -574,11 +587,29 @@ def render_portfolio_ui(db_session, user, market_data_service):
         st.markdown("### Benchmark-Relative Contribution")
 
         try:
-            df_pos = pd.read_sql("""
-                SELECT symbol, qty, market_value
+            query = text("""
+                SELECT
+                    symbol,
+                    qty,
+                    market_value
                 FROM portfolio_positions
                 WHERE portfolio_id = :pid
-            """, db_session.bind, params={"pid": portfolio_id})
+            """)
+
+            df_pos = pd.read_sql(
+                query,
+                db_session.bind,
+                params={"pid": portfolio_id}
+            )
+
+        except Exception as e:
+            try:
+                db_session.rollback()
+            except Exception:
+                pass
+
+            st.error(f"POSITIONS ROOT ERROR: {e}")
+            raise
 
             if df_pos.empty:
                 st.info("No positions available")
@@ -639,11 +670,21 @@ def render_portfolio_ui(db_session, user, market_data_service):
         st.markdown("### Sector Attribution")
 
         try:
-            df_pos = pd.read_sql("""
-                SELECT symbol, market_value
-                FROM portfolio_positions
-                WHERE portfolio_id = :pid
-            """, db_session.bind, params={"pid": portfolio_id})
+            rows = db_session.execute(
+                text("""
+                    SELECT
+                        symbol,
+                        market_value
+                    FROM portfolio_positions
+                    WHERE portfolio_id = :pid
+                """),
+                {"pid": portfolio_id}
+            ).fetchall()
+
+            df_pos = pd.DataFrame(
+                rows,
+                columns=["symbol", "market_value"]
+            )
 
             if df_pos.empty:
                 st.info("No positions available for sector attribution")
@@ -1186,19 +1227,37 @@ def render_portfolio_ui(db_session, user, market_data_service):
         st.markdown("### Tax Optimization Engine")
 
         try:
-            sells_df = pd.read_sql("""
-                SELECT
-                    id,
-                    symbol,
-                    COALESCE(filled_qty, qty, 0) AS sell_qty,
-                    COALESCE(avg_fill_price, limit_price, 0) AS sell_price,
-                    COALESCE(filled_at, submitted_at, created_at) AS sell_time
-                FROM trade_orders
-                WHERE portfolio_id = :pid
-                  AND LOWER(side) = 'sell'
-                  AND LOWER(COALESCE(status, '')) IN ('filled','partially_filled','executed')
-                ORDER BY COALESCE(filled_at, submitted_at, created_at) DESC
-            """, db_session.bind, params={"pid": portfolio_id})
+            rows = db_session.execute(
+                text("""
+                    SELECT
+                        id,
+                        symbol,
+                        COALESCE(filled_qty, qty, 0) AS sell_qty,
+                        COALESCE(avg_fill_price, limit_price, 0) AS sell_price,
+                        COALESCE(filled_at, submitted_at, created_at) AS sell_time
+                    FROM trade_orders
+                    WHERE portfolio_id = :pid
+                      AND LOWER(side) = 'sell'
+                      AND LOWER(COALESCE(status, '')) IN (
+                          'filled',
+                          'partially_filled',
+                          'executed'
+                      )
+                    ORDER BY COALESCE(filled_at, submitted_at, created_at) DESC
+                """),
+                {"pid": portfolio_id}
+            ).fetchall()
+
+            sells_df = pd.DataFrame(
+                rows,
+                columns=[
+                    "id",
+                    "symbol",
+                    "sell_qty",
+                    "sell_price",
+                    "sell_time",
+                ]
+            )
 
             if sells_df.empty:
                 st.info("No sell trades available for tax optimization.")
