@@ -176,25 +176,29 @@ def render_admin_panel(db, user):
         # ---------------------------------------------------------
         # USER LIST
         # ---------------------------------------------------------
-        st.divider()
-        st.subheader("Users")
 
-        rows = db.execute(text("""
-            SELECT *
-            FROM users
-            WHERE tenant_id = :tenant
-        """), {"tenant": tenant_id}).fetchall()
+        if role == "super_admin":
 
-        if not rows:
-            st.info("No users found.")
+            rows = db.execute(text("""
+                SELECT *
+                FROM users
+                WHERE tenant_id = :tenant
+                ORDER BY email
+            """), {
+                "tenant": tenant_id
+            }).fetchall()
+
         else:
-            df = pd.DataFrame([dict(r._mapping) for r in rows])
 
-            st.dataframe(
-                df.copy(),
-                use_container_width=True,
-                hide_index=True,
-            )
+            rows = db.execute(text("""
+                SELECT *
+                FROM users
+                WHERE tenant_id = :tenant
+                  AND role <> 'super_admin'
+                ORDER BY email
+            """), {
+                "tenant": tenant_id
+            }).fetchall()
 
             # ---------------------------------------------------------
             # USER MANAGEMENT
