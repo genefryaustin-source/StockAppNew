@@ -367,27 +367,27 @@ def run_due_universe_refresh_jobs(
         "details": [],
     }
 
-    tenant_id = None
+    user_tenant_id = None
 
     if isinstance(user, dict):
-        tenant_id = user.get("tenant_id")
-
-    if not tenant_id:
-
-        row = db.execute(text("""
-            SELECT tenant_id
-            FROM universe_symbols
-            WHERE universe_id = :universe_id
-            LIMIT 1
-        """), {
-            "universe_id": str(job.universe_id),
-        }).fetchone()
-
-        if row:
-            tenant_id = row.tenant_id
+        user_tenant_id = user.get("tenant_id")
 
     for job in jobs:
         job_id = int(job.id)
+        tenant_id = user_tenant_id
+
+        if not tenant_id:
+            row = db.execute(text("""
+                SELECT tenant_id
+                FROM universe_symbols
+                WHERE universe_id = :universe_id
+                LIMIT 1
+            """), {
+                "universe_id": str(job.universe_id),
+            }).fetchone()
+
+            if row:
+                tenant_id = row.tenant_id
 
         try:
             mark_job_running(db, job_id)
