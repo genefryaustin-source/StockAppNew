@@ -36,11 +36,27 @@ def _table_exists(db, table_name: str) -> bool:
 
 def _get_table_columns(db, table_name: str) -> List[str]:
     try:
-        rows = db.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
-        return [r[1] for r in rows]
+        rows = db.execute(
+            text("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = :table_name
+                ORDER BY ordinal_position
+            """),
+            {"table_name": table_name},
+        ).fetchall()
+
+        return [r[0] for r in rows]
+
     except Exception as e:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
         print(f"PNL DASHBOARD get_table_columns error for {table_name}: {e}")
-        return []
+        raise
 
 
 def _read_sql_df(db, query: str, params: dict | None = None) -> pd.DataFrame:
@@ -482,7 +498,7 @@ def render_pnl_dashboard(db_session, portfolio_id: str):
 
     st.write("🔥 PNL DASHBOARD CALLED")
 
-    
+
     # ---------------------------------
     # ✅ PREVENT DOUBLE RENDER PER RUN
     # ---------------------------------
