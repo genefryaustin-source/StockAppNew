@@ -8,15 +8,15 @@ from modules.universe.symbol_validator import (
     validate_symbol,
 )
 
-VERSION = "POSTGRES_FIX_0605"
+
+VERSION = "POSTGRES_TENANT_SYNC_0605"
+
+
 class UniverseCleanupService:
     def __init__(self, db):
         self.db = db
         self._ensure_tables()
 
-    # -------------------------------------------------
-    # TABLES
-    # -------------------------------------------------
     def _ensure_tables(self):
         try:
             self.db.execute(text("""
@@ -32,51 +32,34 @@ class UniverseCleanupService:
             self.db.rollback()
             raise
 
-    # -------------------------------------------------
-    # UNIVERSES
-    # -------------------------------------------------
     def get_universes(self, tenant_id: str):
-        rows = self.db.execute(
-            text("""
-                SELECT
-                    id,
-                    name
-                FROM universes
-                WHERE tenant_id = :tenant_id
-                ORDER BY name
-            """),
-            {
-                "tenant_id": tenant_id,
-            }
-        ).fetchall()
-
-        return pd.DataFrame(
-            rows,
-            columns=["id", "name"]
-        )
-
-    # -------------------------------------------------
-    # SYMBOLS
-    # -------------------------------------------------
-    def get_universe_symbols(self, universe_id: str):
         rows = self.db.execute(text("""
-            SELECT
-                symbol
+            SELECT id, name
+            FROM universes
+            WHERE tenant_id = :tenant_id
+            ORDER BY name
+        """), {"tenant_id": tenant_id}).fetchall()
+
+        return pd.DataFrame(rows, columns=["id", "name"])
+
+    def get_universe_symbols(self, universe_id: str, tenant_id: str):
+        rows = self.db.execute(text("""
+            SELECT symbol
             FROM universe_symbols
             WHERE universe_id = :uid
+              AND tenant_id = :tenant_id
             ORDER BY symbol
         """), {
             "uid": universe_id,
+            "tenant_id": tenant_id,
         }).fetchall()
 
         return pd.DataFrame(rows, columns=["symbol"])
 
-    # -------------------------------------------------
-    # DELETE SYMBOL
-    # -------------------------------------------------
     def delete_symbol(
         self,
         universe_id: str,
+        tenant_id: str,
         symbol: str,
         purge_snapshots: bool = True,
         blacklist: bool = False,
@@ -88,9 +71,11 @@ class UniverseCleanupService:
             self.db.execute(text("""
                 DELETE FROM universe_symbols
                 WHERE universe_id = :uid
+                  AND tenant_id = :tenant_id
                   AND UPPER(symbol) = :sym
             """), {
                 "uid": universe_id,
+                "tenant_id": tenant_id,
                 "sym": sym,
             })
 
@@ -98,11 +83,12 @@ class UniverseCleanupService:
 
             if purge_snapshots:
                 result = self.db.execute(text("""
-                    DELETE
-                    FROM analytics_snapshots
+                    DELETE FROM analytics_snapshots
                     WHERE UPPER(symbol) = :sym
+                      AND tenant_id = :tenant_id
                 """), {
                     "sym": sym,
+                    "tenant_id": tenant_id,
                 })
 
                 deleted_snapshots = result.rowcount or 0
@@ -110,15 +96,8 @@ class UniverseCleanupService:
             if blacklist:
                 self.db.execute(text("""
                     INSERT INTO symbol_blacklist
-                    (
-                        symbol,
-                        reason
-                    )
-                    VALUES
-                    (
-                        :sym,
-                        :reason
-                    )
+                    (symbol, reason)
+                    VALUES (:sym, :reason)
                     ON CONFLICT (symbol)
                     DO NOTHING
                 """), {
@@ -137,24 +116,14 @@ class UniverseCleanupService:
             self.db.rollback()
             raise
 
-    # -------------------------------------------------
-    # BLACKLIST
-    # -------------------------------------------------
     def get_blacklist(self):
         rows = self.db.execute(text("""
-            SELECT
-                symbol,
-                reason,
-                created_at
+            SELECT symbol, reason, created_at
             FROM symbol_blacklist
             ORDER BY created_at DESC
         """)).fetchall()
 
-        return pd.DataFrame(rows, columns=[
-            "symbol",
-            "reason",
-            "created_at",
-        ])
+        return pd.DataFrame(rows, columns=["symbol", "reason", "created_at"])
 
     def is_blacklisted(self, symbol: str):
         sym = normalize_symbol(symbol)
@@ -163,17 +132,12 @@ class UniverseCleanupService:
             SELECT 1
             FROM symbol_blacklist
             WHERE symbol = :sym
-        """), {
-            "sym": sym,
-        }).fetchone()
+        """), {"sym": sym}).fetchone()
 
         return row is not None
 
-    # -------------------------------------------------
-    # AUTO CLEANUP PREVIEW
-    # -------------------------------------------------
-    def preview_suspicious_symbols(self, universe_id: str):
-        symbols_df = self.get_universe_symbols(universe_id)
+    def preview_suspicious_symbols(self, universe_id: str, tenant_id: str):
+        symbols_df = self.get_universe_symbols(universe_id=universe_id, tenant_id=tenant_id)
 
         if symbols_df.empty:
             return pd.DataFrame()
@@ -191,22 +155,17 @@ class UniverseCleanupService:
 
         return pd.DataFrame(rows)
 
-    # -------------------------------------------------
-    # AUTO CLEANUP EXECUTION
-    # -------------------------------------------------
     def auto_cleanup_universe(
         self,
         universe_id: str,
+        tenant_id: str,
         purge_snapshots: bool = True,
         blacklist: bool = True,
     ):
-        suspicious = self.preview_suspicious_symbols(universe_id)
+        suspicious = self.preview_suspicious_symbols(universe_id=universe_id, tenant_id=tenant_id)
 
         if suspicious.empty:
-            return {
-                "removed": 0,
-                "symbols": [],
-            }
+            return {"removed": 0, "symbols": []}
 
         removed = []
 
@@ -216,6 +175,7 @@ class UniverseCleanupService:
 
             self.delete_symbol(
                 universe_id=universe_id,
+                tenant_id=tenant_id,
                 symbol=symbol,
                 purge_snapshots=purge_snapshots,
                 blacklist=blacklist,
@@ -224,7 +184,4 @@ class UniverseCleanupService:
 
             removed.append(symbol)
 
-        return {
-            "removed": len(removed),
-            "symbols": removed,
-        }
+        return {"removed": len(removed), "symbols": removed}
