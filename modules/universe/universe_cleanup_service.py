@@ -8,7 +8,7 @@ from modules.universe.symbol_validator import (
     validate_symbol,
 )
 
-
+VERSION = "POSTGRES_FIX_0605"
 class UniverseCleanupService:
     def __init__(self, db):
         self.db = db
