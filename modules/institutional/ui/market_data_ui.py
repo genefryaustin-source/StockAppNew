@@ -211,6 +211,35 @@ def render_market_data(db, user):
 def render_market_refresh(db, user):
     st.subheader("🔄 Market Data Refresh")
 
+    # ---------------------------------------------------
+    # UNIVERSE SELECTOR
+    # ---------------------------------------------------
+
+    tenant_id = user.get("tenant_id")
+
+    universe_rows = db.execute(text("""
+        SELECT
+            id,
+            name
+        FROM universes
+        WHERE tenant_id = :tenant_id
+        ORDER BY name
+    """), {
+        "tenant_id": tenant_id
+    }).fetchall()
+
+    universe_map = {
+        r.id: r.name
+        for r in universe_rows
+    }
+
+    selected_universe = st.selectbox(
+        "Universe",
+        options=list(universe_map.keys()),
+        format_func=lambda x: universe_map[x],
+        key="market_refresh_universe",
+    )
+
     c1, c2 = st.columns(2)
 
     with c1:
@@ -235,21 +264,28 @@ def render_market_refresh(db, user):
 
     if run:
         try:
-            query = text("""
-            SELECT DISTINCT symbol
-            FROM price_history
-            ORDER BY symbol
-            """)
-            if limit > 0:
-                query += f" LIMIT {int(limit)}"
+            rows = db.execute(text("""
+                SELECT DISTINCT symbol
+                FROM universe_symbols
+                WHERE tenant_id = :tenant_id
+                  AND universe_id = :universe_id
+                ORDER BY symbol
+            """), {
+                "tenant_id": tenant_id,
+                "universe_id": selected_universe,
+            }).fetchall()
 
-            rows = db.execute(query).fetchall()
-            symbols = [r[0] for r in rows]
+            symbols = [r.symbol for r in rows]
+
+            if limit > 0:
+                symbols = symbols[:int(limit)]
 
             if not symbols:
                 st.warning("No symbols found.")
                 return
-
+            st.info(
+                f"Universe: {universe_map[selected_universe]}"
+            )
             st.info(f"Refreshing {len(symbols)} symbols...")
 
             progress_bar = st.progress(0)
