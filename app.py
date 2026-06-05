@@ -16,7 +16,7 @@ from sqlalchemy.exc import OperationalError, DBAPIError
 st.set_page_config(page_title="Equity Research Terminal", layout="wide")
 
 VERSION = "2.4.1"
-DEV_MODE = True
+DEV_MODE = False
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
