@@ -6,17 +6,16 @@ import sys
 import time
 import uuid
 from datetime import datetime, UTC
+from typing import Any, Callable, Optional
 
-import pandas as pd
-import sqlite3
-import matplotlib
 import streamlit as st
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, DBAPIError
 
 # MUST BE FIRST STREAMLIT COMMAND
 st.set_page_config(page_title="Equity Research Terminal", layout="wide")
 
-VERSION = "2.4.0"
+VERSION = "2.4.1"
 DEV_MODE = True
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,15 +31,49 @@ def init_db_once():
     from modules.db.core import init_database
     init_database()
 
+
 init_db_once()
 
 from modules.db.core import SessionLocal
 
-db = SessionLocal()
-try:
-    db.rollback()
-except Exception:
-    pass
+
+def new_db_session():
+    """Create a short-lived SQLAlchemy session for the current Streamlit run."""
+    return SessionLocal()
+
+
+def safe_rollback(session: Any) -> None:
+    try:
+        if session is not None:
+            session.rollback()
+    except Exception:
+        pass
+
+
+def safe_close(session: Any) -> None:
+    try:
+        if session is not None:
+            session.close()
+    except Exception:
+        pass
+
+
+def ensure_live_session(session: Any):
+    """
+    PostgreSQL/Neon can close idle SSL connections. This validates the current
+    session and replaces it if the DBAPI connection is dead.
+    """
+    try:
+        safe_rollback(session)
+        session.execute(text("SELECT 1")).scalar()
+        return session
+    except Exception:
+        safe_rollback(session)
+        safe_close(session)
+        replacement = new_db_session()
+        replacement.execute(text("SELECT 1")).scalar()
+        return replacement
+
 
 def _secret(name: str, default: str = "") -> str:
     try:
@@ -53,95 +86,150 @@ def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
+def db_scalar(sql: str, params: Optional[dict] = None):
+    """Run a small debug query in an isolated session."""
+    with new_db_session() as s:
+        return s.execute(text(sql), params or {}).scalar()
 
 
+def db_fetchall(sql: str, params: Optional[dict] = None):
+    """Run a small debug query in an isolated session."""
+    with new_db_session() as s:
+        return s.execute(text(sql), params or {}).fetchall()
 
 
+def temporary_bootstrap_admin(session) -> None:
+    """Development-only bootstrap; intentionally not auto-run unless enabled below."""
+    try:
+        safe_rollback(session)
+
+        user_count = session.execute(text("SELECT COUNT(*) FROM users")).scalar()
+        if user_count and int(user_count) > 0:
+            return
+
+        session.execute(
+            text("""
+                INSERT INTO tenants (
+                    id,
+                    name,
+                    created_at
+                )
+                VALUES (
+                    :id,
+                    :name,
+                    CURRENT_TIMESTAMP
+                )
+            """),
+            {
+                "id": "default_tenant",
+                "name": "Default Tenant",
+            },
+        )
+
+        session.execute(
+            text("""
+                INSERT INTO users (
+                    id,
+                    tenant_id,
+                    email,
+                    role,
+                    created_at,
+                    password_hash,
+                    is_active
+                )
+                VALUES (
+                    :id,
+                    :tenant_id,
+                    :email,
+                    :role,
+                    CURRENT_TIMESTAMP,
+                    :password_hash,
+                    TRUE
+                )
+            """),
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": "default_tenant",
+                "email": "admin@test.com",
+                "role": "super_admin",
+                "password_hash": _hash_password("password"),
+            },
+        )
+
+        session.commit()
+        print("BOOTSTRAP ADMIN CREATED")
+
+    except Exception:
+        safe_rollback(session)
+        raise
 
 
-st.sidebar.markdown("## PRE-LOGIN DB DEBUG")
-
+# Main DB session for this Streamlit run only. Do not cache this object.
+db = new_db_session()
 try:
-    from modules.db.core import SessionLocal
+    db = ensure_live_session(db)
+except Exception as e:
+    st.error(f"Database connection failed: {e}")
+    st.exception(e)
+    st.stop()
 
-    with SessionLocal() as debug_db:
 
-        user_count = debug_db.execute(
-            text("SELECT COUNT(*) FROM users")
-        ).scalar()
+# ============================================================
+# PRE-LOGIN DB DEBUG
+# ============================================================
+if DEV_MODE:
+    st.sidebar.markdown("## PRE-LOGIN DB DEBUG")
 
-        tenant_count = debug_db.execute(
-            text("SELECT COUNT(*) FROM tenants")
-        ).scalar()
+    try:
+        user_count = db_scalar("SELECT COUNT(*) FROM users")
+        tenant_count = db_scalar("SELECT COUNT(*) FROM tenants")
 
-    st.sidebar.write("USER COUNT", user_count)
-    st.sidebar.write("TENANT COUNT", tenant_count)
+        st.sidebar.write("USER COUNT", user_count)
+        st.sidebar.write("TENANT COUNT", tenant_count)
 
-    users = db.execute(
-        text("""
+        users = db_fetchall("""
             SELECT email, role, tenant_id
             FROM users
             ORDER BY email
         """)
-    ).fetchall()
 
-    st.sidebar.write("USERS")
-    st.sidebar.json([str(x) for x in users])
+        st.sidebar.write("USERS")
+        st.sidebar.json([str(x) for x in users])
 
-except Exception as e:
-    st.sidebar.error(f"DEBUG FAILED: {e}")
+    except Exception as e:
+        st.sidebar.error(f"DEBUG FAILED: {e}")
 
-try:
-    db_name = db.execute(
-        text("SELECT current_database()")
-    ).scalar()
+    try:
+        st.sidebar.write("DATABASE", db_scalar("SELECT current_database()"))
+    except Exception as e:
+        st.sidebar.error(f"DB NAME FAILED: {e}")
 
-    st.sidebar.write("DATABASE", db_name)
-
-except Exception as e:
-    st.sidebar.error(f"DB NAME FAILED: {e}")
-
-try:
-    users = db.execute(text("""
-        SELECT email, role
-        FROM users
-    """)).fetchall()
-
-    print("=" * 80)
-    print("POSTGRES USERS")
-    for u in users:
-        print(u)
-    print("=" * 80)
-
-
-
-except Exception as e:
-    print("USER DEBUG FAILED:", e)
-
-
-
+    try:
+        users = db_fetchall("""
+            SELECT email, role
+            FROM users
+            ORDER BY email
+        """)
+        print("=" * 80)
+        print("POSTGRES USERS")
+        for u in users:
+            print(u)
+        print("=" * 80)
+    except Exception as e:
+        print("USER DEBUG FAILED:", e)
 
 
 # ============================================================
 # IMPORT MODELS + SERVICES
 # ============================================================
 try:
-
-
-
-
     from modules.auth.login_ui import render_login
     from modules.help.help_ui import render_help
     from modules.portfolio.nav_service import NavService
     from modules.portfolio.order_service import OrderService
     from modules.alerts.service import AlertService
-
 except Exception as e:
-    try:
-        db.rollback()
-    except Exception:
-        pass
-
+    safe_rollback(db)
     st.error(f"Critical module import failed: {e}")
     st.exception(e)
     st.stop()
@@ -163,6 +251,8 @@ def get_market_data_service():
                     return {"price": mds.get_price(symbol)}
                 if hasattr(mds, "fetch_price"):
                     return {"price": mds.fetch_price(symbol)}
+                if hasattr(mds, "get_latest_price"):
+                    return {"price": mds.get_latest_price(symbol)}
                 return None
 
         return MarketDataServiceAdapter()
@@ -174,104 +264,20 @@ def get_market_data_service():
 
 market_data_service = get_market_data_service()
 
-# ============================================================
-# Initialize Db User
-# ============================================================
 
-
-
-
-
-
-
-
-
-def _hash_password(password: str) -> str:
-    return hashlib.sha256(
-        password.encode("utf-8")
-    ).hexdigest()
-
-
-def temporary_bootstrap_admin(db):
-
-    try:
-        db.rollback()
-    except Exception:
-        pass
-
-    user_count = db.execute(
-        text("SELECT COUNT(*) FROM users")
-    ).scalar()
-
-    if user_count and int(user_count) > 0:
-        return
-
-    db.execute(
-        text("""
-            INSERT INTO tenants (
-                id,
-                name,
-                created_at
-            )
-            VALUES (
-                :id,
-                :name,
-                CURRENT_TIMESTAMP
-            )
-        """),
-        {
-            "id": "default_tenant",
-            "name": "Default Tenant",
-        }
-    )
-
-    db.execute(
-        text("""
-            INSERT INTO users (
-                id,
-                tenant_id,
-                email,
-                role,
-                created_at,
-                password_hash,
-                is_active
-            )
-            VALUES (
-                :id,
-                :tenant_id,
-                :email,
-                :role,
-                CURRENT_TIMESTAMP,
-                :password_hash,
-                1
-            )
-        """),
-        {
-            "id": str(uuid.uuid4()),
-            "tenant_id": "default_tenant",
-            "email": "admin@test.com",
-            "role": "super_admin",
-            "password_hash": _hash_password("password"),
-        }
-    )
-
-    db.commit()
-
-    print("BOOTSTRAP ADMIN CREATED")
-#try:
-    #temporary_bootstrap_admin(db)
-#except Exception as e:
-    #db.rollback()
-
-    #st.error(str(e))
-    #raise
 # ============================================================
 # AUTH GATE
 # ============================================================
 user = st.session_state.get("user")
 
 if user is None:
-    render_login(db)
+    try:
+        db = ensure_live_session(db)
+        render_login(db)
+    except Exception as e:
+        safe_rollback(db)
+        st.error(f"Login failed: {e}")
+        st.exception(e)
     st.stop()
 
 role = (user.get("role") or "").lower()
@@ -291,16 +297,12 @@ except Exception:
 # SERVICES
 # ============================================================
 try:
+    db = ensure_live_session(db)
     nav_service = NavService(db, market_data_service)
     alert_service = AlertService(db)
     order_service = OrderService(db)
-
 except Exception as e:
-    try:
-        db.rollback()
-    except Exception:
-        pass
-
+    safe_rollback(db)
     st.error(f"Service initialization failed: {e}")
     st.exception(e)
     st.stop()
@@ -324,108 +326,73 @@ if st.sidebar.button("Logout", key="sidebar_logout"):
 
 
 # ============================================================
-# DEV DEBUG OUTPUT
+# DEV DEBUG OUTPUT - isolated sessions only
 # ============================================================
 if DEV_MODE:
     try:
         st.sidebar.markdown("### DB Debug")
-
-        from sqlalchemy import text
-
         st.subheader("POSTGRES DEBUG")
 
         try:
-            user_count = db.execute(
-                text("SELECT COUNT(*) FROM users")
-            ).scalar()
+            st.write("USER COUNT", db_scalar("SELECT COUNT(*) FROM users"))
+            st.write("TENANT COUNT", db_scalar("SELECT COUNT(*) FROM tenants"))
 
-            tenant_count = db.execute(
-                text("SELECT COUNT(*) FROM tenants")
-            ).scalar()
-
-            st.write("USER COUNT", user_count)
-            st.write("TENANT COUNT", tenant_count)
-
-            users = db.execute(
-                text("""
-                    SELECT
-                        email,
-                        role,
-                        tenant_id,
-                        is_active
-                    FROM users
-                    ORDER BY email
-                """)
-            ).fetchall()
+            users = db_fetchall("""
+                SELECT
+                    email,
+                    role,
+                    tenant_id,
+                    is_active
+                FROM users
+                ORDER BY email
+            """)
 
             st.write("USERS")
-
-            st.json([
-                str(u)
-                for u in users
-            ])
+            st.json([str(u) for u in users])
 
         except Exception as e:
             st.error(f"USER DEBUG FAILED: {e}")
 
         try:
-            tenants = db.execute(
-                text("""
-                    SELECT
-                        id,
-                        name,
-                        created_at
-                    FROM tenants
-                    ORDER BY name
-                """)
-            ).fetchall()
+            tenants = db_fetchall("""
+                SELECT
+                    id,
+                    name,
+                    created_at
+                FROM tenants
+                ORDER BY name
+            """)
 
             st.write("TENANTS")
-
-            st.json([
-                str(t)
-                for t in tenants
-            ])
+            st.json([str(t) for t in tenants])
 
         except Exception as e:
             st.error(f"TENANT DEBUG FAILED: {e}")
 
         try:
-            db_name = db.execute(
-                text("SELECT current_database()")
-            ).scalar()
-
-            st.write("POSTGRES DATABASE", db_name)
-
+            st.write("POSTGRES DATABASE", db_scalar("SELECT current_database()"))
         except Exception as e:
             st.error(f"DB NAME FAILED: {e}")
 
         try:
-            version = db.execute(
-                text("SELECT version()")
-            ).scalar()
-
+            version = db_scalar("SELECT version()")
             st.write("POSTGRES VERSION")
             st.code(version)
-
         except Exception as e:
             st.error(f"VERSION FAILED: {e}")
 
-        cols = db.execute(text("""
-            SELECT
-                column_name,
-                data_type
-            FROM information_schema.columns
-            WHERE table_name = 'portfolios'
-            ORDER BY ordinal_position
-        """)).fetchall()
-
-        st.write(cols)
-
-
-
-
-
+        try:
+            cols = db_fetchall("""
+                SELECT
+                    column_name,
+                    data_type
+                FROM information_schema.columns
+                WHERE table_name = 'portfolios'
+                ORDER BY ordinal_position
+            """)
+            st.write(cols)
+        except Exception as e:
+            st.error(f"PORTFOLIO SCHEMA DEBUG FAILED: {e}")
 
     except Exception as e:
         st.sidebar.error(f"DB debug failed: {e}")
@@ -439,6 +406,7 @@ if "last_scheduler_run" not in st.session_state:
 
 try:
     if time.time() - st.session_state["last_scheduler_run"] > 60:
+        db = ensure_live_session(db)
         if hasattr(nav_service, "run_rebalance_scheduler"):
             nav_service.run_rebalance_scheduler(
                 order_service=order_service,
@@ -447,7 +415,8 @@ try:
             )
             st.session_state["last_scheduler_run"] = time.time()
 except Exception as e:
-    st.sidebar.warning(f"Scheduler: {str(e)[:80]}")
+    safe_rollback(db)
+    st.sidebar.warning(f"Scheduler: {str(e)[:120]}")
 
 
 # ============================================================
@@ -498,13 +467,46 @@ page = st.sidebar.selectbox("Go to", pages)
 
 
 # ============================================================
-# SAFE IMPORT
+# SAFE IMPORT / SAFE RENDER
 # ============================================================
 def safe_import(module_path: str):
     try:
         return __import__(module_path, fromlist=["*"])
     except Exception as e:
         return e
+
+
+def render_module_error(label: str, exc: Exception) -> None:
+    st.error(f"{label} module failed to load.")
+    st.exception(exc)
+
+
+def run_page(label: str, fn: Callable, *args, stop_after: bool = False, **kwargs):
+    """
+    Standard PostgreSQL-safe page wrapper.
+    Clears stale transactions before render and rolls back on any page exception.
+    """
+    global db
+    try:
+        db = ensure_live_session(db)
+        result = fn(*args, **kwargs)
+        if stop_after:
+            st.stop()
+        return result
+
+    except (OperationalError, DBAPIError) as e:
+        safe_rollback(db)
+        st.error(f"{label} database error.")
+        st.exception(e)
+        if stop_after:
+            st.stop()
+
+    except Exception as e:
+        safe_rollback(db)
+        st.error(f"{label} failed.")
+        st.exception(e)
+        if stop_after:
+            st.stop()
 
 
 watchlists_mod = safe_import("modules.institutional.ui.watchlists_ui")
@@ -532,245 +534,278 @@ if page == "Dashboard":
 
 elif page == "Watchlists":
     if isinstance(watchlists_mod, Exception):
-        st.error("Watchlists module failed to load.")
-        st.exception(watchlists_mod)
+        render_module_error("Watchlists", watchlists_mod)
     elif hasattr(watchlists_mod, "render_watchlists"):
-        watchlists_mod.render_watchlists(db, user)
+        run_page("Watchlists", watchlists_mod.render_watchlists, db, user)
 
 elif page == "Screener":
     if isinstance(screener_mod, Exception):
-        st.error("Screener module failed to load.")
-        st.exception(screener_mod)
+        render_module_error("Screener", screener_mod)
     elif hasattr(screener_mod, "render_screener"):
-        screener_mod.render_screener(db, user)
+        run_page("Screener", screener_mod.render_screener, db, user)
 
 elif page == "Earnings":
     if isinstance(earnings_mod, Exception):
-        st.error("Earnings module failed to load.")
-        st.exception(earnings_mod)
+        render_module_error("Earnings", earnings_mod)
     elif hasattr(earnings_mod, "render_earnings"):
-        earnings_mod.render_earnings(db, user)
+        run_page("Earnings", earnings_mod.render_earnings, db, user)
 
 elif page == "Market Data":
     if isinstance(market_data_mod, Exception):
-        st.error("Market Data module failed to load.")
-        st.exception(market_data_mod)
+        render_module_error("Market Data", market_data_mod)
     else:
         if hasattr(market_data_mod, "render_market_data"):
-            market_data_mod.render_market_data(db, user)
+            run_page("Market Data", market_data_mod.render_market_data, db, user)
         if hasattr(market_data_mod, "render_market_refresh"):
-            market_data_mod.render_market_refresh(db, user)
+            run_page("Market Refresh", market_data_mod.render_market_refresh, db, user)
 
 elif page == "Analytics":
     if isinstance(analytics_mod, Exception):
-        st.error("Analytics module failed to load.")
-        st.exception(analytics_mod)
+        render_module_error("Analytics", analytics_mod)
     elif hasattr(analytics_mod, "render_analytics"):
-        analytics_mod.render_analytics(db, user)
+        run_page("Analytics", analytics_mod.render_analytics, db, user)
 
 elif page == "Rankings":
     if isinstance(rankings_mod, Exception):
-        st.error("Rankings module failed to load.")
-        st.exception(rankings_mod)
+        render_module_error("Rankings", rankings_mod)
     elif hasattr(rankings_mod, "render_rankings"):
-        rankings_mod.render_rankings(db, user)
+        run_page("Rankings", rankings_mod.render_rankings, db, user)
 
 elif page == "Indicator Builder":
-    from modules.indicators.indicator_ui import render_indicator_builder
-    render_indicator_builder(db, user)
+    try:
+        from modules.indicators.indicator_ui import render_indicator_builder
+        run_page("Indicator Builder", render_indicator_builder, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error("Indicator Builder failed to load.")
+        st.exception(e)
 
 elif page == "Universe":
     if isinstance(universe_mod, Exception):
-        st.error("Universe module failed to load.")
-        st.exception(universe_mod)
+        render_module_error("Universe", universe_mod)
     elif hasattr(universe_mod, "render_universe"):
-        universe_mod.render_universe(db, user)
+        run_page("Universe", universe_mod.render_universe, db, user)
 
 elif page == "Stock Dashboard":
     if isinstance(stock_dashboard_mod, Exception):
-        st.error("Stock dashboard failed to load.")
-        st.exception(stock_dashboard_mod)
+        render_module_error("Stock Dashboard", stock_dashboard_mod)
     elif hasattr(stock_dashboard_mod, "render_stock_dashboard"):
-        stock_dashboard_mod.render_stock_dashboard(db, user)
+        run_page("Stock Dashboard", stock_dashboard_mod.render_stock_dashboard, db, user)
 
 elif page == "Intraday Charts":
-    from modules.intraday.intraday_ui import render_intraday_page
-    render_intraday_page(db, user)
+    try:
+        from modules.intraday.intraday_ui import render_intraday_page
+        run_page("Intraday Charts", render_intraday_page, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error("Intraday Charts failed to load.")
+        st.exception(e)
 
 elif page == "Portfolio":
     if isinstance(portfolio_mod, Exception):
-        st.error("Portfolio module failed to load.")
-        st.exception(portfolio_mod)
+        render_module_error("Portfolio", portfolio_mod)
         st.stop()
 
     if role == "client":
         from modules.client.client_dashboard import render_client_dashboard
-        render_client_dashboard(
+        run_page(
+            "Client Portfolio",
+            render_client_dashboard,
             db_session=db,
             user=user,
             market_data_service=market_data_service,
+            stop_after=True,
         )
-        st.stop()
 
-    if role in ["tenant_admin", "super_admin"]:
+    elif role in ["tenant_admin", "super_admin"]:
         from modules.dashboard.dashboard_ui import render_dashboard
-        render_dashboard(
+        run_page(
+            "Portfolio Dashboard",
+            render_dashboard,
             db_session=db,
             user=user,
             market_data_service=market_data_service,
+            stop_after=True,
         )
-        st.stop()
 
-    st.error(f"Unauthorized role: {role}")
-    st.stop()
+    else:
+        st.error(f"Unauthorized role: {role}")
+        st.stop()
 
 elif page == "Portfolio Construction":
     if isinstance(construction_mod, Exception):
-        st.error("Portfolio construction module failed to load.")
-        st.exception(construction_mod)
+        render_module_error("Portfolio Construction", construction_mod)
     else:
         rows = st.session_state.get("rank_rows")
-        construction_mod.render_portfolio_construction(rows)
+        run_page("Portfolio Construction", construction_mod.render_portfolio_construction, rows)
 
 elif page == "Portfolio Deployment":
     if isinstance(deployment_mod, Exception):
-        st.error("Deployment module failed to load.")
-        st.exception(deployment_mod)
-    else:
-        deployment_mod.render_portfolio_deployment(db, user)
+        render_module_error("Portfolio Deployment", deployment_mod)
+    elif hasattr(deployment_mod, "render_portfolio_deployment"):
+        run_page("Portfolio Deployment", deployment_mod.render_portfolio_deployment, db, user)
 
 elif page == "Market Overview":
     st.header("Market Overview")
-    if hasattr(market_dashboard_mod, "render_market_dashboard"):
-        market_dashboard_mod.render_market_dashboard(db)
+    if isinstance(market_dashboard_mod, Exception):
+        render_module_error("Market Overview", market_dashboard_mod)
+    elif hasattr(market_dashboard_mod, "render_market_dashboard"):
+        run_page("Market Overview", market_dashboard_mod.render_market_dashboard, db)
+    else:
+        st.error("render_market_dashboard() not found in modules.market.dashboard")
 
 elif page == "AI Rankings":
     rankings_ui_mod = safe_import("modules.analytics.ranking_ui")
-
     if isinstance(rankings_ui_mod, Exception):
-        st.error("AI Rankings UI failed to load.")
-        st.exception(rankings_ui_mod)
+        render_module_error("AI Rankings UI", rankings_ui_mod)
     elif hasattr(rankings_ui_mod, "render_ai_rankings"):
-        rankings_ui_mod.render_ai_rankings(
-            db=db,
-            user=user,
-            price_data={},
-        )
+        run_page("AI Rankings", rankings_ui_mod.render_ai_rankings, db=db, user=user, price_data={})
     else:
-        st.error(
-            "AI Rankings UI failed to load. "
-            "Expected modules.analytics.ranking_ui.render_ai_rankings"
-        )
+        st.error("AI Rankings UI failed to load. Expected modules.analytics.ranking_ui.render_ai_rankings")
 
 elif page == "Regime Engine":
-    from modules.market.regime_engine import render_regime_engine
-    render_regime_engine(db, user)
+    try:
+        from modules.market.regime_engine import render_regime_engine
+        run_page("Regime Engine", render_regime_engine, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error("Regime Engine failed to load.")
+        st.exception(e)
 
 elif page in ("Strategy Lab", "Strategy Discovery", "Strategy Library"):
     try:
         from modules.analytics.strategy_lab_ui import render_strategy_lab
-        render_strategy_lab(db, user)
+        run_page("Strategy Lab", render_strategy_lab, db, user)
     except Exception as e:
+        safe_rollback(db)
         st.error("Strategy Lab failed to load.")
         st.exception(e)
 
 elif page == "Alerts":
     st.header("Alerts")
-
     if isinstance(alerts_mod, Exception):
-        st.error("Alerts module failed to load.")
-        st.exception(alerts_mod)
+        render_module_error("Alerts", alerts_mod)
     elif hasattr(alerts_mod, "render_alerts_page"):
-        try:
-            alerts_mod.render_alerts_page(db, user)
-        except Exception as e:
-            st.error("Alerts page failed.")
-            st.exception(e)
+        run_page("Alerts", alerts_mod.render_alerts_page, db, user)
     elif hasattr(alerts_mod, "render_alerts"):
-        try:
-            alerts_mod.render_alerts(db, user)
-        except Exception as e:
-            st.error("Alerts page failed.")
-            st.exception(e)
+        run_page("Alerts", alerts_mod.render_alerts, db, user)
     else:
         st.error("No alerts render function found.")
 
 elif page == "Admin":
     st.header("Admin Console")
-
     if isinstance(admin_mod, Exception):
-        st.error("Admin module failed to load.")
-        st.exception(admin_mod)
+        render_module_error("Admin", admin_mod)
     elif hasattr(admin_mod, "render_admin_panel"):
-        try:
-            admin_mod.render_admin_panel(db, user)
-        except Exception as e:
-            st.error("Admin panel failed.")
-            st.exception(e)
+        run_page("Admin Panel", admin_mod.render_admin_panel, db, user)
     else:
         st.error("render_admin_panel() not found in admin_ui.py")
 
 elif page == "AI Portfolio":
     try:
         from modules.portfolio.ai_portfolio_ui import render_ai_portfolio_center
-        render_ai_portfolio_center(db=db, user=user)
+        run_page("AI Portfolio", render_ai_portfolio_center, db=db, user=user)
     except Exception as e:
+        safe_rollback(db)
         st.error("AI Portfolio failed to load.")
         st.exception(e)
 
 elif page == "AI Forecast":
     try:
         from modules.forecasting.forecast_ui import render_forecast_page
-        render_forecast_page(db, user)
+        run_page("AI Forecast", render_forecast_page, db, user)
     except Exception as e:
+        safe_rollback(db)
         st.error("AI Forecast module failed to load.")
         st.exception(e)
 
 elif page == "AI Scanner":
-    from modules.alerts.scanner_ui import render_scanner_page
-    render_scanner_page(db, user)
+    try:
+        from modules.alerts.scanner_ui import render_scanner_page
+        run_page("AI Scanner", render_scanner_page, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error("AI Scanner failed.")
+        st.exception(e)
 
 elif page == "AI Agent":
-    from modules.agent.agent_ui import render_agent_page
-    render_agent_page(db, user)
+    try:
+        from modules.agent.agent_ui import render_agent_page
+        run_page("AI Agent", render_agent_page, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error("AI Agent failed.")
+        st.exception(e)
 
 elif page == "Options Flow":
-    from modules.options_flow.flow_ui import render_options_flow_page
-    render_options_flow_page(db, user)
+    try:
+        from modules.options_flow.flow_ui import render_options_flow_page
+        run_page("Options Flow", render_options_flow_page, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error("Options Flow failed.")
+        st.exception(e)
 
 elif page == "Analyst Consensus":
-    from modules.analyst.analyst_ui import render_analyst_page
-    render_analyst_page(db, user)
+    try:
+        from modules.analyst.analyst_ui import render_analyst_page
+        run_page("Analyst Consensus", render_analyst_page, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error("Analyst Consensus failed.")
+        st.exception(e)
 
 elif page == "Smart Money":
-    from modules.smc.smc_ui import render_smc_page
-    render_smc_page(db, user)
+    try:
+        from modules.smc.smc_ui import render_smc_page
+        run_page("Smart Money", render_smc_page, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error("Smart Money failed.")
+        st.exception(e)
 
 elif page == "Export / Sheets":
     try:
         from modules.export.export_ui import render_export_page
-        render_export_page(db, user)
+        run_page("Export / Sheets", render_export_page, db, user)
     except Exception as e:
+        safe_rollback(db)
         st.error("Export page failed to load.")
         st.exception(e)
 
 elif page == "Research Reports":
-    from modules.reports.report_ui import render_reports_page
-    render_reports_page(db, user)
+    try:
+        from modules.reports.report_ui import render_reports_page
+        run_page("Research Reports", render_reports_page, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error("Research Reports failed.")
+        st.exception(e)
 
 elif page == "Social Sentiment":
-    from modules.sentiment.sentiment_ui import render_sentiment_page
-    render_sentiment_page(db, user)
+    try:
+        from modules.sentiment.sentiment_ui import render_sentiment_page
+        run_page("Social Sentiment", render_sentiment_page, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error("Social Sentiment failed.")
+        st.exception(e)
 
 elif page == "Team Collaboration":
-    from modules.collab.collab_ui import render_team_page
-    render_team_page(db, user)
+    try:
+        from modules.collab.collab_ui import render_team_page
+        run_page("Team Collaboration", render_team_page, db, user)
+    except Exception as e:
+        safe_rollback(db)
+        st.error("Team Collaboration failed.")
+        st.exception(e)
 
 elif page == "Crypto":
     try:
         from modules.crypto.service import render_crypto_page
-        render_crypto_page(db, user)
+        run_page("Crypto", render_crypto_page, db, user)
     except Exception as e:
+        safe_rollback(db)
         st.error(f"Crypto module failed: {e}")
         st.exception(e)
 
@@ -780,3 +815,6 @@ elif page == "Help":
     except Exception as e:
         st.error("Help module failed.")
         st.exception(e)
+
+# Best-effort cleanup at end of Streamlit run.
+safe_rollback(db)
