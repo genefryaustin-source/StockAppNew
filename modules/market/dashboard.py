@@ -12,26 +12,48 @@ MARKET_UNIVERSE = [
 
 
 def render_market_dashboard(db):
-
-    try:
-        render_macro_dashboard(db)
-    except Exception as e:
-        st.warning(f"Macro dashboard unavailable: {e}")
-
-    st.divider()
-
     st.subheader("Top Movers")
 
-
-
-
     try:
 
-        count = db.execute(
-            text("SELECT COUNT(*) FROM price_history")
-        ).scalar()
+        rows = db.execute(text("""
+            WITH ranked AS (
+                SELECT
+                    symbol,
+                    date,
+                    close,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY symbol
+                        ORDER BY date DESC
+                    ) AS rn
+                FROM price_history
+                WHERE symbol IN (
+                    'AAPL','MSFT','NVDA','AMZN','META',
+                    'GOOGL','TSLA','JPM','XOM','AVGO'
+                )
+            )
+            SELECT
+                c.symbol,
+                c.close AS current_price,
+                p.close AS previous_price
+            FROM ranked c
+            JOIN ranked p
+                ON c.symbol = p.symbol
+            WHERE c.rn = 1
+              AND p.rn = 2
+        """)).fetchall()
 
-        st.write("PRICE HISTORY ROWS:", count)
+        st.write(f"Top Movers rows returned: {len(rows)}")
+
+    except Exception as e:
+
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+        st.error(f"PRICE HISTORY ERROR: {repr(e)}")
+        st.stop()
 
     except Exception as e:
 
@@ -77,8 +99,6 @@ def render_market_dashboard(db):
         ascending=True
     ).head(10)
 
-
-
     col1, col2 = st.columns(2)
 
     with col1:
@@ -91,7 +111,6 @@ def render_market_dashboard(db):
 
     st.divider()
     st.markdown("## 🔥 Market Heatmap")
-
 
     if not df.empty:
         heat_df = df.copy()
@@ -130,3 +149,11 @@ def render_market_dashboard(db):
             df.style.applymap(color_scale, subset=["Change %"]),
             use_container_width=True
         )
+
+    st.divider()
+    try:
+        render_macro_dashboard(db)
+    except Exception as e:
+        st.warning(f"Macro dashboard unavailable: {e}")
+
+

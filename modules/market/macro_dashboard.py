@@ -5,7 +5,6 @@ from datetime import datetime, UTC
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import yfinance as yf
 
 
 YIELD_SERIES = {
@@ -60,31 +59,69 @@ def _latest_non_null(df, col):
     return float(values.iloc[-1])
 
 
-@st.cache_data(ttl=60 * 60)
+@st.cache_data(ttl=60 * 60, show_spinner=False)
 def _load_fred_series(series_id: str) -> pd.DataFrame:
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-    df = pd.read_csv(url)
-    if "observation_date" not in df.columns or series_id not in df.columns:
-        return pd.DataFrame(columns=["Date", "Value"])
-    out = df.rename(columns={"observation_date": "Date", series_id: "Value"})
-    out["Date"] = pd.to_datetime(out["Date"], errors="coerce")
-    out["Value"] = pd.to_numeric(out["Value"], errors="coerce")
-    return out.dropna(subset=["Date", "Value"]).sort_values("Date")
+    """Load FRED series with full SSL/network error isolation."""
+    empty = pd.DataFrame(columns=["Date", "Value"])
+    try:
+        import requests
+        # Use requests instead of pd.read_csv to control SSL context
+        r = requests.get(
+            f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}",
+            timeout=10,
+            verify=True,
+        )
+        if r.status_code != 200:
+            return empty
+        from io import StringIO
+        df = pd.read_csv(StringIO(r.text))
+        if "observation_date" not in df.columns or series_id not in df.columns:
+            return empty
+        out = df.rename(columns={"observation_date": "Date", series_id: "Value"})
+        out["Date"] = pd.to_datetime(out["Date"], errors="coerce")
+        out["Value"] = pd.to_numeric(out["Value"], errors="coerce")
+        return out.dropna(subset=["Date", "Value"]).sort_values("Date")
+    except Exception:
+        return empty
 
 
-@st.cache_data(ttl=15 * 60)
+@st.cache_data(ttl=15 * 60, show_spinner=False)
 def _load_yahoo_history(symbol: str, period: str = "1y") -> pd.DataFrame:
-    df = yf.Ticker(symbol).history(period=period, interval="1d")
-    if df is None or df.empty:
-        return pd.DataFrame(columns=["Date", "Close"])
-    out = df.reset_index()
-    if "Datetime" in out.columns and "Date" not in out.columns:
-        out.rename(columns={"Datetime": "Date"}, inplace=True)
-    if "Date" not in out.columns or "Close" not in out.columns:
-        return pd.DataFrame(columns=["Date", "Close"])
-    out["Date"] = pd.to_datetime(out["Date"], errors="coerce")
-    out["Close"] = pd.to_numeric(out["Close"], errors="coerce")
-    return out.dropna(subset=["Date", "Close"]).sort_values("Date")
+    """Load Yahoo Finance history with full SSL/network error isolation."""
+    empty = pd.DataFrame(columns=["Date", "Close"])
+    try:
+        # Use a fresh requests session isolated from the DB connection pool
+        import requests, urllib.parse
+        period_map = {"3mo": 90, "6mo": 180, "1y": 365, "2y": 730}
+        days = period_map.get(period, 365)
+        import time as _time
+        end_ts   = int(_time.time())
+        start_ts = end_ts - days * 86400
+        url = (
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}"
+            f"?period1={start_ts}&period2={end_ts}&interval=1d&events=history"
+        )
+        r = requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Accept": "application/json",
+        }, timeout=10)
+        if r.status_code != 200:
+            return empty
+        data = r.json()
+        result = (data.get("chart") or {}).get("result") or []
+        if not result:
+            return empty
+        timestamps = result[0].get("timestamp", [])
+        closes     = (result[0].get("indicators") or {}).get("quote", [{}])[0].get("close", [])
+        if not timestamps or not closes:
+            return empty
+        out = pd.DataFrame({
+            "Date":  pd.to_datetime(timestamps, unit="s", utc=True),
+            "Close": pd.to_numeric(closes, errors="coerce"),
+        })
+        return out.dropna(subset=["Date", "Close"]).sort_values("Date")
+    except Exception:
+        return empty
 
 
 def _yield_from_yahoo(symbol: str):
@@ -312,24 +349,67 @@ def _bar_chart(df, x_col, y_col, title, y_suffix="", color_positive=True):
     return fig
 
 
+
 def render_macro_dashboard(db=None):
-    st.subheader("Macro Dashboard")
+    """
+    Macro Dashboard — all HTTP fetches are deferred behind a button click
+    so they never fire during app init / DB connection pool setup.
+    """
+    st.subheader("🌍 Macro Dashboard")
+    st.caption(
+        "Yield curve · Credit spreads · Inflation · VIX term structure · "
+        "Market proxies · Powered by FRED + Yahoo Finance"
+    )
 
-    generated_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
-    st.caption(f"Generated {generated_at}. Uses FRED macro series where available and market proxies from Yahoo Finance.")
+    if not st.session_state.get("macro_loaded", False):
+        col_btn, col_note = st.columns([1, 4])
+        with col_btn:
+            load_btn = st.button(
+                "📡 Load Macro Data",
+                type="primary",
+                key="macro_load_btn",
+                use_container_width=True,
+            )
+        with col_note:
+            st.info(
+                "Click to load live macro data from FRED and Yahoo Finance. "
+                "Loaded on demand to keep app startup fast and avoid SSL conflicts."
+            )
+        if not load_btn:
+            return
+        st.session_state["macro_loaded"] = True
 
-    yield_df = _load_yield_curve()
-    credit_df = _load_fred_metric_map(CREDIT_SERIES)
-    inflation_df = _load_fred_metric_map({"5Y Breakeven": "T5YIE", "10Y Breakeven": "T10YIE"})
-    inflation_yoy = _load_cpi_yoy()
-    fed_df = _load_fred_metric_map({"Effective Fed Funds": "FEDFUNDS"})
-    vix_df = _load_vix_term_structure()
-    proxy_df = _load_proxy_price_metrics()
-    regime = _macro_regime(yield_df, credit_df, inflation_yoy, vix_df)
+    col_ts, col_r = st.columns([5, 1])
+    with col_ts:
+        st.caption(f"Last loaded: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}")
+    with col_r:
+        if st.button("↺ Refresh", key="macro_refresh"):
+            st.session_state["macro_loaded"] = False
+            try:
+                _load_fred_series.clear()
+                _load_yahoo_history.clear()
+            except Exception:
+                pass
+            st.rerun()
 
-    y10 = _safe_float(yield_df.loc[yield_df["Tenor"] == "10Y", "Yield"].iloc[0]) if "10Y" in yield_df["Tenor"].values else None
+    with st.spinner("Loading macro data…"):
+        try:
+            yield_df      = _load_yield_curve()
+            credit_df     = _load_fred_metric_map(CREDIT_SERIES)
+            inflation_df  = _load_fred_metric_map({"5Y Breakeven": "T5YIE", "10Y Breakeven": "T10YIE"})
+            inflation_yoy = _load_cpi_yoy()
+            fed_df        = _load_fred_metric_map({"Effective Fed Funds": "FEDFUNDS"})
+            vix_df        = _load_vix_term_structure()
+            proxy_df      = _load_proxy_price_metrics()
+            regime        = _macro_regime(yield_df, credit_df, inflation_yoy, vix_df)
+        except Exception as e:
+            st.error(f"Failed to load macro data: {e}")
+            st.session_state["macro_loaded"] = False
+            return
+
+    y10    = _safe_float(yield_df.loc[yield_df["Tenor"] == "10Y", "Yield"].iloc[0]) if "10Y" in yield_df["Tenor"].values else None
     hy_oas = _safe_float(credit_df.loc[credit_df["Metric"] == "HY OAS", "Value"].iloc[0]) if "HY OAS" in credit_df["Metric"].values else None
-    vix = _safe_float(vix_df.loc[vix_df["Contract"] == "VIX", "Value"].iloc[0]) if "VIX" in vix_df["Contract"].values else None
+    vix    = _safe_float(vix_df.loc[vix_df["Contract"] == "VIX", "Value"].iloc[0]) if "VIX" in vix_df["Contract"].values else None
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Macro Regime", regime["regime"], f"Score {regime['score']:+.0f}")
@@ -348,22 +428,18 @@ def render_macro_dashboard(db=None):
             st.plotly_chart(_yield_curve_chart(yield_df), use_container_width=True)
         st.dataframe(
             yield_df.style.format({"Yield": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}%"}),
-            use_container_width=True,
-            hide_index=True,
+            use_container_width=True, hide_index=True,
         )
 
     with tab_credit:
         if credit_df["Value"].notna().any():
             st.plotly_chart(_bar_chart(credit_df, "Metric", "Value", "Credit Spreads", "%", color_positive=False), use_container_width=True)
         st.dataframe(
-            credit_df.style.format(
-                {
-                    "Value": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}%",
-                    "Change": lambda v: "N/A" if pd.isna(v) else f"{v:+.2f} pts",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
+            credit_df.style.format({
+                "Value":  lambda v: "N/A" if pd.isna(v) else f"{v:.2f}%",
+                "Change": lambda v: "N/A" if pd.isna(v) else f"{v:+.2f} pts",
+            }),
+            use_container_width=True, hide_index=True,
         )
 
     with tab_inflation:
@@ -372,45 +448,36 @@ def render_macro_dashboard(db=None):
         for idx, row in inflation_df.iterrows():
             target = i2 if idx == 0 else i3
             target.metric(row["Metric"], _fmt_pct(row["Value"]))
-
         if inflation_df["Value"].notna().any():
             st.plotly_chart(_bar_chart(inflation_df, "Metric", "Value", "Inflation Expectations", "%"), use_container_width=True)
         st.dataframe(
-            inflation_df.style.format(
-                {
-                    "Value": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}%",
-                    "Change": lambda v: "N/A" if pd.isna(v) else f"{v:+.2f} pts",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
+            inflation_df.style.format({
+                "Value":  lambda v: "N/A" if pd.isna(v) else f"{v:.2f}%",
+                "Change": lambda v: "N/A" if pd.isna(v) else f"{v:+.2f} pts",
+            }),
+            use_container_width=True, hide_index=True,
         )
 
     with tab_vol:
-        fed_proxy_rows = pd.DataFrame(
-            [
-                {
-                    "Metric": "Effective Fed Funds",
-                    "Value": _safe_float(fed_df.iloc[0]["Value"]) if not fed_df.empty else None,
-                    "Readthrough": "Current policy-rate anchor",
-                },
-                {"Metric": "10Y - 3M Curve", "Value": regime["10Y-3M"], "Readthrough": "Negative implies restrictive / recessionary pressure"},
-                {"Metric": "10Y - 2Y Curve", "Value": regime["10Y-2Y"], "Readthrough": "Positive steepening often supports cyclicals"},
-            ]
-        )
-
+        fed_proxy_rows = pd.DataFrame([
+            {
+                "Metric": "Effective Fed Funds",
+                "Value": _safe_float(fed_df.iloc[0]["Value"]) if not fed_df.empty else None,
+                "Readthrough": "Current policy-rate anchor",
+            },
+            {"Metric": "10Y - 3M Curve", "Value": regime["10Y-3M"], "Readthrough": "Negative implies restrictive / recessionary pressure"},
+            {"Metric": "10Y - 2Y Curve", "Value": regime["10Y-2Y"], "Readthrough": "Positive steepening often supports cyclicals"},
+        ])
         if vix_df["Value"].notna().any():
             st.plotly_chart(_bar_chart(vix_df, "Contract", "Value", "VIX Term Structure", ""), use_container_width=True)
         st.dataframe(
             vix_df.style.format({"Value": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}"}),
-            use_container_width=True,
-            hide_index=True,
+            use_container_width=True, hide_index=True,
         )
         st.markdown("#### Fed Path Proxies")
         st.dataframe(
             fed_proxy_rows.style.format({"Value": lambda v: "N/A" if pd.isna(v) else f"{v:+.2f} pts"}),
-            use_container_width=True,
-            hide_index=True,
+            use_container_width=True, hide_index=True,
         )
 
     with tab_proxies:
@@ -419,12 +486,9 @@ def render_macro_dashboard(db=None):
             plot_df["1M Change %"] = plot_df["1M Change"] * 100.0
             st.plotly_chart(_bar_chart(plot_df, "Symbol", "1M Change %", "Macro Proxy 1M Performance", "%"), use_container_width=True)
         st.dataframe(
-            proxy_df.style.format(
-                {
-                    "Last": lambda v: "N/A" if pd.isna(v) else f"{v:,.2f}",
-                    "1M Change": lambda v: "N/A" if pd.isna(v) else f"{v:+.2%}",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
+            proxy_df.style.format({
+                "Last":      lambda v: "N/A" if pd.isna(v) else f"{v:,.2f}",
+                "1M Change": lambda v: "N/A" if pd.isna(v) else f"{v:+.2%}",
+            }),
+            use_container_width=True, hide_index=True,
         )
