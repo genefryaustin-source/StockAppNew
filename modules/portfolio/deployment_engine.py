@@ -4,7 +4,7 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 from sqlalchemy import text
-
+from datetime import datetime, UTC
 
 def _safe_float(x, default=0.0):
     try:
@@ -359,7 +359,7 @@ def render_portfolio_deployment(db, user):
             text(
                 """
                 CREATE TABLE IF NOT EXISTS portfolio_rebalance_plans (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     portfolio_id INTEGER,
                     tenant_id TEXT,
                     plan_name TEXT,
@@ -373,7 +373,7 @@ def render_portfolio_deployment(db, user):
             text(
                 """
                 CREATE TABLE IF NOT EXISTS portfolio_rebalance_trades (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id SERIAL PRIMARY KEY,
                     plan_id INTEGER,
                     ticker TEXT,
                     action TEXT,
@@ -391,42 +391,66 @@ def render_portfolio_deployment(db, user):
             )
         )
 
-        db.execute(
-            text(
-                """
+        plan_id = db.execute(
+            text("""
                 INSERT INTO portfolio_rebalance_plans
-                (portfolio_id, tenant_id, plan_name, created_at)
-                VALUES (:portfolio_id, :tenant_id, :plan_name, :created_at)
-                """
-            ),
+                (
+                    portfolio_id,
+                    tenant_id,
+                    plan_name,
+                    created_at
+                )
+                VALUES
+                (
+                    :portfolio_id,
+                    :tenant_id,
+                    :plan_name,
+                    :created_at
+                )
+                RETURNING id
+            """),
             {
                 "portfolio_id": portfolio_id,
                 "tenant_id": user.get("tenant_id", "default_tenant"),
                 "plan_name": plan_name,
                 "created_at": datetime.now(UTC).isoformat(),
             },
-        )
-
-        plan_id = db.execute(text("SELECT last_insert_rowid()")).scalar()
+        ).scalar()
 
         for _, row in blotter.iterrows():
             db.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO portfolio_rebalance_trades
                     (
-                        plan_id, ticker, action, last_price, buffered_price,
-                        current_shares, target_shares, delta_shares,
-                        current_value, target_value, delta_value, target_weight
+                        plan_id,
+                        ticker,
+                        action,
+                        last_price,
+                        buffered_price,
+                        current_shares,
+                        target_shares,
+                        delta_shares,
+                        current_value,
+                        target_value,
+                        delta_value,
+                        target_weight
                     )
                     VALUES
                     (
-                        :plan_id, :ticker, :action, :last_price, :buffered_price,
-                        :current_shares, :target_shares, :delta_shares,
-                        :current_value, :target_value, :delta_value, :target_weight
+                        :plan_id,
+                        :ticker,
+                        :action,
+                        :last_price,
+                        :buffered_price,
+                        :current_shares,
+                        :target_shares,
+                        :delta_shares,
+                        :current_value,
+                        :target_value,
+                        :delta_value,
+                        :target_weight
                     )
-                    """
-                ),
+                """),
                 {
                     "plan_id": plan_id,
                     "ticker": row["ticker"],

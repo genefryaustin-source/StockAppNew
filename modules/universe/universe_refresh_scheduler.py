@@ -36,7 +36,7 @@ def utc_now() -> datetime:
 def ensure_universe_refresh_tables(db) -> None:
     db.execute(text("""
         CREATE TABLE IF NOT EXISTS universe_refresh_jobs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id INTEGER PRIMARY KEY,
             universe_id TEXT NOT NULL,
             universe_name TEXT,
             status TEXT DEFAULT 'PENDING',

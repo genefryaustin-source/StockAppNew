@@ -21,7 +21,7 @@ from modules.market_data.adaptive_rate_limit_manager import (
 def ensure_provider_telemetry_tables(db):
     db.execute(text("""
         CREATE TABLE IF NOT EXISTS provider_telemetry (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id INTEGER PRIMARY KEY,
             provider TEXT NOT NULL,
             health_score REAL,
             success_count INTEGER,
