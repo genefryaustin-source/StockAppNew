@@ -29,7 +29,11 @@ DB_URL = st.secrets["DATABASE_URL"]
 engine = create_engine(
     DB_URL,
     pool_pre_ping=True,
-    pool_recycle=3600,
+    pool_recycle=300,
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,
+    pool_reset_on_return="rollback",
     echo=False,
 )
 
@@ -42,9 +46,10 @@ engine = create_engine(
 
 SessionLocal = sessionmaker(
     bind=engine,
-    expire_on_commit=False  # disables this entire class of bugs
+    autoflush=False,
+    autocommit=False,
+    expire_on_commit=False,
 )
-
 
 # ---------------------------------------------------
 # Init Database

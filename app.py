@@ -137,6 +137,11 @@ try:
     from modules.alerts.service import AlertService
 
 except Exception as e:
+    try:
+        db.rollback()
+    except Exception:
+        pass
+
     st.error(f"Critical module import failed: {e}")
     st.exception(e)
     st.stop()
@@ -289,7 +294,13 @@ try:
     nav_service = NavService(db, market_data_service)
     alert_service = AlertService(db)
     order_service = OrderService(db)
+
 except Exception as e:
+    try:
+        db.rollback()
+    except Exception:
+        pass
+
     st.error(f"Service initialization failed: {e}")
     st.exception(e)
     st.stop()
