@@ -12,16 +12,16 @@ from sqlalchemy import text
 
 def ensure_provider_learning_tables(db):
     db.execute(text("""
-        CREATE TABLE IF NOT EXISTS provider_learning_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            provider TEXT NOT NULL,
-            request_type TEXT,
-            symbol TEXT,
-            success INTEGER DEFAULT 0,
-            latency_ms REAL,
-            error TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
+    CREATE TABLE IF NOT EXISTS provider_learning_events (
+        id SERIAL PRIMARY KEY,
+        provider VARCHAR(100) NOT NULL,
+        request_type VARCHAR(100),
+        symbol VARCHAR(20),
+        success INTEGER DEFAULT 0,
+        latency_ms DOUBLE PRECISION,
+        error TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
     """))
 
     db.execute(text("""
