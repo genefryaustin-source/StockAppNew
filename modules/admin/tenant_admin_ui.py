@@ -483,17 +483,17 @@ def render_tenant_admin_panel(db, user):
             # --- LIST & MANAGE EXISTING TENANTS ---
             # FIX 7: Added rename (update) functionality alongside
             # activate/deactivate for full CRUD on tenants.
-            st.subheader("Existing Tenants")
+            #st.subheader("Existing Tenants")
 
 
-            debug_rows = db.execute(sql_text("""
-                SELECT id, name, created_at
-                FROM tenants
-                ORDER BY created_at DESC
-                """)
-            ).fetchall()
+            #debug_rows = db.execute(sql_text("""
+                #SELECT id, name, created_at
+                #FROM tenants
+                #ORDER BY created_at DESC
+                #""")
+            #).fetchall()
 
-            st.write("TENANT DEBUG:", debug_rows)
+            #st.write("TENANT DEBUG:", debug_rows)
             tenants = service.list_tenants()
 
             if not tenants:
