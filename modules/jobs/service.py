@@ -184,16 +184,33 @@ def requeue_job(db: Session, job_id: str):
 # ---------------------------------------------------
 
 def has_running_universe_refresh(db: Session, tenant_id: str):
-    running = (
+    running_jobs = (
         db.query(Job)
         .filter(
             Job.tenant_id == tenant_id,
             Job.job_type == "universe_refresh",
             Job.status == "running",
         )
-        .first()
+        .all()
     )
-    return running is not None
+
+    for job in running_jobs:
+
+        # If progress reached/exceeded total, auto-finalize it.
+        if (
+            job.total is not None
+            and job.done is not None
+            and int(job.done) >= int(job.total)
+        ):
+            job.done = int(job.total)
+            job.status = "succeeded"
+            job.finished_at = _now_iso()
+            db.commit()
+            continue
+
+        return True
+
+    return False
 
 
 # ---------------------------------------------------
@@ -242,7 +259,8 @@ def run_one_queued_job(db: Session, tenant_id: str):
 
             def progress(done: int, total: int, symbol: str):
                 try:
-                    set_job_progress(db, job, done, total)
+                    safe_done = min(int(done or 0), int(total or 0))
+                    set_job_progress(db, job, safe_done, total)
                     append_job_log(db, job, f"{done}/{total} {symbol}")
                     db.refresh(job)
                     if job.status in ["cancelled", "stopped"]:
@@ -264,6 +282,14 @@ def run_one_queued_job(db: Session, tenant_id: str):
             )
 
             append_job_log(db, job, f"Refresh result: {result}")
+
+            # Clamp final progress so UI never shows 246/245
+            try:
+                if job.total is not None:
+                    job.done = min(int(job.done or 0), int(job.total or 0))
+            except Exception:
+                pass
+
             succeed_job(db, job)
             append_job_log(db, job, "Universe refresh complete.")
             from modules.core.cache_invalidation import (
