@@ -100,13 +100,109 @@ def _sector_leadership(df: pd.DataFrame):
 
 
 def render_regime_engine(db, user):
+
     tenant_id = user["tenant_id"]
-    price_cache = st.session_state.get("price_cache", {})
 
-    st.subheader("Phase 16 — Market Regime Engine")
+    st.subheader("Market Regime Engine")
 
-    if not price_cache:
-        st.warning("Market data cache not available. Warm the cache first.")
+    required_symbols = [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "TLT",
+        "GLD",
+        "XLU",
+        "XLP",
+    ]
+
+    price_cache = st.session_state.setdefault(
+        "price_cache",
+        {}
+    )
+
+    missing_symbols = [
+        s
+        for s in required_symbols
+        if s not in price_cache
+    ]
+
+    if missing_symbols:
+
+        from modules.market_data.service import (
+            get_price_history,
+        )
+
+        for symbol in missing_symbols:
+
+            try:
+
+                print(
+                    f"REGIME LOADING: {symbol}"
+                )
+
+                try:
+                    df = get_price_history(
+                        db=db,
+                        symbol=symbol,
+                        period="1y",
+                        interval="1d",
+                    )
+                except TypeError:
+                    df = get_price_history(
+                        symbol=symbol,
+                        period="1y",
+                        interval="1d",
+                    )
+
+                rows = (
+                    len(df)
+                    if df is not None
+                    else 0
+                )
+
+                print(
+                    f"REGIME ROWS: {symbol} {rows}"
+                )
+
+                if (
+                    df is not None
+                    and len(df) > 0
+                ):
+                    price_cache[symbol] = df
+
+            except Exception as e:
+
+                print(
+                    f"REGIME LOAD FAILED: {symbol}: {e}"
+                )
+
+        st.session_state["price_cache"] = price_cache
+
+    print(
+        "REGIME CACHE SYMBOLS:",
+        list(price_cache.keys())
+    )
+
+    required_for_regime = [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "TLT",
+        "GLD",
+    ]
+
+    missing_required = [
+        s
+        for s in required_for_regime
+        if s not in price_cache
+    ]
+
+    if missing_required:
+
+        st.warning(
+            f"Unable to load regime data for: {', '.join(missing_required)}"
+        )
+
         return
 
     spy = _close_series(price_cache, "SPY")
@@ -116,25 +212,48 @@ def render_regime_engine(db, user):
     gld = _close_series(price_cache, "GLD")
 
     trend = _trend_label(spy)
-    vol20 = _realized_vol(spy, 20)
+
+    vol20 = _realized_vol(
+        spy,
+        20,
+    )
+
     spy_20 = _pct_change(spy, 20)
     qqq_20 = _pct_change(qqq, 20)
     iwm_20 = _pct_change(iwm, 20)
     tlt_20 = _pct_change(tlt, 20)
     gld_20 = _pct_change(gld, 20)
 
-    snap_df = get_latest_snapshots_df(db, tenant_id)
-    breadth_pct, breadth_total = _breadth_from_snapshots(snap_df)
-    sectors = _sector_leadership(snap_df)
+    snap_df = get_latest_snapshots_df(
+        db,
+        tenant_id,
+    )
+
+    breadth_pct, breadth_total = (
+        _breadth_from_snapshots(
+            snap_df
+        )
+    )
+
+    sectors = _sector_leadership(
+        snap_df
+    )
 
     offense = 0.0
     defense = 0.0
 
-    for x in [spy_20, qqq_20, iwm_20]:
+    for x in [
+        spy_20,
+        qqq_20,
+        iwm_20,
+    ]:
         if x is not None:
             offense += x
 
-    for x in [tlt_20, gld_20]:
+    for x in [
+        tlt_20,
+        gld_20,
+    ]:
         if x is not None:
             defense += x
 
@@ -153,27 +272,78 @@ def render_regime_engine(db, user):
         vol_regime = "Normal Vol"
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("SPY Trend", trend)
-    c2.metric("Volatility Regime", vol_regime, f"{vol20:.1f}%" if vol20 is not None else "N/A")
-    c3.metric("Risk Stance", stance)
+
+    c1.metric(
+        "SPY Trend",
+        trend,
+    )
+
+    c2.metric(
+        "Volatility Regime",
+        vol_regime,
+        f"{vol20:.1f}%"
+        if vol20 is not None
+        else "N/A",
+    )
+
+    c3.metric(
+        "Risk Stance",
+        stance,
+    )
+
     c4.metric(
         "Breadth",
-        f"{breadth_pct:.1f}%" if breadth_pct is not None else "N/A",
-        f"{breadth_total} symbols" if breadth_total is not None else ""
+        f"{breadth_pct:.1f}%"
+        if breadth_pct is not None
+        else "N/A",
+        f"{breadth_total} symbols"
+        if breadth_total is not None
+        else "",
     )
 
-    st.markdown("### Cross-Asset 20D Performance")
+    st.markdown(
+        "### Cross-Asset 20D Performance"
+    )
+
     perf_df = pd.DataFrame(
         [
-            {"Asset": "SPY", "Return %": spy_20},
-            {"Asset": "QQQ", "Return %": qqq_20},
-            {"Asset": "IWM", "Return %": iwm_20},
-            {"Asset": "TLT", "Return %": tlt_20},
-            {"Asset": "GLD", "Return %": gld_20},
+            {
+                "Asset": "SPY",
+                "Return %": spy_20,
+            },
+            {
+                "Asset": "QQQ",
+                "Return %": qqq_20,
+            },
+            {
+                "Asset": "IWM",
+                "Return %": iwm_20,
+            },
+            {
+                "Asset": "TLT",
+                "Return %": tlt_20,
+            },
+            {
+                "Asset": "GLD",
+                "Return %": gld_20,
+            },
         ]
     )
-    st.dataframe(perf_df, use_container_width=True, hide_index=True)
+
+    st.dataframe(
+        perf_df,
+        use_container_width=True,
+        hide_index=True,
+    )
 
     if not sectors.empty:
-        st.markdown("### Sector Leadership")
-        st.dataframe(sectors.head(12), use_container_width=True, hide_index=True)
+
+        st.markdown(
+            "### Sector Leadership"
+        )
+
+        st.dataframe(
+            sectors.head(12),
+            use_container_width=True,
+            hide_index=True,
+        )
