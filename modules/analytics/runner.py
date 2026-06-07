@@ -73,6 +73,22 @@ except Exception:
         return history_map
 
 
+# Optional provider health hooks from market_data.service.
+# These keep analytics fundamentals from hammering a provider after 429s.
+try:
+    from modules.market_data.service import (
+        _disable_provider,
+        provider_enabled,
+    )
+except Exception:
+
+    def _disable_provider(*args, **kwargs):
+        return None
+
+    def provider_enabled(*args, **kwargs):
+        return True
+
+
 # ---------------------------------------------------
 # CONFIG
 # ---------------------------------------------------
@@ -633,107 +649,393 @@ def _compute_rsi(series, period=14):
 # FUNDAMENTALS
 # ---------------------------------------------------
 
+def _provider_available(provider_name):
+    """
+    Defensive wrapper around market_data.service provider health state.
+    If the service does not know about this provider, allow the attempt.
+    """
+    try:
+        return bool(provider_enabled(provider_name))
+    except Exception:
+        return True
+
+
+def _cooldown_provider(provider_name, seconds=3600, reason="rate limited"):
+    """
+    Defensive cooldown wrapper. Keeps this analytics runner compatible with
+    service.py versions that do or do not expose provider state functions.
+    """
+    try:
+        _disable_provider(
+            provider_name,
+            seconds=seconds,
+            reason=reason,
+        )
+    except Exception as e:
+        print("PROVIDER COOLDOWN SKIPPED:", provider_name, e)
+
+
+def _fundamentals_complete(result):
+    if not isinstance(result, dict):
+        return False
+
+    fields = [
+        "revenue_cagr",
+        "gross_margin",
+        "operating_margin",
+        "pe_ttm",
+        "ps_ttm",
+        "ev_ebitda",
+        "fcf_margin",
+        "sector",
+    ]
+
+    return any(result.get(field) not in (None, "", "Unknown") for field in fields)
+
+
+def _get_finnhub_sector(sym, api_key):
+    if sym in _profile_cache:
+        return _profile_cache[sym]
+
+    try:
+        profile_response = requests.get(
+            "https://finnhub.io/api/v1/stock/profile2",
+            params={
+                "symbol": sym,
+                "token": api_key,
+            },
+            timeout=8,
+        )
+
+        if profile_response.status_code == 429:
+            print("🚨 FINNHUB PROFILE RATE LIMITED:", sym)
+            _cooldown_provider(
+                "FINNHUB",
+                seconds=3600,
+                reason=f"profile rate-limited for {sym}",
+            )
+            return None
+
+        profile_data = _safe_json_response(
+            profile_response,
+            "FINNHUB PROFILE",
+            sym,
+        )
+
+        sector = None
+
+        if isinstance(profile_data, dict):
+            sector = profile_data.get("finnhubIndustry")
+
+        print("✅ FINNHUB PROFILE SECTOR:", sym, sector)
+
+        _profile_cache[sym] = sector
+
+        return sector
+
+    except Exception as e:
+        print("PROFILE ERROR:", sym, e)
+        return None
+
+
+def _get_finnhub_fundamentals(sym):
+    if not _provider_available("FINNHUB"):
+        print("⚠️ FINNHUB TEMP DISABLED")
+        return None
+
+    key = get_secret("FINNHUB_API_KEY")
+
+    if not key:
+        return None
+
+    response = requests.get(
+        "https://finnhub.io/api/v1/stock/metric",
+        params={
+            "symbol": sym,
+            "metric": "all",
+            "token": key,
+        },
+        timeout=8,
+    )
+
+    if response.status_code == 429:
+        print("🚨 FINNHUB METRIC RATE LIMITED:", sym)
+        print(str(response.text or "")[:300])
+        _cooldown_provider(
+            "FINNHUB",
+            seconds=3600,
+            reason=f"fundamentals rate-limited for {sym}",
+        )
+        return None
+
+    data = _safe_json_response(
+        response,
+        "FINNHUB METRIC",
+        sym,
+    )
+
+    if not isinstance(data, dict):
+        return None
+
+    metrics = data.get("metric", {})
+
+    if not isinstance(metrics, dict):
+        metrics = {}
+
+    sector = _get_finnhub_sector(sym, key)
+
+    result = {
+        "revenue_cagr": _to_float(metrics.get("revenueGrowthTTMYoy")),
+        "gross_margin": _normalize_percent(metrics.get("grossMarginTTM")),
+        "operating_margin": _normalize_percent(metrics.get("operatingMarginTTM")),
+        "pe_ttm": _to_float(metrics.get("peTTM")),
+        "ps_ttm": _to_float(metrics.get("psTTM")),
+        "ev_ebitda": _to_float(metrics.get("evEbitdaTTM")),
+        "fcf_margin": None,
+        "sector": sector,
+    }
+
+    fcf_ps = _to_float(
+        metrics.get("cashFlowPerShareTTM")
+        or metrics.get("freeCashFlowPerShareTTM")
+    )
+
+    rev_ps = _to_float(metrics.get("revenuePerShareTTM"))
+
+    print("DEBUG FCF INPUT:", sym, fcf_ps, rev_ps)
+
+    if fcf_ps is not None and rev_ps not in (None, 0):
+        result["fcf_margin"] = (fcf_ps / rev_ps) * 100
+        print("✅ FCF CALCULATED:", sym, result["fcf_margin"])
+    else:
+        print("⚠️ FCF STILL MISSING:", sym)
+
+    if not _fundamentals_complete(result):
+        return None
+
+    print("✅ FINNHUB FUNDAMENTALS USED:", sym)
+
+    return result
+
+
+def _get_fmp_profile_sector(sym, api_key):
+    try:
+        response = requests.get(
+            f"https://financialmodelingprep.com/api/v3/profile/{sym}",
+            params={
+                "apikey": api_key,
+            },
+            timeout=8,
+        )
+
+        if response.status_code == 429:
+            print("🚨 FMP PROFILE RATE LIMITED:", sym)
+            _cooldown_provider(
+                "FMP",
+                seconds=3600,
+                reason=f"profile rate-limited for {sym}",
+            )
+            return None
+
+        data = _safe_json_response(
+            response,
+            "FMP PROFILE",
+            sym,
+        )
+
+        if isinstance(data, list) and data:
+            return data[0].get("sector") or data[0].get("industry")
+
+    except Exception as e:
+        print("FMP PROFILE ERROR:", sym, e)
+
+    return None
+
+
+def _get_fmp_fundamentals(sym):
+    if not _provider_available("FMP"):
+        print("⚠️ FMP TEMP DISABLED")
+        return None
+
+    key = get_secret("FMP_API_KEY")
+
+    if not key:
+        return None
+
+    response = requests.get(
+        f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{sym}",
+        params={
+            "apikey": key,
+        },
+        timeout=8,
+    )
+
+    if response.status_code == 429:
+        print("🚨 FMP FUNDAMENTALS RATE LIMITED:", sym)
+        print(str(response.text or "")[:300])
+        _cooldown_provider(
+            "FMP",
+            seconds=3600,
+            reason=f"fundamentals rate-limited for {sym}",
+        )
+        return None
+
+    data = _safe_json_response(
+        response,
+        "FMP KEY METRICS TTM",
+        sym,
+    )
+
+    row = None
+
+    if isinstance(data, list) and data:
+        row = data[0]
+    elif isinstance(data, dict):
+        row = data
+
+    if not isinstance(row, dict):
+        return None
+
+    result = {
+        "revenue_cagr": None,
+        "gross_margin": None,
+        "operating_margin": None,
+        "pe_ttm": _to_float(
+            row.get("peRatioTTM")
+            or row.get("peRatio")
+        ),
+        "ps_ttm": _to_float(
+            row.get("priceToSalesRatioTTM")
+            or row.get("priceToSalesRatio")
+        ),
+        "ev_ebitda": _to_float(
+            row.get("enterpriseValueOverEBITDATTM")
+            or row.get("enterpriseValueOverEBITDA")
+        ),
+        "fcf_margin": _normalize_percent(
+            row.get("freeCashFlowYieldTTM")
+            or row.get("freeCashFlowYield")
+        ),
+        "sector": _get_fmp_profile_sector(sym, key),
+    }
+
+    # FMP exposes free cash flow yield instead of FCF margin in this endpoint.
+    # It is still useful as a quality/cash-flow signal, so we preserve it in
+    # the existing fcf_margin field without changing downstream scoring logic.
+    if not _fundamentals_complete(result):
+        return None
+
+    print("✅ FMP FUNDAMENTALS USED:", sym)
+
+    return result
+
+
+def _get_alpha_fundamentals(sym):
+    if not _provider_available("ALPHA_VANTAGE"):
+        print("⚠️ ALPHA_VANTAGE TEMP DISABLED")
+        return None
+
+    key = (
+        get_secret("ALPHAVANTAGE_API_KEY")
+        or get_secret("ALPHA_VANTAGE_API_KEY")
+    )
+
+    if not key:
+        return None
+
+    response = requests.get(
+        "https://www.alphavantage.co/query",
+        params={
+            "function": "OVERVIEW",
+            "symbol": sym,
+            "apikey": key,
+        },
+        timeout=8,
+    )
+
+    if response.status_code == 429:
+        print("🚨 ALPHA FUNDAMENTALS RATE LIMITED:", sym)
+        print(str(response.text or "")[:300])
+        _cooldown_provider(
+            "ALPHA_VANTAGE",
+            seconds=3600,
+            reason=f"fundamentals rate-limited for {sym}",
+        )
+        return None
+
+    data = _safe_json_response(
+        response,
+        "ALPHA OVERVIEW",
+        sym,
+    )
+
+    if not isinstance(data, dict) or not data:
+        return None
+
+    if "Note" in data or "Information" in data:
+        print("🚨 ALPHA FUNDAMENTALS RATE LIMITED:", sym)
+        _cooldown_provider(
+            "ALPHA_VANTAGE",
+            seconds=3600,
+            reason=f"fundamentals rate-limited for {sym}",
+        )
+        return None
+
+    result = {
+        "revenue_cagr": _normalize_percent(
+            data.get("QuarterlyRevenueGrowthYOY")
+        ),
+        "gross_margin": _normalize_percent(
+            data.get("GrossProfitTTM")
+        ),
+        "operating_margin": _normalize_percent(
+            data.get("OperatingMarginTTM")
+        ),
+        "pe_ttm": _to_float(data.get("PERatio")),
+        "ps_ttm": _to_float(data.get("PriceToSalesRatioTTM")),
+        "ev_ebitda": _to_float(data.get("EVToEBITDA")),
+        "fcf_margin": None,
+        "sector": data.get("Sector"),
+    }
+
+    if not _fundamentals_complete(result):
+        return None
+
+    print("✅ ALPHA FUNDAMENTALS USED:", sym)
+
+    return result
+
+
 def _get_fundamentals(symbol):
     sym = _normalize(symbol)
 
     if sym in _fund_cache:
         return _fund_cache[sym]
 
-    key = get_secret("FINNHUB_API_KEY")
+    provider_chain = [
+        ("FINNHUB", _get_finnhub_fundamentals),
+        ("FMP", _get_fmp_fundamentals),
+        ("ALPHA_VANTAGE", _get_alpha_fundamentals),
+    ]
 
-    if not key:
-        return {}
+    for provider_name, provider_func in provider_chain:
+        try:
+            result = provider_func(sym)
 
-    try:
-        response = requests.get(
-            "https://finnhub.io/api/v1/stock/metric",
-            params={
-                "symbol": sym,
-                "metric": "all",
-                "token": key,
-            },
-            timeout=8,
-        )
+            if _fundamentals_complete(result):
+                _fund_cache[sym] = result
+                return result
 
-        data = _safe_json_response(
-            response,
-            "FINNHUB METRIC",
-            sym,
-        )
+        except Exception as e:
+            print(
+                f"{provider_name} FUNDAMENTALS ERROR:",
+                sym,
+                e,
+            )
 
-        if not isinstance(data, dict):
-            return {}
+    print("⚠️ NO FUNDAMENTAL PROVIDER AVAILABLE:", sym)
 
-        metrics = data.get("metric", {})
-
-        if not isinstance(metrics, dict):
-            metrics = {}
-
-        sector = None
-
-        if sym in _profile_cache:
-            sector = _profile_cache[sym]
-        else:
-            try:
-                profile_response = requests.get(
-                    "https://finnhub.io/api/v1/stock/profile2",
-                    params={
-                        "symbol": sym,
-                        "token": key,
-                    },
-                    timeout=8,
-                )
-
-                profile_data = _safe_json_response(
-                    profile_response,
-                    "FINNHUB PROFILE",
-                    sym,
-                )
-
-                if isinstance(profile_data, dict):
-                    sector = profile_data.get("finnhubIndustry")
-
-                print("✅ FINNHUB PROFILE SECTOR:", sym, sector)
-
-                _profile_cache[sym] = sector
-
-            except Exception as e:
-                print("PROFILE ERROR:", sym, e)
-
-        result = {
-            "revenue_cagr": _to_float(metrics.get("revenueGrowthTTMYoy")),
-            "gross_margin": _normalize_percent(metrics.get("grossMarginTTM")),
-            "operating_margin": _normalize_percent(metrics.get("operatingMarginTTM")),
-            "pe_ttm": _to_float(metrics.get("peTTM")),
-            "ps_ttm": _to_float(metrics.get("psTTM")),
-            "ev_ebitda": _to_float(metrics.get("evEbitdaTTM")),
-            "fcf_margin": None,
-            "sector": sector,
-        }
-
-        fcf_ps = _to_float(
-            metrics.get("cashFlowPerShareTTM")
-            or metrics.get("freeCashFlowPerShareTTM")
-        )
-
-        rev_ps = _to_float(metrics.get("revenuePerShareTTM"))
-
-        print("DEBUG FCF INPUT:", sym, fcf_ps, rev_ps)
-
-        if fcf_ps is not None and rev_ps not in (None, 0):
-            result["fcf_margin"] = (fcf_ps / rev_ps) * 100
-            print("✅ FCF CALCULATED:", sym, result["fcf_margin"])
-        else:
-            print("⚠️ FCF STILL MISSING:", sym)
-
-        print("✅ FINNHUB FUNDAMENTALS USED:", sym)
-
-        _fund_cache[sym] = result
-        return result
-
-    except Exception as e:
-        print("FINNHUB ERROR:", sym, e)
-        return {}
+    return {}
 
 
 # ---------------------------------------------------
