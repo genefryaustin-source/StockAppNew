@@ -579,7 +579,10 @@ def render_universe(db, user):
         tenant_id,
         universe_id=universe_id,
     )
-
+    st.write(
+        "ACTIVE JOBS:",
+        [(j.id[:8], j.status) for j in jobs]
+    )
     jobs = jobs[:50]
     active_jobs = any(
         j.status in (
