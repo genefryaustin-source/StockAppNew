@@ -581,7 +581,14 @@ def render_universe(db, user):
     )
 
     jobs = jobs[:50]
-
+    active_jobs = any(
+        j.status in (
+            "queued",
+            "running",
+            "processing",
+        )
+        for j in jobs
+    )
     rows = []
 
     for j in jobs:
@@ -707,7 +714,20 @@ def render_universe(db, user):
                     st.error(
                         f"Delete failed: {e}"
                     )
+    # --------------------------------------------------
+    # Auto Refresh While Jobs Active
+    # --------------------------------------------------
 
+    if active_jobs:
+        st.info(
+            "Universe job running... refreshing automatically."
+        )
+
+        import time
+
+        time.sleep(3)
+
+        st.rerun()
 
     # --------------------------------------------------
     # Rankings
@@ -785,3 +805,6 @@ def render_universe(db, user):
             ])
 
             _show_dataframe(sdf, MAX_SECTOR_ROWS)
+
+
+
