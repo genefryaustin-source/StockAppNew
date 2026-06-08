@@ -447,6 +447,7 @@ else:
         "Regime Engine",
         "Strategy Discovery",
         "Strategy Library",
+        "IPO Intelligence",
         "Alerts",
         "Admin",
         "AI Portfolio",
@@ -691,6 +692,10 @@ elif page in ("Strategy Lab", "Strategy Discovery", "Strategy Library"):
         safe_rollback(db)
         st.error("Strategy Lab failed to load.")
         st.exception(e)
+
+elif page == "IPO Intelligence":
+    from modules.ipo.ipo_ui import render_ipo_center
+    render_ipo_center(db, user)
 
 elif page == "Alerts":
     st.header("Alerts")

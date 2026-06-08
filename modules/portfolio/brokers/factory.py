@@ -10,7 +10,7 @@ def get_broker(market_data_service, broker_name: str | None = None, live: bool =
     broker_name = broker_name or st.secrets["trading"].get("DEFAULT_BROKER", "paper")
 
     if broker_name == "paper":
-        return PaperBroker()
+        return PaperBroker(market_data_service=market_data_service)
 
     if broker_name == "alpaca":
         return AlpacaBroker(live=live)

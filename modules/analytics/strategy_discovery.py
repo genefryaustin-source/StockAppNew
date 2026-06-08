@@ -254,7 +254,7 @@ def discover_strategies(rank_rows, price_cache, top_n_holdings=10, max_combo_siz
         ascending=[False, False, False],
         na_position="last",
     ).reset_index(drop=True)
-
+    
     return out, strategy_curves
 
 
