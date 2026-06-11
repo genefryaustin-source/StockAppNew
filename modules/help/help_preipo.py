@@ -1,65 +1,52 @@
-# modules/help/help_preipo.py
-
 import streamlit as st
 
 
-def render_help_preipo():
+def _section(title: str, body: str, expanded: bool = False) -> None:
+    with st.expander(title, expanded=expanded):
+        st.markdown(body)
 
-    st.header("🏢 Pre-IPO Intelligence Center")
 
-    st.markdown("""
-The Pre-IPO Intelligence Center identifies companies
-moving toward public offerings before IPO pricing occurs.
+def render_preipo_help():
+    st.title("🧭 Pre-IPO Intelligence Help")
+    _section("Pre-IPO overview", """
+Pre-IPO Intelligence tracks private companies, potential IPO candidates, filing signals, fundraising events, sector momentum, and readiness scoring.
 
-## SEC Discovery
-
-Monitors:
-
-- S-1
-- S-1/A
-- F-1
-- F-1/A
-- 424B3
-- 424B4
-- S-4
-- SPAC filings
-
-## IPO Probability Engine
-
-Calculates:
-
-- IPO Probability
-- IPO Readiness
-- IPO Opportunity Score
-- Confidence Score
-
-## IPO Maturity Model
-
-Stages:
-
-1. Early Discovery
-2. Filing Stage
-3. Amendment Stage
-4. Prospectus Stage
-5. Pricing Stage
-6. Public Listing
-
-## Pipeline Dashboard
-
-Shows:
-
-- Highest Probability IPOs
-- Recent Filings
-- Sector Breakdown
-- SPAC Candidates
-- Expected Timeline
-
-## Watchlists
-
-Track:
-
-- Filing Updates
-- IPO Probability Changes
-- New Amendments
-- Sector Movement
+This module is designed to help users identify companies before they become public-market opportunities.
+""", True)
+    _section("Pre-IPO workflow", """
+1. Add or load private company candidates.
+2. Review company profile and sector.
+3. Track filing signals and SEC activity where available.
+4. Score IPO readiness.
+5. Monitor fundraising, hiring, revenue signals, and news.
+6. Compare to public comps.
+7. Generate research outputs.
 """)
+    _section("Readiness scoring", """
+Typical scoring inputs can include:
+- Revenue scale.
+- Growth profile.
+- Profitability path.
+- Market timing.
+- Sector demand.
+- Funding stage.
+- Filing activity.
+- Brand or customer traction.
+- Comparable-company valuation environment.
+""")
+    _section("Manual provider workflow", """
+Use manual provider tools when structured pre-IPO data is unavailable. Capture source, date, company name, sector, funding stage, valuation estimate, and evidence notes.
+""")
+    _section("Troubleshooting", """
+## Pre-IPO page not shown
+Ensure `Pre-IPO Intelligence` exists in the app page list.
+
+## Candidate has no score
+Confirm required fields exist in the model or scoring service.
+
+## SEC data empty
+Private companies may not have public filings yet.
+""")
+
+def render_help():
+    render_preipo_help()

@@ -1,62 +1,48 @@
-# modules/help/help_ipo.py
-
 import streamlit as st
 
 
-def render_help_ipo():
+def _section(title: str, body: str, expanded: bool = False) -> None:
+    with st.expander(title, expanded=expanded):
+        st.markdown(body)
 
-    st.header("🚀 IPO Intelligence Center")
 
-    st.markdown("""
-The IPO Intelligence Center tracks public offerings from
-announcement through listing.
+def render_ipo_help():
+    st.title("🏛️ IPO Intelligence Help")
+    _section("IPO Intelligence overview", """
+IPO Intelligence helps track public offering candidates, filings, pricing, sector themes, and post-IPO performance.
 
-## Modules
-
-### Upcoming IPOs
-
-Provides:
-
-- IPO Calendar
-- Deal Size
-- Exchange
-- Expected Pricing Date
-- Lead Underwriters
-
-### IPO Watchlist
-
-Track IPOs of interest.
-
-Monitor:
-
-- Status
-- Pricing Updates
-- Filing Changes
-- Listing Dates
-
-### IPO Analytics
-
-Analyze:
-
-- Average Deal Size
-- Sector Activity
-- Exchange Activity
-- Underwriter Trends
-
-### IPO Opportunity Analysis
-
-Identify:
-
-- Large offerings
-- Fast-growing sectors
-- High demand deals
-- Potential institutional interest
-
-### Daily Workflow
-
-1. Refresh IPO Calendar
-2. Review New Offerings
-3. Analyze Sector Trends
-4. Update Watchlists
-5. Generate IPO Reports
+IPO research should combine SEC filings, company fundamentals, market context, sector conditions, and comparable-company valuation.
+""", True)
+    _section("Core workflow", """
+1. Load IPO candidates.
+2. Review company profile.
+3. Review filing status.
+4. Compare sector and peers.
+5. Evaluate valuation range.
+6. Track pricing, lockups, and post-IPO performance.
+7. Export or report findings.
 """)
+    _section("Data to review", """
+- S-1 or amended filing.
+- Revenue growth.
+- Gross margin.
+- Operating losses.
+- Cash burn.
+- Share structure.
+- Underwriters.
+- Sector comparables.
+- Risk factors.
+""")
+    _section("Common issues", """
+## No IPO records
+Check provider availability or manually add candidates.
+
+## Filing data missing
+Confirm SEC/EDGAR access and symbol/company identifiers.
+
+## Valuation fields blank
+Comparable-company data or financials may not have loaded yet.
+""")
+
+def render_help():
+    render_ipo_help()
