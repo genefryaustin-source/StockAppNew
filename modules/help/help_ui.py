@@ -2,18 +2,20 @@ import streamlit as st
 
 from modules.help.help_home import render_help_home
 from modules.help.help_getting_started import render_help_getting_started
-from modules.help.help_stock_research import render_help_stock_research
-from modules.help.help_portfolio import render_help_portfolio
-from modules.help.help_options import render_help_options
-from modules.help.help_ipo import render_help_ipo
-from modules.help.help_preipo import render_help_preipo
-from modules.help.help_ai import render_help_ai
-from modules.help.help_crypto import render_help_crypto
-from modules.help.help_admin import render_help_admin
-from modules.help.help_analytics_fabric import render_help_analytics_fabric
-from modules.help.help_api_providers import render_help_api_providers
-from modules.help.help_troubleshooting import render_help_troubleshooting
 
+from modules.help.help_stock_research import render_stock_research_help
+from modules.help.help_portfolio import render_portfolio_help
+from modules.help.help_options import render_options_help
+from modules.help.help_ipo import render_ipo_help
+from modules.help.help_preipo import render_preipo_help
+
+from modules.help.help_ai import render_ai_help
+from modules.help.help_crypto import render_crypto_help
+from modules.help.help_admin import render_admin_help
+
+from modules.help.help_analytics_fabric import render_analytics_fabric_help
+from modules.help.help_api_providers import render_api_providers_help
+from modules.help.help_troubleshooting import render_troubleshooting_help
 
 def render_help():
 
@@ -46,34 +48,34 @@ def render_help():
         render_help_getting_started()
 
     elif section == "Stock Research":
-        render_help_stock_research()
+        render_stock_research_help()
 
     elif section == "Portfolio":
-        render_help_portfolio()
+        render_portfolio_help()
 
     elif section == "Options":
-        render_help_options()
+        render_options_help()
 
     elif section == "IPO Intelligence":
-        render_help_ipo()
+        render_ipo_help()
 
     elif section == "Pre-IPO Intelligence":
-        render_help_preipo()
+        render_preipo_help()
 
     elif section == "AI Modules":
-        render_help_ai()
+        render_ai_help()
 
     elif section == "Crypto":
-        render_help_crypto()
+        render_crypto_help()
 
     elif section == "Admin":
-        render_help_admin()
+        render_admin_help()
 
     elif section == "Analytics Fabric":
-        render_help_analytics_fabric()
+        render_analytics_fabric_help()
 
     elif section == "API Providers":
-        render_help_api_providers()
+        render_api_providers_help()
 
     elif section == "Troubleshooting":
-        render_help_troubleshooting()
+        render_troubleshooting_help()
