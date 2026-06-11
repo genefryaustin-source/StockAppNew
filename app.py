@@ -134,17 +134,20 @@ def ensure_default_bootstrap(session) -> None:
                 INSERT INTO tenants (
                     id,
                     name,
+                    is_active,
                     created_at
                 )
                 VALUES (
                     :id,
                     :name,
+                    :is_active,
                     CURRENT_TIMESTAMP
                 )
             """),
             {
                 "id": tenant_id,
                 "name": "Default Tenant",
+                "is_active": True,
             },
         )
 
@@ -167,7 +170,7 @@ def ensure_default_bootstrap(session) -> None:
                     :role,
                     CURRENT_TIMESTAMP,
                     :password_hash,
-                    TRUE
+                    :is_active
                 )
             """),
             {
@@ -176,6 +179,7 @@ def ensure_default_bootstrap(session) -> None:
                 "email": "admin@test.com",
                 "role": "super_admin",
                 "password_hash": _hash_password("password"),
+                "is_active": True,
             },
         )
 
@@ -198,7 +202,7 @@ def ensure_default_bootstrap(session) -> None:
                     :role,
                     CURRENT_TIMESTAMP,
                     :password_hash,
-                    TRUE
+                    :is_active
                 )
             """),
             {
@@ -207,6 +211,7 @@ def ensure_default_bootstrap(session) -> None:
                 "email": "tenant@test.com",
                 "role": "tenant_admin",
                 "password_hash": _hash_password("password"),
+                "is_active": True,
             },
         )
 
