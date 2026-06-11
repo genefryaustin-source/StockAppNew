@@ -8,12 +8,25 @@ import uuid
 from datetime import datetime, UTC
 from typing import Any, Callable, Optional
 
+
 import streamlit as st
+print("STREAMLIT VERSION =", st.__version__)
+
+
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, DBAPIError
+from branding.conduro_theme import load_conduro_theme, render_conduro_header
 
 # MUST BE FIRST STREAMLIT COMMAND
-st.set_page_config(page_title="Equity Research Terminal", layout="wide")
+# MUST BE FIRST STREAMLIT COMMAND
+st.set_page_config(
+    page_title="Equity Research Terminal",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# MUST RUN IMMEDIATELY AFTER set_page_config
+load_conduro_theme()
 
 VERSION = "2.4.1"
 DEV_MODE = False
@@ -261,6 +274,8 @@ def get_market_data_service():
         st.warning(f"Market data service init warning: {e}")
         return None
 
+# import block executes
+
 
 market_data_service = get_market_data_service()
 
@@ -278,11 +293,16 @@ if user is None:
         safe_rollback(db)
         st.error(f"Login failed: {e}")
         st.exception(e)
-    st.stop()
+
 
 role = (user.get("role") or "").lower()
 
-
+render_conduro_header(
+    title="Stock Research Terminal",
+    subtitle="AI-powered equity research, portfolio analytics, options intelligence, and advisor workflows.",
+    kicker="Conduro Ventures LLC",
+    status=user.get("role", "User").replace("_", " ").title() if user else "User"
+)
 # ============================================================
 # SESSION TIMEOUT
 # ============================================================
@@ -311,15 +331,16 @@ except Exception as e:
 # ============================================================
 # SIDEBAR
 # ============================================================
-st.sidebar.title("Stocks Research Terminal")
+st.sidebar.markdown("## Conduro Ventures\n\n**Stock Research Terminal**")
 st.sidebar.markdown(f"**Version:** {VERSION}")
+#st.sidebar.info("Conduro Ventures Research Platform")
 st.sidebar.markdown(datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"))
 st.sidebar.divider()
 
 st.sidebar.write(f"Logged in as: {user.get('email', user.get('user_id'))}")
 st.sidebar.write(f"Role: {user.get('role')}")
 
-if st.sidebar.button("Logout", key="sidebar_logout"):
+if st.sidebar.button("Sign Out", key="sidebar_logout", use_container_width=True):
     from modules.auth.auth_service import logout
     logout()
     st.rerun()
@@ -422,11 +443,12 @@ except Exception as e:
 # ============================================================
 # PAGE LIST
 # ============================================================
+role = (user.get("role") or "").lower()
 if role == "client":
     pages = ["Portfolio"]
 else:
     pages = [
-        "Dashboard",
+        "Executive Dashboard",
         "Watchlists",
         "Screener",
         "Formula Builder",
@@ -442,7 +464,6 @@ else:
         "Portfolio Construction",
         "Portfolio Deployment",
         "Market Overview",
-        "AI Rankings",
         "Strategy Lab",
         "Regime Engine",
         "Strategy Discovery",
@@ -450,6 +471,7 @@ else:
         "IPO Intelligence",
         "Alerts",
         "Admin",
+        "AI Rankings",
         "AI Portfolio",
         "AI Forecast",
         "AI Scanner",
@@ -511,7 +533,7 @@ def run_page(label: str, fn: Callable, *args, stop_after: bool = False, **kwargs
         if stop_after:
             st.stop()
 
-
+executive_dashboard_mod = safe_import("modules.dashboard.executive_dashboard")
 watchlists_mod = safe_import("modules.institutional.ui.watchlists_ui")
 screener_mod = safe_import("modules.institutional.ui.screener_ui")
 earnings_mod = safe_import("modules.institutional.ui.earnings_ui")
@@ -531,7 +553,12 @@ admin_mod = safe_import("modules.admin.admin_ui")
 # ============================================================
 # ROUTING
 # ============================================================
-if page == "Dashboard":
+if page == "Executive Dashboard":
+    if isinstance(executive_dashboard_mod, Exception):
+        st.error("Executive Dashboard module failed to load.")
+        st.exception(executive_dashboard_mod)
+    elif hasattr(executive_dashboard_mod, "render_executive_dashboard"):
+        executive_dashboard_mod.render_executive_dashboard(db, user)
     st.header("Institutional Research Dashboard")
     st.info("Select a module from the sidebar.")
 
@@ -697,6 +724,10 @@ elif page == "IPO Intelligence":
     from modules.ipo.ipo_ui import render_ipo_center
     render_ipo_center(db, user)
 
+elif page == "Pre-IPO Intelligence":
+    from modules.preipo.preipo_ui import render_preipo_center
+    render_preipo_center(db, user)
+
 elif page == "Alerts":
     st.header("Alerts")
     if isinstance(alerts_mod, Exception):
@@ -835,11 +866,10 @@ elif page == "Crypto":
         st.exception(e)
 
 elif page == "Help":
-    try:
-        render_help()
-    except Exception as e:
-        st.error("Help module failed.")
-        st.exception(e)
+    from modules.help.help_home import render_help_center
+    render_help_center()
+
+
 
 # Best-effort cleanup at end of Streamlit run.
 safe_rollback(db)

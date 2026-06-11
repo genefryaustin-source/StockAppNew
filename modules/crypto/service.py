@@ -919,6 +919,8 @@ def _render_risk_scanner():
         fg_val   = int(fg_df["value"].iloc[-1]) if not fg_df.empty else 50
         mc_chg   = g.get("market_cap_change_percentage_24h_usd", 0)
         btc_row  = df[df["Symbol"]=="BTC"]
+        df = get_top_coins(50)
+
         btc_ch24 = float(btc_row["24h %"].iloc[0]) if not btc_row.empty and btc_row["24h %"].iloc[0] is not None else 0
 
         with st.spinner("AI analyzing risks…"):
@@ -930,21 +932,10 @@ def _render_risk_scanner():
             )
         st.session_state["crypto_risks"] = alerts
 
-    if alerts := st.session_state.get("crypto_risks"):
-        if not alerts:
-            st.success("✅ No significant risk anomalies detected.")
-            return
-        severity_icons = {"low":"🟡","medium":"🟠","high":"🔴","critical":"🚨"}
-        action_colors  = {"monitor":"#8B949E","review":"#BA7517","caution":"#E24B4A"}
-        for a in alerts:
-            icon   = severity_icons.get(a.get("severity","medium"), "⚪")
-            action = a.get("action","monitor")
-            color  = action_colors.get(action, "#8B949E")
-            st.markdown(
-                f"{icon} **{a.get('symbol','')}** — {a.get('interpretation','')} "
-                f"<span style='color:{color};font-size:11px'>→ {action.upper()}</span>",
-                unsafe_allow_html=True,
-            )
+    risk_report = st.session_state.get("crypto_risks")
+
+    if risk_report:
+        st.markdown(risk_report)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -22,7 +22,7 @@ def authenticate(db, email, password):
         SELECT *
         FROM users
         WHERE lower(trim(email)) = :email
-          AND COALESCE(is_active, 1) = 1
+            AND is_active = TRUE
         LIMIT 1
     """), {
         "email": email.lower().strip()
@@ -45,9 +45,12 @@ def authenticate(db, email, password):
         print("DEBUG LOGIN FAIL: stored hash missing")
         return None
 
+
+
     if stored_hash != input_hash:
         print("DEBUG LOGIN FAIL: hash mismatch")
         return None
+
 
     #print("DEBUG LOGIN SUCCESS")
 

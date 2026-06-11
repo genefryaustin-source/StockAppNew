@@ -2,5 +2,12 @@
 headless = true
 enableStaticServing = false
 
+[theme]
+primaryColor = "#28D7FF"
+backgroundColor = "#050B14"
+secondaryBackgroundColor = "#0C1524"
+textColor = "#F8FAFC"
+font = "sans serif"
+
 [browser]
 gatherUsageStats = false
