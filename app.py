@@ -111,15 +111,24 @@ def db_fetchall(sql: str, params: Optional[dict] = None):
         return s.execute(text(sql), params or {}).fetchall()
 
 
-def temporary_bootstrap_admin(session) -> None:
-    """Development-only bootstrap; intentionally not auto-run unless enabled below."""
+def ensure_default_bootstrap(session) -> None:
+    """
+    Creates the initial tenant and admin users if the database is empty.
+    Safe to run every startup.
+    """
     try:
         safe_rollback(session)
 
-        user_count = session.execute(text("SELECT COUNT(*) FROM users")).scalar()
-        if user_count and int(user_count) > 0:
+        user_count = session.execute(
+            text("SELECT COUNT(*) FROM users")
+        ).scalar()
+
+        if int(user_count or 0) > 0:
             return
 
+        tenant_id = "default_tenant"
+
+        # Default tenant
         session.execute(
             text("""
                 INSERT INTO tenants (
@@ -134,11 +143,12 @@ def temporary_bootstrap_admin(session) -> None:
                 )
             """),
             {
-                "id": "default_tenant",
+                "id": tenant_id,
                 "name": "Default Tenant",
             },
         )
 
+        # Super Admin
         session.execute(
             text("""
                 INSERT INTO users (
@@ -162,15 +172,52 @@ def temporary_bootstrap_admin(session) -> None:
             """),
             {
                 "id": str(uuid.uuid4()),
-                "tenant_id": "default_tenant",
+                "tenant_id": tenant_id,
                 "email": "admin@test.com",
                 "role": "super_admin",
                 "password_hash": _hash_password("password"),
             },
         )
 
+        # Tenant Admin
+        session.execute(
+            text("""
+                INSERT INTO users (
+                    id,
+                    tenant_id,
+                    email,
+                    role,
+                    created_at,
+                    password_hash,
+                    is_active
+                )
+                VALUES (
+                    :id,
+                    :tenant_id,
+                    :email,
+                    :role,
+                    CURRENT_TIMESTAMP,
+                    :password_hash,
+                    TRUE
+                )
+            """),
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": tenant_id,
+                "email": "tenant@test.com",
+                "role": "tenant_admin",
+                "password_hash": _hash_password("password"),
+            },
+        )
+
         session.commit()
-        print("BOOTSTRAP ADMIN CREATED")
+
+        print("=" * 80)
+        print("DEFAULT TENANT CREATED")
+        print("SUPER ADMIN: admin@test.com")
+        print("TENANT ADMIN: tenant@test.com")
+        print("PASSWORD: password")
+        print("=" * 80)
 
     except Exception:
         safe_rollback(session)
@@ -188,6 +235,12 @@ except Exception as e:
 
 st.write("SECRETS DATABASE URL")
 st.code(st.secrets.get("DATABASE_URL", "NOT FOUND"))
+
+try:
+    ensure_default_bootstrap(db)
+except Exception as e:
+    st.error(f"Bootstrap failed: {e}")
+    st.exception(e)
 # ============================================================
 # PRE-LOGIN DB DEBUG
 # ============================================================
