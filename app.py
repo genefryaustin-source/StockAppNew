@@ -352,8 +352,7 @@ if user is None:
         st.error(f"Login failed: {e}")
         st.exception(e)
 
-st.write("SESSION STATE")
-st.write(dict(st.session_state))
+
 user = st.session_state.get("user")
 
 if user is None:
