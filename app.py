@@ -347,10 +347,17 @@ if user is None:
     try:
         db = ensure_live_session(db)
         render_login(db)
+
+        # Stop execution until next run
+        st.stop()
+
     except Exception as e:
         safe_rollback(db)
         st.error(f"Login failed: {e}")
         st.exception(e)
+
+# Refresh user after login
+user = st.session_state.get("user")
 
 
 
@@ -397,7 +404,14 @@ st.sidebar.markdown(f"**Version:** {VERSION}")
 st.sidebar.markdown(datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"))
 st.sidebar.divider()
 
-st.sidebar.write(f"Logged in as: {user.get('email', user.get('user_id'))}")
+if isinstance(user, dict):
+    st.sidebar.write(
+        f"Logged in as: {user.get('email', user.get('user_id', 'unknown'))}"
+    )
+else:
+    st.sidebar.write("Not logged in")
+
+
 st.sidebar.write(f"Role: {user.get('role')}")
 
 if st.sidebar.button("Sign Out", key="sidebar_logout", use_container_width=True):
