@@ -29,7 +29,7 @@ st.set_page_config(
 load_conduro_theme()
 
 VERSION = "2.4.1"
-DEV_MODE = False
+DEV_MODE = True
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
@@ -186,7 +186,8 @@ except Exception as e:
     st.exception(e)
     st.stop()
 
-
+st.write("SECRETS DATABASE URL")
+st.code(st.secrets.get("DATABASE_URL", "NOT FOUND"))
 # ============================================================
 # PRE-LOGIN DB DEBUG
 # ============================================================
