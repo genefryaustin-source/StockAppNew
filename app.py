@@ -295,7 +295,12 @@ if user is None:
         st.exception(e)
 
 
-role = (user.get("role") or "").lower()
+user = st.session_state.get("user")
+
+if user is None:
+    st.session_state.pop("user", None)
+    render_login(db)
+    st.stop()
 
 render_conduro_header(
     title="Stock Research Terminal",
