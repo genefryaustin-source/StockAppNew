@@ -940,8 +940,8 @@ elif page == "Crypto":
         st.exception(e)
 
 elif page == "Help":
-    from modules.help.help_home import render_help_home
-    render_help_home()
+    from modules.help.help_ui import render_help
+    render_help()
 
 
 
