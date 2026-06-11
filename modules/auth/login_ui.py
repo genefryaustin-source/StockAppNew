@@ -47,12 +47,10 @@ def render_login(db):
 
         if user:
             st.session_state["user"] = user
-            st.session_state["last_activity_ts"] = __import__("time").time()
-            st.success("Login successful")
-
             st.session_state["authenticated"] = True
+            st.session_state["last_activity_ts"] = __import__("time").time()
 
-            return
+            st.rerun()
         else:
             st.error("Invalid credentials")
 
