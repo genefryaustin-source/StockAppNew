@@ -89,9 +89,10 @@ def create_user(db, email, password, role, tenant_id=None, is_active: int = 1):
         "pw": hash_password(password),
         "role": role,
         "tenant": tenant_id,
-        "is_active": int(is_active),
+        "is_active": bool(is_active),
     })
     db.commit()
+
 
 
 def list_users_for_scope(db, current_user: dict):

@@ -187,19 +187,36 @@ def render_admin_panel(db, user):
                         password=new_password,
                         role=new_role,
                         tenant_id=new_tenant_id,
-                        is_active=1,
+                        is_active=True,
                     )
-                    # Set plan separately
-                    from sqlalchemy import text as _text
-                    db.execute(_text(
-                        "UPDATE users SET plan = :plan WHERE email = :email"
-                    ), {"plan": new_plan, "email": new_email.lower().strip()})
-                    db.commit()
-                    st.success(f"User created with {PLAN_META[new_plan]['name']} plan.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Create failed: {e}")
 
+                    from sqlalchemy import text as _text
+
+                    db.execute(
+                        _text(
+                            """
+                            UPDATE users
+                            SET plan = :plan
+                            WHERE email = :email
+                            """
+                        ),
+                        {
+                            "plan": new_plan,
+                            "email": new_email.lower().strip(),
+                        },
+                    )
+
+                    db.commit()
+
+                    st.success(
+                        f"User created with {PLAN_META[new_plan]['name']} plan."
+                    )
+
+                    st.rerun()
+
+                except Exception as e:
+                    db.rollback()
+                    st.error(f"Create failed: {e}")
         # ---------------------------------------------------------
         # USER LIST
         # ---------------------------------------------------------
@@ -731,4 +748,3 @@ def _render_plan_management_tab(db, user, tenant_id):
         except Exception as e:
             st.error(f"Failed to load plan overview: {e}")
 
-            
