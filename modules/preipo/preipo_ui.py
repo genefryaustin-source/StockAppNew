@@ -8,6 +8,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from modules.ipo.news_ui import render_news_sentiment_tab
 from modules.preipo.service import (
     add_manual_preipo_company,
     add_preipo_filing_to_watchlist,
@@ -84,13 +85,14 @@ def render_preipo_center(db, user):
         "SEC S-1/F-1/SPAC discovery · IPO probability scoring · opportunity ranking · public-data pre-IPO intelligence"
     )
 
-    tab_intelligence, tab_discovery, tab_pipeline, tab_add, tab_lookup, tab_watch = st.tabs([
+    tab_intelligence, tab_discovery, tab_pipeline, tab_add, tab_lookup, tab_watch, tab_news = st.tabs([
         "IPO Intelligence",
         "SEC Discovery",
         "Pre-IPO Pipeline",
         "Add Company",
         "Company SEC Lookup",
         "Watchlist",
+        "📰 News & Sentiment",
     ])
 
     # ========================================================
@@ -428,3 +430,9 @@ def render_preipo_center(db, user):
 
             watch_df = _format_date_columns(pd.DataFrame(rows))
             st.dataframe(watch_df, use_container_width=True, hide_index=True)
+
+    # ========================================================
+    # NEWS & SENTIMENT
+    # ========================================================
+    with tab_news:
+        render_news_sentiment_tab(db, user, context="preipo")

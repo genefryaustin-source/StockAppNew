@@ -172,6 +172,7 @@ def _get_movers_live(symbols: list[str]) -> pd.DataFrame:
         return pd.DataFrame(out)
 
     except Exception as e:
+
         st.warning(f"Live quote fallback unavailable: {e}")
         return pd.DataFrame()
 
@@ -186,38 +187,17 @@ def _render_movers_table(df: pd.DataFrame, label: str, ascending: bool, limit: i
         .sort_values("Change %", ascending=ascending)
         .head(limit)
         .reset_index(drop=True)
+        .copy()
     )
 
     if display.empty:
         st.info(f"No {label} with change data.")
         return
 
-    def _color_change(val):
-        try:
-            v = float(val)
-            if v > 0:
-                return "color: #1D9E75; font-weight: bold"
-            if v < 0:
-                return "color: #E24B4A; font-weight: bold"
-        except Exception:
-            pass
-        return ""
+    cols = [c for c in ["Symbol", "Price", "Prev", "Change %", "Volume", "As Of"] if c in display.columns]
+    display_df = display[cols].copy()
 
-    cols = [c for c in ["Symbol", "Price", "Change %", "Volume", "As Of"] if c in display.columns]
-    styled = display[cols].style.map(_color_change, subset=["Change %"])
-
-    format_map = {}
-    if "Change %" in cols:
-        format_map["Change %"] = "{:+.2f}%"
-    if "Price" in cols:
-        format_map["Price"] = "${:,.2f}"
-    if "Volume" in cols:
-        format_map["Volume"] = "{:,.0f}"
-
-    if format_map:
-        styled = styled.format(format_map)
-
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.table(display_df)
 
 
 def render_market_dashboard(db):
@@ -283,8 +263,10 @@ def render_market_dashboard(db):
             df = _get_movers_from_price_history(db, symbols)
 
             if df.empty:
+                st.write("MARKET STEP A")
                 df = _get_movers_live(symbols)
                 if not df.empty:
+
                     st.caption("⚡ Using live prices because no usable price history was found.")
 
             st.session_state[cache_key] = df
@@ -297,11 +279,13 @@ def render_market_dashboard(db):
 
     has_change = df["Change %"].notna().sum() if "Change %" in df.columns else 0
     as_of = df["As Of"].dropna().iloc[0] if "As Of" in df.columns and not df["As Of"].dropna().empty else ""
-
+    st.write("MARKET STEP B")
     st.caption(
         f"{len(df)} of {len(symbols)} symbols have price data · "
         f"{has_change} with daily change · As of: {as_of}"
     )
+    st.write("MARKET STEP C")
+
 
     col_g, col_l = st.columns(2)
 
@@ -312,6 +296,8 @@ def render_market_dashboard(db):
     with col_l:
         st.markdown("### 📉 Top Losers")
         _render_movers_table(df, "Losers", ascending=True)
+
+
 
     with st.expander(f"📋 All {len(df)} symbols", expanded=False):
         sort_options = [c for c in ["Change %", "Symbol", "Price", "Volume"] if c in df.columns]
@@ -330,24 +316,31 @@ def render_market_dashboard(db):
                 return ""
 
         cols = [c for c in ["Symbol", "Price", "Change %", "Volume", "As Of"] if c in show_df.columns]
-        styled = show_df[cols].style
 
-        format_map = {}
-        if "Change %" in cols:
-            styled = styled.map(_color_all, subset=["Change %"])
-            format_map["Change %"] = "{:+.2f}%"
-        if "Price" in cols:
-            format_map["Price"] = "${:,.2f}"
-        if "Volume" in cols:
-            format_map["Volume"] = "{:,.0f}"
 
-        if format_map:
-            styled = styled.format(format_map)
+        display_df = show_df[cols].copy()
 
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+        if "Price" in display_df.columns:
+            display_df["Price"] = display_df["Price"].map(
+                lambda x: f"${x:,.2f}" if pd.notna(x) else ""
+            )
+
+        if "Change %" in display_df.columns:
+            display_df["Change %"] = display_df["Change %"].map(
+                lambda x: f"{x:+.2f}%" if pd.notna(x) else ""
+            )
+
+        if "Volume" in display_df.columns:
+            display_df["Volume"] = display_df["Volume"].map(
+                lambda x: f"{x:,.0f}" if pd.notna(x) else ""
+            )
+        #import pdb
+        #pdb.set_trace()
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+        )
 
     st.divider()
-    try:
-        render_macro_dashboard(db)
-    except Exception as e:
-        st.warning(f"Macro dashboard unavailable: {e}")
+    render_macro_dashboard(db)

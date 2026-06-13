@@ -20,78 +20,85 @@ def _now():
 
 def _ensure_tables(db):
     """Create collaboration tables if they don't exist yet."""
-    db.execute(text("""
-        CREATE TABLE IF NOT EXISTS team_messages (
-            id TEXT PRIMARY KEY,
-            tenant_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            user_email TEXT NOT NULL,
-            body TEXT NOT NULL,
-            ticker_tags TEXT,
-            msg_type TEXT DEFAULT 'text',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            is_deleted INTEGER DEFAULT 0
-        )
-    """))
-    db.execute(text("""
-        CREATE TABLE IF NOT EXISTS watchlist_shares (
-            id TEXT PRIMARY KEY,
-            watchlist_id TEXT NOT NULL,
-            tenant_id TEXT NOT NULL,
-            shared_by TEXT NOT NULL,
-            can_edit INTEGER DEFAULT 0,
-            shared_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            note TEXT
-        )
-    """))
-    db.execute(text("""
-        CREATE TABLE IF NOT EXISTS chart_annotations (
-            id TEXT PRIMARY KEY,
-            tenant_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            user_email TEXT NOT NULL,
-            symbol TEXT NOT NULL,
-            body TEXT NOT NULL,
-            annotation_type TEXT DEFAULT 'note',
-            price_at TEXT,
-            is_pinned INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            is_deleted INTEGER DEFAULT 0
-        )
-    """))
-    db.execute(text("""
-        CREATE TABLE IF NOT EXISTS screener_presets (
-            id TEXT PRIMARY KEY,
-            tenant_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            user_email TEXT NOT NULL,
-            name TEXT NOT NULL,
-            description TEXT,
-            filters_json TEXT NOT NULL,
-            query_text TEXT,
-            is_shared INTEGER DEFAULT 0,
-            result_count INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """))
-    db.execute(text("""
-        CREATE TABLE IF NOT EXISTS activity_events (
-            id TEXT PRIMARY KEY,
-            tenant_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            user_email TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            symbol TEXT,
-            detail TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """))
     try:
-        db.commit()
+        db.rollback()
     except Exception:
         pass
+    try:
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS team_messages (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                user_email TEXT NOT NULL,
+                body TEXT NOT NULL,
+                ticker_tags TEXT,
+                msg_type TEXT DEFAULT 'text',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_deleted INTEGER DEFAULT 0
+            )
+        """))
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS watchlist_shares (
+                id TEXT PRIMARY KEY,
+                watchlist_id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                shared_by TEXT NOT NULL,
+                can_edit INTEGER DEFAULT 0,
+                shared_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                note TEXT
+            )
+        """))
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS chart_annotations (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                user_email TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                body TEXT NOT NULL,
+                annotation_type TEXT DEFAULT 'note',
+                price_at TEXT,
+                is_pinned INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_deleted INTEGER DEFAULT 0
+            )
+        """))
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS screener_presets (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                user_email TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                filters_json TEXT NOT NULL,
+                query_text TEXT,
+                is_shared INTEGER DEFAULT 0,
+                result_count INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        db.execute(text("""
+                CREATE TABLE IF NOT EXISTS activity_events (
+                    id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    user_email TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    symbol TEXT,
+                    detail TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        raise
 
 
 import uuid
@@ -438,7 +445,8 @@ def _log_activity(db, tenant_id: str, user_id: str, user_email: str,
         })
         db.commit()
     except Exception:
-        pass
+        db.rollback()
+        raise
 
 
 def get_activity_feed(db, tenant_id: str, limit: int = 30,

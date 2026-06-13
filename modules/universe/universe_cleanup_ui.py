@@ -237,7 +237,7 @@ def render_universe_cleanup_ui(db):
         if result["symbols"]:
             st.dataframe(pd.DataFrame({"Removed": result["symbols"]}))
 
-        st.rerun()
+        return
 
     st.markdown("### Symbol Blacklist")
 

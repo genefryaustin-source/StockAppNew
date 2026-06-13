@@ -534,59 +534,57 @@ def _load_macro_snapshot() -> dict:
 
 
 def render_macro_dashboard(db=None):
-    """
-    Macro Dashboard.
-
-    HTTP fetches are:
-    - deferred behind a button
-    - cached as one aggregate snapshot
-    - loaded concurrently
-    - bounded by short request timeouts
-    """
     st.subheader("🌍 Macro Dashboard")
     st.caption(
         "Yield curve · Credit spreads · Inflation · VIX term structure · "
         "Market proxies · Powered by FRED + Yahoo Finance"
     )
 
-    if not st.session_state.get("macro_loaded", False):
-        col_btn, col_note = st.columns([1, 4])
+    if "macro_snapshot" not in st.session_state:
+        st.session_state["macro_snapshot"] = None
 
-        with col_btn:
-            load_btn = st.button(
-                "📡 Load Macro Data",
-                type="primary",
-                key="macro_load_btn",
-                use_container_width=True,
-            )
+    col_btn, col_note, col_refresh = st.columns([1, 4, 1])
 
-        with col_note:
-            st.info(
-                "Click to load macro data. Data is fetched on demand, cached, "
-                "and loaded concurrently to keep the rest of the app fast."
-            )
+    with col_btn:
+        load_btn = st.button(
+            "📡 Load Macro Data",
+            type="primary",
+            key="macro_load_btn",
+            use_container_width=True,
+        )
 
-        if not load_btn:
-            return
+    with col_note:
+        st.info(
+            "Click to load macro data. Data is fetched on demand, cached, "
+            "and loaded concurrently to keep the rest of the app fast."
+        )
 
-        st.session_state["macro_loaded"] = True
+    with col_refresh:
+        refresh_btn = st.button(
+            "↺ Refresh",
+            key="macro_refresh",
+            use_container_width=True,
+        )
 
-    col_ts, col_r = st.columns([5, 1])
+    if refresh_btn:
+        st.session_state["macro_snapshot"] = None
+        try:
+            _load_macro_snapshot.clear()
+        except Exception:
+            pass
+        st.rerun()
 
-    with col_r:
-        if st.button("↺ Refresh", key="macro_refresh"):
-            st.session_state["macro_loaded"] = False
-            try:
-                _load_macro_snapshot.clear()
-            except Exception:
-                pass
-            st.rerun()
+    if load_btn:
+        with st.spinner("Loading macro data…"):
+            st.session_state["macro_snapshot"] = _load_macro_snapshot()
+        st.rerun()
 
-    with st.spinner("Loading macro data…"):
-        snapshot = _load_macro_snapshot()
+    snapshot = st.session_state.get("macro_snapshot")
 
-    with col_ts:
-        st.caption(f"Last loaded: {snapshot.get('loaded_at', 'N/A')}")
+    if not snapshot:
+        return
+
+    st.caption(f"Last loaded: {snapshot.get('loaded_at', 'N/A')}")
 
     yield_df = snapshot["yield_df"]
     credit_df = snapshot["credit_df"]
@@ -597,36 +595,33 @@ def render_macro_dashboard(db=None):
     proxy_df = snapshot["proxy_df"]
     regime = snapshot["regime"]
 
-    y10 = _safe_float(yield_df.loc[yield_df["Tenor"] == "10Y", "Yield"].iloc[0]) if "10Y" in yield_df["Tenor"].values else None
-    hy_oas = _safe_float(credit_df.loc[credit_df["Metric"] == "HY OAS", "Value"].iloc[0]) if "HY OAS" in credit_df["Metric"].values else None
-    vix = _safe_float(vix_df.loc[vix_df["Contract"] == "VIX", "Value"].iloc[0]) if "VIX" in vix_df["Contract"].values else None
-
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Macro Regime", regime["regime"], f"Score {regime['score']:+.0f}")
-    c2.metric("10Y Treasury", _fmt_pct(y10))
-    c3.metric("10Y - 2Y", _fmt_pct(regime["10Y-2Y"]))
-    c4.metric("HY OAS", _fmt_pct(hy_oas))
-    c5.metric("VIX", f"{vix:.2f}" if vix is not None else "N/A")
-    st.caption(regime["notes"])
+    # continue with metrics/tabs here
 
     tab_curve, tab_credit, tab_inflation, tab_vol, tab_proxies = st.tabs(
         ["Yield Curve", "Credit Spreads", "Inflation", "Vol / Fed Path", "Market Proxies"]
     )
 
     with tab_curve:
+
         if yield_df["Yield"].notna().any():
             st.plotly_chart(_yield_curve_chart(yield_df), use_container_width=True)
 
+        display_df = yield_df.copy()
+
+        if "Yield" in display_df.columns:
+            display_df["Yield"] = display_df["Yield"].apply(
+                lambda v: "N/A" if pd.isna(v) else f"{v:.2f}%"
+            )
+
         st.dataframe(
-            yield_df.style.format({
-                "Yield": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}%"
-            }),
+            display_df,
             use_container_width=True,
             hide_index=True,
         )
 
     with tab_credit:
-        if credit_df["Value"].notna().any():
+        st.write("TAB CREDIT START")
+        if "Value" in credit_df.columns and credit_df["Value"].notna().any():
             st.plotly_chart(
                 _bar_chart(
                     credit_df,
@@ -639,16 +634,26 @@ def render_macro_dashboard(db=None):
                 use_container_width=True,
             )
 
+        display_df = credit_df.copy()
+
+        if "Value" in display_df.columns:
+            display_df["Value"] = display_df["Value"].apply(
+                lambda v: "N/A" if pd.isna(v) else f"{float(v):.2f}%"
+            )
+
+        if "Change" in display_df.columns:
+            display_df["Change"] = display_df["Change"].apply(
+                lambda v: "N/A" if pd.isna(v) else f"{float(v):+.2f} pts"
+            )
+
         st.dataframe(
-            credit_df.style.format({
-                "Value": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}%",
-                "Change": lambda v: "N/A" if pd.isna(v) else f"{v:+.2f} pts",
-            }),
+            display_df,
             use_container_width=True,
             hide_index=True,
         )
 
     with tab_inflation:
+
         i1, i2, i3 = st.columns(3)
         i1.metric("CPI YoY", _fmt_pct(inflation_yoy))
 
@@ -656,7 +661,7 @@ def render_macro_dashboard(db=None):
             target = i2 if idx == 0 else i3
             target.metric(row["Metric"], _fmt_pct(row["Value"]))
 
-        if inflation_df["Value"].notna().any():
+        if "Value" in inflation_df.columns and inflation_df["Value"].notna().any():
             st.plotly_chart(
                 _bar_chart(
                     inflation_df,
@@ -668,59 +673,90 @@ def render_macro_dashboard(db=None):
                 use_container_width=True,
             )
 
+        display_df = inflation_df.copy()
+
+        if "Value" in display_df.columns:
+            display_df["Value"] = display_df["Value"].apply(
+                lambda v: "N/A" if pd.isna(v) else f"{float(v):.2f}%"
+            )
+
+        if "Change" in display_df.columns:
+            display_df["Change"] = display_df["Change"].apply(
+                lambda v: "N/A" if pd.isna(v) else f"{float(v):+.2f} pts"
+            )
+
         st.dataframe(
-            inflation_df.style.format({
-                "Value": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}%",
-                "Change": lambda v: "N/A" if pd.isna(v) else f"{v:+.2f} pts",
-            }),
+            display_df,
             use_container_width=True,
             hide_index=True,
         )
 
     with tab_vol:
+
+        fed_value = None
+        if fed_df is not None and not fed_df.empty and "Value" in fed_df.columns:
+            fed_value = _safe_float(fed_df.iloc[0]["Value"])
+
         fed_proxy_rows = pd.DataFrame([
             {
                 "Metric": "Effective Fed Funds",
-                "Value": _safe_float(fed_df.iloc[0]["Value"]) if not fed_df.empty else None,
+                "Value": fed_value,
                 "Readthrough": "Current policy-rate anchor",
             },
             {
                 "Metric": "10Y - 3M Curve",
-                "Value": regime["10Y-3M"],
+                "Value": regime.get("10Y-3M"),
                 "Readthrough": "Negative implies restrictive / recessionary pressure",
             },
             {
                 "Metric": "10Y - 2Y Curve",
-                "Value": regime["10Y-2Y"],
+                "Value": regime.get("10Y-2Y"),
                 "Readthrough": "Positive steepening often supports cyclicals",
             },
         ])
 
-        if vix_df["Value"].notna().any():
+        if "Value" in vix_df.columns and vix_df["Value"].notna().any():
             st.plotly_chart(
-                _bar_chart(vix_df, "Contract", "Value", "VIX Term Structure", ""),
+                _bar_chart(
+                    vix_df,
+                    "Contract",
+                    "Value",
+                    "VIX Term Structure",
+                    "",
+                ),
                 use_container_width=True,
             )
 
+        display_df = vix_df.copy()
+
+        if "Value" in display_df.columns:
+            display_df["Value"] = display_df["Value"].apply(
+                lambda v: "N/A" if pd.isna(v) else f"{float(v):.2f}"
+            )
+
         st.dataframe(
-            vix_df.style.format({
-                "Value": lambda v: "N/A" if pd.isna(v) else f"{v:.2f}"
-            }),
+            display_df,
             use_container_width=True,
             hide_index=True,
         )
 
         st.markdown("#### Fed Path Proxies")
+
+        display_df = fed_proxy_rows.copy()
+
+        if "Value" in display_df.columns:
+            display_df["Value"] = display_df["Value"].apply(
+                lambda v: "N/A" if pd.isna(v) else f"{float(v):+.2f} pts"
+            )
+
         st.dataframe(
-            fed_proxy_rows.style.format({
-                "Value": lambda v: "N/A" if pd.isna(v) else f"{v:+.2f} pts"
-            }),
+            display_df,
             use_container_width=True,
             hide_index=True,
         )
 
     with tab_proxies:
-        if proxy_df["1M Change"].notna().any():
+        if "1M Change" in proxy_df.columns and proxy_df["1M Change"].notna().any():
             plot_df = proxy_df.copy()
             plot_df["1M Change %"] = plot_df["1M Change"] * 100.0
 
@@ -735,11 +771,20 @@ def render_macro_dashboard(db=None):
                 use_container_width=True,
             )
 
+        display_df = proxy_df.copy()
+
+        if "Last" in display_df.columns:
+            display_df["Last"] = display_df["Last"].apply(
+                lambda v: "N/A" if pd.isna(v) else f"{float(v):,.2f}"
+            )
+
+        if "1M Change" in display_df.columns:
+            display_df["1M Change"] = display_df["1M Change"].apply(
+                lambda v: "N/A" if pd.isna(v) else f"{float(v):+.2%}"
+            )
+
         st.dataframe(
-            proxy_df.style.format({
-                "Last": lambda v: "N/A" if pd.isna(v) else f"{v:,.2f}",
-                "1M Change": lambda v: "N/A" if pd.isna(v) else f"{v:+.2%}",
-            }),
+            display_df,
             use_container_width=True,
             hide_index=True,
         )

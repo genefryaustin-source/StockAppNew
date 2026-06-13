@@ -8,6 +8,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from modules.ipo.news_ui import render_news_sentiment_tab
 from modules.ipo.service import (
     refresh_ipo_calendar,
     list_ipo_events,
@@ -63,15 +64,16 @@ def render_ipo_center(db, user):
                         days_back=int(days_back),
                         days_forward=int(days_forward),
                     )
+                    skipped_msg = f", skipped {result['skipped']} duplicates" if result.get("skipped") else ""
                     st.success(
-                        f"IPO refresh complete: fetched {result['fetched']}, upserted {result['upserted']} "
-                        f"from {result['from']} to {result['to']}."
+                        f"IPO refresh complete: fetched {result['fetched']}, upserted {result['upserted']}"
+                        f"{skipped_msg} · {result['from']} to {result['to']}."
                     )
                 except Exception as e:
                     st.error(f"IPO refresh failed: {e}")
 
-    tab_calendar, tab_watchlist, tab_analytics = st.tabs(
-        ["Upcoming / Recent IPOs", "IPO Watchlist", "IPO Analytics"]
+    tab_calendar, tab_watchlist, tab_analytics, tab_news = st.tabs(
+        ["Upcoming / Recent IPOs", "IPO Watchlist", "IPO Analytics", "📰 News & Sentiment"]
     )
 
     with tab_calendar:
@@ -187,3 +189,6 @@ def render_ipo_center(db, user):
             largest["Deal Size"] = pd.to_numeric(largest["Deal Size"], errors="coerce")
             largest = largest.sort_values("Deal Size", ascending=False).head(25)
             st.dataframe(largest, use_container_width=True, hide_index=True)
+
+    with tab_news:
+        render_news_sentiment_tab(db, user, context="ipo")

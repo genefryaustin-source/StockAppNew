@@ -67,6 +67,12 @@ def init_database():
     import modules.analytics.strategy_models
     import models.trading
 
+    # IPO / Pre-IPO models — imported so their tables are registered
+    # with Base.metadata before create_all() runs.
+    import modules.ipo.models          # IPOEvent, IPOWatchlistItem, IPOResearchNote
+    import modules.preipo.models       # PreIPOCompany, PreIPOFiling, PreIPOWatchlistItem
+    from modules.ipo.news_service import IPONewsArticle  # noqa: F401 — ipo_news_articles table
+
     # Create all tables from models first
 
 
@@ -146,4 +152,6 @@ def init_database():
                 #conn.commit()
             #except Exception:
                 #pass
+
+
 

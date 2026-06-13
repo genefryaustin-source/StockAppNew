@@ -12,7 +12,7 @@ class TenantService:
             SELECT
                 id,
                 name,
-                COALESCE(is_active, 1),
+                is_active,
                 created_at
             FROM tenants
             ORDER BY name
@@ -41,7 +41,7 @@ class TenantService:
             VALUES (
                 :id,
                 :name,
-                1,
+                TRUE,
                 CURRENT_TIMESTAMP
             )
         """), {
@@ -69,7 +69,7 @@ class TenantService:
     def deactivate_tenant(self, tenant_id: str):
         self.db.execute(text("""
             UPDATE tenants
-            SET is_active = 0
+            SET is_active = FALSE
             WHERE id = :id
         """), {"id": tenant_id})
 
@@ -78,7 +78,7 @@ class TenantService:
     def activate_tenant(self, tenant_id: str):
         self.db.execute(text("""
             UPDATE tenants
-            SET is_active = 1
+            SET is_active = TRUE
             WHERE id = :id
         """), {"id": tenant_id})
 

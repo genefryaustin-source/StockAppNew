@@ -4,7 +4,7 @@ import uuid
 import hashlib
 from modules.admin.tenant_service import TenantService
 from modules.portfolio.portfolio_assignment_service import PortfolioAssignmentService
-
+import pandas as pd
 
 def _hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
@@ -33,9 +33,20 @@ def render_tenant_admin_panel(db, user):
     # branching. For non-super-admins, omit the Tenants tab entirely.
     # ---------------------------------
     if role == "super_admin":
-        tab_users, tab_tenants = st.tabs(["👤 Users", "🏢 Tenants"])
+
+        tab_users, tab_tenants, tab_analytics = st.tabs([
+            "👤 Users",
+            "🏢 Tenants",
+            "📊 Universe Analytics",
+        ])
+
     else:
-        tab_users, = st.tabs(["👤 Users"])
+
+        tab_users, tab_analytics = st.tabs([
+            "👤 Users",
+            "📊 Universe Analytics",
+        ])
+
         tab_tenants = None
 
     # ========================================
@@ -550,3 +561,84 @@ def render_tenant_admin_panel(db, user):
                         a2.caption(
                             f"Created: {tenant['created_at']}"
                         )
+
+        # ========================================
+        # UNIVERSE ANALYTICS
+        # ========================================
+
+        with tab_analytics:
+
+            st.subheader("Universe Analytics Health")
+
+            universe_df = pd.read_sql(
+                sql_text("""
+                    WITH analytics_latest AS (
+                        SELECT
+                            symbol,
+                            MAX(asof)::date AS analytics_asof
+                        FROM analytics_snapshots
+                        GROUP BY symbol
+                    ),
+                    fundamentals_latest AS (
+                        SELECT
+                            symbol,
+                            MAX(asof)::date AS fundamentals_asof
+                        FROM fundamental_snapshots
+                        GROUP BY symbol
+                    )
+                    SELECT
+                        u.name,
+                        COUNT(us.symbol) AS symbol_count,
+
+                        COUNT(a.symbol) AS analytics_count,
+                        COUNT(f.symbol) AS fundamentals_count,
+
+                        MAX(a.analytics_asof) AS analytics_asof,
+                        MAX(f.fundamentals_asof) AS fundamentals_asof
+
+                    FROM universes u
+
+                    LEFT JOIN universe_symbols us
+                        ON us.universe_id = u.id
+
+                    LEFT JOIN analytics_latest a
+                        ON a.symbol = us.symbol
+
+                    LEFT JOIN fundamentals_latest f
+                        ON f.symbol = us.symbol
+
+                    WHERE u.tenant_id = :tenant_id
+
+                    GROUP BY u.id, u.name
+
+                    ORDER BY u.name
+                """),
+                db.bind,
+                params={
+                    "tenant_id": tenant_id
+                }
+            )
+
+            if universe_df.empty:
+
+                st.info("No universes found.")
+
+            else:
+
+                universe_df["Analytics %"] = (
+                        universe_df["analytics_count"]
+                        / universe_df["symbol_count"]
+                        * 100
+                ).round(1)
+
+                universe_df["Fundamental %"] = (
+                        universe_df["fundamentals_count"]
+                        / universe_df["symbol_count"]
+                        * 100
+                ).round(1)
+
+                st.dataframe(
+                    universe_df,
+                    use_container_width=True,
+                    hide_index=True,
+                )

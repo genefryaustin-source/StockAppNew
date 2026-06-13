@@ -85,6 +85,11 @@ def _upsert_ipo_event(
 
     if existing is None:
         db.add(event)
+        # Flush immediately so Postgres receives one INSERT at a time.
+        # Without this SQLAlchemy batches all adds into a single INSERT;
+        # one UniqueViolation then aborts the entire transaction and every
+        # subsequent query on the session raises PendingRollbackError.
+        db.flush()
 
     return event
 
@@ -101,19 +106,28 @@ def refresh_ipo_calendar(
     rows = fetch_ipo_calendar(_date_str(start), _date_str(end))
 
     inserted_or_updated = 0
+    skipped = 0
 
     for row in rows:
+        # Each row gets its own SAVEPOINT. A UniqueViolation or any other
+        # Postgres error rolls back only that savepoint — the outer
+        # transaction stays alive and the rest of the batch commits cleanly.
+        sp = db.begin_nested()
         try:
             _upsert_ipo_event(db, tenant_id, row)
+            sp.commit()
             inserted_or_updated += 1
         except Exception as e:
-            print("IPO UPSERT ERROR:", row.get("company_name"), e)
+            sp.rollback()
+            skipped += 1
+            print("IPO UPSERT SKIPPED:", row.get("company_name"), e)
 
     db.commit()
 
     return {
         "fetched": len(rows),
         "upserted": inserted_or_updated,
+        "skipped": skipped,
         "from": _date_str(start),
         "to": _date_str(end),
     }

@@ -40,6 +40,7 @@ from modules.options.options_ai import (
 )
 from modules.options.options_broker import AlpacaOptionsBroker, OptionsOrderRequest
 from modules.options.options_models import ensure_tables, save_order, get_order_history
+from modules.options.options_workstation_ui import render_full_options_workstation
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
 CALL_CLR = "#1D9E75"
@@ -78,6 +79,7 @@ def render_options_trading_page(db, user: dict):
         "🏗 Strategy Builder",
         "💰 P&L Calculator",
         "🤖 AI Analysis",
+        "🚀 Advanced Workstation",
     ])
 
     with tabs[0]:
@@ -92,6 +94,8 @@ def render_options_trading_page(db, user: dict):
         _render_pnl_calculator(ticker)
     with tabs[5]:
         _render_ai_analysis(ticker, paper)
+    with tabs[6]:
+        render_full_options_workstation(ticker, paper)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

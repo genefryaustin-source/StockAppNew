@@ -27,9 +27,10 @@ def ensure_provider_cache_tables(db) -> None:
             symbol TEXT,
             data_type TEXT NOT NULL,
             payload TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME,
-            expires_at DATETIME
+        
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP,
+            expires_at TIMESTAMP
         )
     """))
 

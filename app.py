@@ -12,7 +12,7 @@ from typing import Any, Callable, Optional
 import streamlit as st
 print("STREAMLIT VERSION =", st.__version__)
 
-
+from streamlit.runtime.scriptrunner import RerunException
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, DBAPIError
 from branding.conduro_theme import load_conduro_theme, render_conduro_header
@@ -27,6 +27,9 @@ st.set_page_config(
 
 # MUST RUN IMMEDIATELY AFTER set_page_config
 load_conduro_theme()
+from modules.auth.entitlements import (
+    check_page, require_page, sidebar_plan_badge,
+)
 
 VERSION = "2.4.1"
 DEV_MODE = False
@@ -338,28 +341,20 @@ def get_market_data_service():
 market_data_service = get_market_data_service()
 
 
+
+
 # ============================================================
 # AUTH GATE
 # ============================================================
+
 user = st.session_state.get("user")
 
 if user is None:
-    try:
-        db = ensure_live_session(db)
-        render_login(db)
+    db = ensure_live_session(db)
+    render_login(db)
+    st.stop()
 
-        # Stop execution until next run
-        st.stop()
-
-    except Exception as e:
-        safe_rollback(db)
-        st.error(f"Login failed: {e}")
-        st.exception(e)
-
-# Refresh user after login
 user = st.session_state.get("user")
-
-
 
 
 
@@ -370,6 +365,8 @@ render_conduro_header(
     kicker="Conduro Ventures LLC",
     status=user.get("role", "User").replace("_", " ").title() if user else "User"
 )
+
+
 # ============================================================
 # SESSION TIMEOUT
 # ============================================================
@@ -413,6 +410,7 @@ else:
 
 
 st.sidebar.write(f"Role: {user.get('role')}")
+sidebar_plan_badge(user)
 
 if st.sidebar.button("Sign Out", key="sidebar_logout", use_container_width=True):
     from modules.auth.auth_service import logout
@@ -424,74 +422,66 @@ if st.sidebar.button("Sign Out", key="sidebar_logout", use_container_width=True)
 # DEV DEBUG OUTPUT - isolated sessions only
 # ============================================================
 if DEV_MODE:
+    st.sidebar.write("DB OBJECT")
+    st.sidebar.write(repr(db))
+    st.sidebar.write(type(db))
+    import os
+
+    st.sidebar.write("DATABASE_URL")
+
+    url = os.getenv("DATABASE_URL")
+
+    if url:
+        st.sidebar.code(url[:80] + "...")
+    else:
+        st.sidebar.error("DATABASE_URL NOT FOUND")
+    from sqlalchemy import text
+
     try:
-        st.sidebar.markdown("### DB Debug")
-        st.subheader("POSTGRES DEBUG")
+        st.sidebar.markdown("### CONNECTION")
 
-        try:
-            st.write("USER COUNT", db_scalar("SELECT COUNT(*) FROM users"))
-            st.write("TENANT COUNT", db_scalar("SELECT COUNT(*) FROM tenants"))
+        bind = db.get_bind()
 
-            users = db_fetchall("""
-                SELECT
-                    email,
-                    role,
-                    tenant_id,
-                    is_active
-                FROM users
-                ORDER BY email
-            """)
+        st.sidebar.write("ENGINE URL")
 
-            st.write("USERS")
-            st.json([str(u) for u in users])
-
-        except Exception as e:
-            st.error(f"USER DEBUG FAILED: {e}")
-
-        try:
-            tenants = db_fetchall("""
-                SELECT
-                    id,
-                    name,
-                    created_at
-                FROM tenants
-                ORDER BY name
-            """)
-
-            st.write("TENANTS")
-            st.json([str(t) for t in tenants])
-
-        except Exception as e:
-            st.error(f"TENANT DEBUG FAILED: {e}")
-
-        #try:
-            # st.write("POSTGRES DATABASE", db_scalar("SELECT current_database()"))
-        except Exception as e:
-            st.error(f"DB NAME FAILED: {e}")
-
-        try:
-            version = db_scalar("SELECT version()")
-            st.write("POSTGRES VERSION")
-            st.code(version)
-        except Exception as e:
-            st.error(f"VERSION FAILED: {e}")
-
-        try:
-            cols = db_fetchall("""
-                SELECT
-                    column_name,
-                    data_type
-                FROM information_schema.columns
-                WHERE table_name = 'portfolios'
-                ORDER BY ordinal_position
-            """)
-            st.write(cols)
-        except Exception as e:
-            st.error(f"PORTFOLIO SCHEMA DEBUG FAILED: {e}")
+        st.sidebar.code(str(bind.url))
 
     except Exception as e:
-        st.sidebar.error(f"DB debug failed: {e}")
+        st.sidebar.error(f"URL DEBUG FAILED: {e}")
+    try:
+        version = db.execute(
+            text("SELECT version()")
+        ).scalar()
 
+        st.sidebar.markdown("### DATABASE VERSION")
+        st.sidebar.code(version)
+
+    except Exception as e:
+        st.sidebar.error(f"VERSION FAILED: {e}")
+
+
+    try:
+        st.sidebar.markdown("### PostgreSQL")
+
+        info = db.execute(text("""
+            SELECT
+                current_database() AS database_name,
+                current_user AS username,
+                current_schema() AS schema_name
+        """)).mappings().first()
+
+        st.sidebar.write(f"DB: {info['database_name']}")
+        st.sidebar.write(f"User: {info['username']}")
+        st.sidebar.write(f"Schema: {info['schema_name']}")
+
+        user_count = db_scalar("SELECT COUNT(*) FROM users")
+        tenant_count = db_scalar("SELECT COUNT(*) FROM tenants")
+
+        st.sidebar.write(f"Users: {user_count}")
+        st.sidebar.write(f"Tenants: {tenant_count}")
+
+    except Exception as e:
+        st.sidebar.error(f"POSTGRES DEBUG FAILED: {e}")
 
 # ============================================================
 # SCHEDULER
@@ -521,48 +511,101 @@ role = (user.get("role") or "").lower()
 if role == "client":
     pages = ["Portfolio"]
 else:
+    # ── Full page list (used for routing) ───────────────────
     pages = [
-        "Executive Dashboard",
-        "Watchlists",
-        "Screener",
-        "Formula Builder",
-        "Earnings",
-        "Market Data",
-        "Analytics",
-        "Rankings",
-        "Indicator Builder",
-        "Universe",
-        "Stock Dashboard",
-        "Intraday Charts",
-        "Portfolio",
-        "Portfolio Construction",
-        "Portfolio Deployment",
-        "Market Overview",
-        "Strategy Lab",
-        "Regime Engine",
-        "Strategy Discovery",
-        "Strategy Library",
-        "IPO Intelligence",
-        "Alerts",
-        "Admin",
-        "AI Rankings",
-        "AI Portfolio",
-        "AI Forecast",
-        "AI Scanner",
-        "AI Agent",
-        "Options Flow",
-        "Options Trading",
-        "Analyst Consensus",
-        "Smart Money",
-        "Export / Sheets",
-        "Research Reports",
-        "Social Sentiment",
-        "Team Collaboration",
-        "Crypto",
+        "Executive Dashboard","Watchlists","Screener","Formula Builder",
+        "Earnings","Market Data","Analytics","Rankings","Indicator Builder",
+        "Universe","Stock Dashboard","Intraday Charts","Portfolio",
+        "Portfolio Construction","Portfolio Deployment","Market Overview",
+        "Strategy Lab","Regime Engine","Strategy Discovery","Strategy Library",
+        "IPO Intelligence","Pre-IPO Intelligence","Alerts","Admin",
+        "AI Rankings","AI Portfolio","AI Forecast","AI Scanner","AI Agent",
+        "Options Flow","Options Trading","Analyst Consensus","Smart Money",
+        "Export / Sheets","Research Reports","Social Sentiment",
+        "Team Collaboration","Crypto","Investment Committee","Multi-Agent Research",
+        "Portfolio Construction OS","Autonomous PM","Fund Operations","Hedge Fund OS",
         "Help",
     ]
 
-page = st.sidebar.selectbox("Go to", pages)
+    # ── Grouped navigation ───────────────────────────────────
+    NAV_GROUPS = [
+        ("📊 Research", [
+            "Executive Dashboard","Watchlists","Screener","Formula Builder",
+            "Market Overview","Market Data","Analytics","Rankings",
+            "Stock Dashboard","Earnings","Intraday Charts",
+            "Universe","Indicator Builder",
+        ]),
+        ("🤖 AI Suite", [
+            "AI Rankings","AI Scanner","AI Agent","AI Portfolio","AI Forecast",
+        ]),
+        ("📈 Trading & Portfolio", [
+            "Portfolio","Portfolio Construction","Portfolio Deployment",
+            "Portfolio Construction & Capital Allocation",
+            "Options Flow","Options Trading", "Crypto","Alerts",
+        ]),
+        ("🧠 Strategy", [
+            "Strategy Lab","Strategy Discovery","Strategy Library",
+            "Regime Engine","Smart Money",
+            "IPO Intelligence","Pre-IPO Intelligence",
+        ]),
+        ("🏦 Hedge Fund", [
+            "Investment Committee",
+            "Multi-Agent Research",
+            "Portfolio Construction OS",
+            "Autonomous PM",
+            "Fund Operations",
+            "Hedge Fund OS",
+        ]),
+        ("🌐 Markets & Macro", [
+            "Market Overview","Crypto","IPO Intelligence",
+            "Pre-IPO Intelligence","Social Sentiment","Analyst Consensus",
+        ]),
+        ("📄 Reports & Export", [
+            "Research Reports","Export / Sheets",
+        ]),
+        ("👥 Collaboration", [
+            "Team Collaboration",
+        ]),
+        ("⚙️ System", [
+            "Admin","Help",
+        ]),
+    ]
+
+# ── Grouped sidebar nav renderer ─────────────────────────────
+def _render_grouped_nav(nav_groups):
+    if "nav_page" not in st.session_state:
+        st.session_state["nav_page"] = "Executive Dashboard"
+    current = st.session_state.get("nav_page","Executive Dashboard")
+    for g_idx, (group_name, group_pages) in enumerate(nav_groups):
+        group_active = current in group_pages
+        with st.sidebar.expander(group_name, expanded=group_active):
+            for pg in group_pages:
+                is_active = (current == pg)
+                # Key includes group index to prevent DuplicateWidgetID
+                # when the same page appears in multiple groups
+                safe_pg = pg.replace(" ", "_").replace("/", "_").replace("&", "and")
+                if st.button(
+                    f"▶ {pg}" if is_active else f"  {pg}",
+                    key=f"nav_g{g_idx}_{safe_pg}",
+                    use_container_width=True,
+                    type="primary" if is_active else "secondary",
+                ):
+                    st.session_state["nav_page"] = pg
+                    st.rerun()
+    return st.session_state.get("nav_page","Executive Dashboard")
+
+# Quick-jump selectbox
+_qj = st.sidebar.selectbox(
+    "⚡ Quick Jump",
+    ["— select —"] + pages,
+    key="quick_jump",
+)
+if _qj and _qj != "— select —":
+    st.session_state["nav_page"] = _qj
+    st.session_state["quick_jump"] = "— select —"
+
+st.sidebar.markdown("---")
+page = _render_grouped_nav(NAV_GROUPS)
 
 
 # ============================================================
@@ -580,30 +623,43 @@ def render_module_error(label: str, exc: Exception) -> None:
     st.exception(exc)
 
 
+
+
 def run_page(label: str, fn: Callable, *args, stop_after: bool = False, **kwargs):
     """
     Standard PostgreSQL-safe page wrapper.
     Clears stale transactions before render and rolls back on any page exception.
     """
     global db
+
     try:
         db = ensure_live_session(db)
+
         result = fn(*args, **kwargs)
+
         if stop_after:
             st.stop()
+
         return result
+
+    except RerunException:
+        raise
 
     except (OperationalError, DBAPIError) as e:
         safe_rollback(db)
+
         st.error(f"{label} database error.")
         st.exception(e)
+
         if stop_after:
             st.stop()
 
     except Exception as e:
         safe_rollback(db)
+
         st.error(f"{label} failed.")
         st.exception(e)
+
         if stop_after:
             st.stop()
 
@@ -643,12 +699,18 @@ elif page == "Watchlists":
         run_page("Watchlists", watchlists_mod.render_watchlists, db, user)
 
 elif page == "Screener":
+    if not check_page(user, "Screener", db):
+        require_page(user, "Screener", db)
+        st.stop()
     if isinstance(screener_mod, Exception):
         render_module_error("Screener", screener_mod)
     elif hasattr(screener_mod, "render_screener"):
         run_page("Screener", screener_mod.render_screener, db, user)
 
 elif page == "Formula Builder":
+    if not check_page(user, "Formula Builder", db):
+        require_page(user, "Formula Builder", db)
+        st.stop()
     try:
         from modules.screener.formula_ui import render_formula_page
         run_page("Formula Builder", render_formula_page, db, user)
@@ -658,12 +720,18 @@ elif page == "Formula Builder":
         st.exception(e)
 
 elif page == "Earnings":
+    if not check_page(user, "Earnings", db):
+        require_page(user, "Earnings", db)
+        st.stop()
     if isinstance(earnings_mod, Exception):
         render_module_error("Earnings", earnings_mod)
     elif hasattr(earnings_mod, "render_earnings"):
         run_page("Earnings", earnings_mod.render_earnings, db, user)
 
 elif page == "Market Data":
+    if not check_page(user, "Market Data", db):
+        require_page(user, "Market Data", db)
+        st.stop()
     if isinstance(market_data_mod, Exception):
         render_module_error("Market Data", market_data_mod)
     else:
@@ -673,18 +741,27 @@ elif page == "Market Data":
             run_page("Market Refresh", market_data_mod.render_market_refresh, db, user)
 
 elif page == "Analytics":
+    if not check_page(user, "Analytics", db):
+        require_page(user, "Analytics", db)
+        st.stop()
     if isinstance(analytics_mod, Exception):
         render_module_error("Analytics", analytics_mod)
     elif hasattr(analytics_mod, "render_analytics"):
         run_page("Analytics", analytics_mod.render_analytics, db, user)
 
 elif page == "Rankings":
+    if not check_page(user, "Rankings", db):
+        require_page(user, "Rankings", db)
+        st.stop()
     if isinstance(rankings_mod, Exception):
         render_module_error("Rankings", rankings_mod)
     elif hasattr(rankings_mod, "render_rankings"):
         run_page("Rankings", rankings_mod.render_rankings, db, user)
 
 elif page == "Indicator Builder":
+    if not check_page(user, "Indicator Builder", db):
+        require_page(user, "Indicator Builder", db)
+        st.stop()
     try:
         from modules.indicators.indicator_ui import render_indicator_builder
         run_page("Indicator Builder", render_indicator_builder, db, user)
@@ -694,18 +771,27 @@ elif page == "Indicator Builder":
         st.exception(e)
 
 elif page == "Universe":
+    if not check_page(user, "Universe", db):
+        require_page(user, "Universe", db)
+        st.stop()
     if isinstance(universe_mod, Exception):
         render_module_error("Universe", universe_mod)
     elif hasattr(universe_mod, "render_universe"):
         run_page("Universe", universe_mod.render_universe, db, user)
 
 elif page == "Stock Dashboard":
+    if not check_page(user, "Stock Dashboard", db):
+        require_page(user, "Stock Dashboard", db)
+        st.stop()
     if isinstance(stock_dashboard_mod, Exception):
         render_module_error("Stock Dashboard", stock_dashboard_mod)
     elif hasattr(stock_dashboard_mod, "render_stock_dashboard"):
         run_page("Stock Dashboard", stock_dashboard_mod.render_stock_dashboard, db, user)
 
 elif page == "Intraday Charts":
+    if not check_page(user, "Intraday Charts", db):
+        require_page(user, "Intraday Charts", db)
+        st.stop()
     try:
         from modules.intraday.intraday_ui import render_intraday_page
         run_page("Intraday Charts", render_intraday_page, db, user)
@@ -715,6 +801,9 @@ elif page == "Intraday Charts":
         st.exception(e)
 
 elif page == "Portfolio":
+    if not check_page(user, "Portfolio", db):
+        require_page(user, "Portfolio", db)
+        st.stop()
     if isinstance(portfolio_mod, Exception):
         render_module_error("Portfolio", portfolio_mod)
         st.stop()
@@ -746,6 +835,9 @@ elif page == "Portfolio":
         st.stop()
 
 elif page == "Portfolio Construction":
+    if not check_page(user, "Portfolio Construction", db):
+        require_page(user, "Portfolio Construction", db)
+        st.stop()
     if isinstance(construction_mod, Exception):
         render_module_error("Portfolio Construction", construction_mod)
     else:
@@ -753,12 +845,18 @@ elif page == "Portfolio Construction":
         run_page("Portfolio Construction", construction_mod.render_portfolio_construction, rows)
 
 elif page == "Portfolio Deployment":
+    if not check_page(user, "Portfolio Deployment", db):
+        require_page(user, "Portfolio Deployment", db)
+        st.stop()
     if isinstance(deployment_mod, Exception):
         render_module_error("Portfolio Deployment", deployment_mod)
     elif hasattr(deployment_mod, "render_portfolio_deployment"):
         run_page("Portfolio Deployment", deployment_mod.render_portfolio_deployment, db, user)
 
 elif page == "Market Overview":
+    if not check_page(user, "Market Overview", db):
+        require_page(user, "Market Overview", db)
+        st.stop()
     st.header("Market Overview")
     if isinstance(market_dashboard_mod, Exception):
         render_module_error("Market Overview", market_dashboard_mod)
@@ -768,6 +866,9 @@ elif page == "Market Overview":
         st.error("render_market_dashboard() not found in modules.market.dashboard")
 
 elif page == "AI Rankings":
+    if not check_page(user, "AI Rankings", db):
+        require_page(user, "AI Rankings", db)
+        st.stop()
     rankings_ui_mod = safe_import("modules.analytics.ranking_ui")
     if isinstance(rankings_ui_mod, Exception):
         render_module_error("AI Rankings UI", rankings_ui_mod)
@@ -777,6 +878,9 @@ elif page == "AI Rankings":
         st.error("AI Rankings UI failed to load. Expected modules.analytics.ranking_ui.render_ai_rankings")
 
 elif page == "Regime Engine":
+    if not check_page(user, "Regime Engine", db):
+        require_page(user, "Regime Engine", db)
+        st.stop()
     try:
         from modules.market.regime_engine import render_regime_engine
         run_page("Regime Engine", render_regime_engine, db, user)
@@ -795,14 +899,23 @@ elif page in ("Strategy Lab", "Strategy Discovery", "Strategy Library"):
         st.exception(e)
 
 elif page == "IPO Intelligence":
+    if not check_page(user, "IPO Intelligence", db):
+        require_page(user, "IPO Intelligence", db)
+        st.stop()
     from modules.ipo.ipo_ui import render_ipo_center
     render_ipo_center(db, user)
 
 elif page == "Pre-IPO Intelligence":
+    if not check_page(user, "Pre-IPO Intelligence", db):
+        require_page(user, "Pre-IPO Intelligence", db)
+        st.stop()
     from modules.preipo.preipo_ui import render_preipo_center
     render_preipo_center(db, user)
 
 elif page == "Alerts":
+    if not check_page(user, "Alerts", db):
+        require_page(user, "Alerts", db)
+        st.stop()
     st.header("Alerts")
     if isinstance(alerts_mod, Exception):
         render_module_error("Alerts", alerts_mod)
@@ -818,11 +931,23 @@ elif page == "Admin":
     if isinstance(admin_mod, Exception):
         render_module_error("Admin", admin_mod)
     elif hasattr(admin_mod, "render_admin_panel"):
-        run_page("Admin Panel", admin_mod.render_admin_panel, db, user)
+        _admin_tab, _plan_tab = st.tabs(["👤 User Admin", "🎛️ Plan Manager"])
+        with _admin_tab:
+            run_page("Admin Panel", admin_mod.render_admin_panel, db, user)
+        with _plan_tab:
+            try:
+                from modules.auth.custom_plan_ui import render_custom_plan_manager
+                render_custom_plan_manager(db, user)
+            except Exception as _e:
+                st.error(f"Plan Manager failed: {_e}")
+                st.exception(_e)
     else:
         st.error("render_admin_panel() not found in admin_ui.py")
 
 elif page == "AI Portfolio":
+    if not check_page(user, "AI Portfolio", db):
+        require_page(user, "AI Portfolio", db)
+        st.stop()
     try:
         from modules.portfolio.ai_portfolio_ui import render_ai_portfolio_center
         run_page("AI Portfolio", render_ai_portfolio_center, db=db, user=user)
@@ -832,6 +957,9 @@ elif page == "AI Portfolio":
         st.exception(e)
 
 elif page == "AI Forecast":
+    if not check_page(user, "AI Forecast", db):
+        require_page(user, "AI Forecast", db)
+        st.stop()
     try:
         from modules.forecasting.forecast_ui import render_forecast_page
         run_page("AI Forecast", render_forecast_page, db, user)
@@ -841,6 +969,9 @@ elif page == "AI Forecast":
         st.exception(e)
 
 elif page == "AI Scanner":
+    if not check_page(user, "AI Scanner", db):
+        require_page(user, "AI Scanner", db)
+        st.stop()
     try:
         from modules.alerts.scanner_ui import render_scanner_page
         run_page("AI Scanner", render_scanner_page, db, user)
@@ -850,6 +981,9 @@ elif page == "AI Scanner":
         st.exception(e)
 
 elif page == "AI Agent":
+    if not check_page(user, "AI Agent", db):
+        require_page(user, "AI Agent", db)
+        st.stop()
     try:
         from modules.agent.agent_ui import render_agent_page
         run_page("AI Agent", render_agent_page, db, user)
@@ -859,6 +993,9 @@ elif page == "AI Agent":
         st.exception(e)
 
 elif page == "Options Trading":
+    if not check_page(user, "Options Trading", db):
+        require_page(user, "Options Trading", db)
+        st.stop()
     try:
         from modules.options.options_ui import render_options_trading_page
         run_page("Options Trading", render_options_trading_page, db, user)
@@ -868,6 +1005,9 @@ elif page == "Options Trading":
         st.exception(e)
 
 elif page == "Options Flow":
+    if not check_page(user, "Options Flow", db):
+        require_page(user, "Options Flow", db)
+        st.stop()
     try:
         from modules.options_flow.flow_ui import render_options_flow_page
         run_page("Options Flow", render_options_flow_page, db, user)
@@ -877,6 +1017,9 @@ elif page == "Options Flow":
         st.exception(e)
 
 elif page == "Analyst Consensus":
+    if not check_page(user, "Analyst Consensus", db):
+        require_page(user, "Analyst Consensus", db)
+        st.stop()
     try:
         from modules.analyst.analyst_ui import render_analyst_page
         run_page("Analyst Consensus", render_analyst_page, db, user)
@@ -886,6 +1029,9 @@ elif page == "Analyst Consensus":
         st.exception(e)
 
 elif page == "Smart Money":
+    if not check_page(user, "Smart Money", db):
+        require_page(user, "Smart Money", db)
+        st.stop()
     try:
         from modules.smc.smc_ui import render_smc_page
         run_page("Smart Money", render_smc_page, db, user)
@@ -895,6 +1041,9 @@ elif page == "Smart Money":
         st.exception(e)
 
 elif page == "Export / Sheets":
+    if not check_page(user, "Export / Sheets", db):
+        require_page(user, "Export / Sheets", db)
+        st.stop()
     try:
         from modules.export.export_ui import render_export_page
         run_page("Export / Sheets", render_export_page, db, user)
@@ -904,6 +1053,9 @@ elif page == "Export / Sheets":
         st.exception(e)
 
 elif page == "Research Reports":
+    if not check_page(user, "Research Reports", db):
+        require_page(user, "Research Reports", db)
+        st.stop()
     try:
         from modules.reports.report_ui import render_reports_page
         run_page("Research Reports", render_reports_page, db, user)
@@ -913,6 +1065,9 @@ elif page == "Research Reports":
         st.exception(e)
 
 elif page == "Social Sentiment":
+    if not check_page(user, "Social Sentiment", db):
+        require_page(user, "Social Sentiment", db)
+        st.stop()
     try:
         from modules.sentiment.sentiment_ui import render_sentiment_page
         run_page("Social Sentiment", render_sentiment_page, db, user)
@@ -922,6 +1077,9 @@ elif page == "Social Sentiment":
         st.exception(e)
 
 elif page == "Team Collaboration":
+    if not check_page(user, "Team Collaboration", db):
+        require_page(user, "Team Collaboration", db)
+        st.stop()
     try:
         from modules.collab.collab_ui import render_team_page
         run_page("Team Collaboration", render_team_page, db, user)
@@ -931,6 +1089,9 @@ elif page == "Team Collaboration":
         st.exception(e)
 
 elif page == "Crypto":
+    if not check_page(user, "Crypto", db):
+        require_page(user, "Crypto", db)
+        st.stop()
     try:
         from modules.crypto.service import render_crypto_page
         run_page("Crypto", render_crypto_page, db, user)
@@ -938,6 +1099,94 @@ elif page == "Crypto":
         safe_rollback(db)
         st.error(f"Crypto module failed: {e}")
         st.exception(e)
+
+elif page == "Investment Committee":
+    if not check_page(user, "Investment Committee", db):
+        require_page(user, "Investment Committee", db)
+        st.stop()
+    from modules.hf.committee_dashboard import render_committee_dashboard
+    render_committee_dashboard(db=db, user=user, default_ticker="AAPL")
+
+elif page == "Multi-Agent Research":
+    if not check_page(user, "Multi-Agent Research", db):
+        require_page(user, "Multi-Agent Research", db)
+        st.stop()
+    from modules.hf.multi_agent_research_dashboard import render_multi_agent_research_dashboard
+    render_multi_agent_research_dashboard()
+
+elif page == "Portfolio Construction OS":
+    if not check_page(user, "Portfolio Construction OS", db):
+        require_page(user, "Portfolio Construction OS", db)
+        st.stop()
+
+    from modules.hf.hf3_dashboard import (
+        render_hf3_portfolio_construction_dashboard
+    )
+
+    render_hf3_portfolio_construction_dashboard(
+        ticker="AAPL",
+        db=db,
+        user=user,
+    )
+
+elif page == "Autonomous PM":
+    if not check_page(user, "Autonomous PM", db):
+        require_page(user, "Autonomous PM", db)
+        st.stop()
+
+    from modules.hf.hf4_dashboard import (
+        render_hf4_autonomous_equity_pm_dashboard
+    )
+
+    render_hf4_autonomous_equity_pm_dashboard(
+        ticker="AAPL",
+        db=db,
+        user=user,
+    )
+
+elif page == "Fund Operations":
+    if not check_page(user, "Fund Operations", db):
+        require_page(user, "Fund Operations", db)
+        st.stop()
+
+    from modules.hf.fund_operations.fund_operations_dashboard import (
+        render_fund_operations_dashboard
+    )
+
+    render_fund_operations_dashboard(
+        db=db,
+        user=user,
+    )
+
+elif page == "Hedge Fund OS":
+    if not check_page(user, "Hedge Fund OS", db):
+        require_page(user, "Hedge Fund OS", db)
+        st.stop()
+
+    from modules.hf.operating_system.hedge_fund_os_dashboard import (
+        render_hedge_fund_os_dashboard
+    )
+
+    render_hedge_fund_os_dashboard(
+        db=db,
+        user=user,
+    )
+
+
+elif page == "Portfolio Construction & Capital Allocation":
+    if not check_page(user, "Portfolio Construction & Capital Allocation", db):
+        require_page(user, "Portfolio Construction & Capital Allocation", db)
+        st.stop()
+    st.header("📐 Portfolio Construction & Capital Allocation")
+    st.caption("Advanced multi-factor capital allocation with risk budgeting.")
+    try:
+        pc_mod = safe_import("modules.portfolio.construction")
+        if hasattr(pc_mod, "render_portfolio_construction"):
+            run_page("Portfolio Construction", pc_mod.render_portfolio_construction, db, user)
+        else:
+            st.info("Portfolio Construction & Capital Allocation — module loading.")
+    except Exception as _e:
+        st.info(f"Portfolio Construction & Capital Allocation coming soon.")
 
 elif page == "Help":
     from modules.help.help_ui import render_help

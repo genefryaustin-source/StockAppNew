@@ -5,8 +5,8 @@ from typing import List
 import time
 
 import pandas as pd
-
-from sqlalchemy.orm import Session
+from sqlalchemy.orm.session import Session
+from sqlalchemy.dialects.postgresql import insert
 
 from modules.market_data.models import PriceHistory
 from modules.market_data.providers.finnhub_provider import (
@@ -64,7 +64,6 @@ def load_price_history(db: Session, symbol: str) -> pd.DataFrame | None:
 # Store price history to DB
 # ---------------------------------------------------
 
-from sqlalchemy.dialects.sqlite import insert
 
 def store_price_history(db, symbol, df):
     df = df.copy()

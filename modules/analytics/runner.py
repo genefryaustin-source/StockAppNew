@@ -60,7 +60,7 @@ except Exception:
                 if df is None or df.empty:
                     continue
 
-                if len(df) < 50:
+                if len(df) < MIN_HISTORY_ROWS:
                     continue
 
                 history_map[sym] = df
@@ -95,6 +95,11 @@ except Exception:
 
 EOD_REALTIME = "https://eodhd.com/api/real-time/stock"
 EOD_EOD = "https://eodhd.com/api/eod"
+
+# Several AMEX/newer symbols only have 20-49 daily bars.
+# The old 50-bar hard gate prevented valid shorter-history symbols
+# from ever receiving analytics snapshots.
+MIN_HISTORY_ROWS = 20
 
 _fund_cache = {}
 _profile_cache = {}
@@ -1112,8 +1117,13 @@ def run_analytics_for_symbol(
 
     df = _normalize_history_df(df)
 
-    if df is None or df.empty or len(df) < 50:
-        print("INSUFFICIENT PRICE HISTORY:", sym, 0 if df is None else len(df))
+    if df is None or df.empty or len(df) < MIN_HISTORY_ROWS:
+        print(
+            "INSUFFICIENT PRICE HISTORY:",
+            sym,
+            0 if df is None else len(df),
+            f"(minimum={MIN_HISTORY_ROWS})",
+        )
         return None
 
     required_cols = [
@@ -1136,8 +1146,13 @@ def run_analytics_for_symbol(
         errors="coerce",
     ).fillna(0)
 
-    if len(closes) < 50:
-        print("INSUFFICIENT CLOSE SERIES:", sym, len(closes))
+    if len(closes) < MIN_HISTORY_ROWS:
+        print(
+            "INSUFFICIENT CLOSE SERIES:",
+            sym,
+            len(closes),
+            f"(minimum={MIN_HISTORY_ROWS})",
+        )
         return None
 
     # ---------------------------------
@@ -1195,6 +1210,11 @@ def run_analytics_for_symbol(
         if price > sma50 > sma200:
             trend = "Uptrend"
         elif price < sma50 < sma200:
+            trend = "Downtrend"
+    elif sma50 is not None:
+        if price > sma50:
+            trend = "Uptrend"
+        elif price < sma50:
             trend = "Downtrend"
 
     # ---------------------------------
@@ -1560,7 +1580,7 @@ def run_vectorized_price_analytics(
         price_cache, meta = build_shared_price_cache(
             db=db,
             symbols=clean_symbols,
-            min_rows=50,
+            min_rows=MIN_HISTORY_ROWS,
             period="1y",
             interval="1d",
             max_api_calls=kwargs.get("max_api_calls", None),
@@ -1594,8 +1614,20 @@ def run_vectorized_price_analytics(
 
             cached_df = _normalize_history_df(cached_df)
 
-            if cached_df is None or cached_df.empty or len(cached_df) < 50:
+            if cached_df is None or cached_df.empty or len(cached_df) < MIN_HISTORY_ROWS:
+                print(
+                    "VECTOR SKIP INSUFFICIENT HISTORY:",
+                    sym,
+                    0 if cached_df is None else len(cached_df),
+                    f"(minimum={MIN_HISTORY_ROWS})",
+                )
                 continue
+
+            print(
+                "VECTOR ANALYTICS RUN:",
+                sym,
+                f"rows={len(cached_df)}",
+            )
 
             snap = run_analytics_for_symbol(
                 db=db,
@@ -1606,6 +1638,8 @@ def run_vectorized_price_analytics(
 
             if snap:
                 results.append(snap)
+            else:
+                print("VECTOR ANALYTICS SKIPPED SNAPSHOT:", sym)
 
         except Exception as e:
             print("VECTOR ANALYTICS ERROR:", sym, e)

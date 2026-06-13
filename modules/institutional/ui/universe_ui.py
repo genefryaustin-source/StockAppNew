@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
+import math
 from modules.universe.service import (
     create_universe,
     list_universes,
@@ -76,6 +77,7 @@ def _show_dataframe(df: pd.DataFrame, max_rows: int = MAX_UI_ROWS):
 # Universe Health Dashboard
 # --------------------------------------------------
 
+
 def render_universe_dashboard(db, tenant_id, universe_id):
 
     symbols = list_symbols(db, tenant_id, universe_id)
@@ -94,7 +96,7 @@ def render_universe_dashboard(db, tenant_id, universe_id):
     )
 
     now = datetime.now(UTC)
-    fresh_cutoff = now - timedelta(hours=24)
+    fresh_cutoff = now - timedelta(hours=72)
 
     latest_by_symbol = {}
 
@@ -111,50 +113,148 @@ def render_universe_dashboard(db, tenant_id, universe_id):
 
         existing_asof = to_aware_utc(existing.asof)
 
-        if (
-                current_asof
-                and existing_asof
-                and current_asof > existing_asof
-        ):
+        if current_asof and existing_asof and current_asof > existing_asof:
             latest_by_symbol[sym] = s
 
-    fresh = 0
-    stale = 0
+    coverage_count = 0
+    missing_count = 0
+    fresh_count = 0
+    stale_count = 0
     last_refresh = None
+
+    stale_rows = []
+    missing_rows = []
 
     for sym in symbols:
 
         snap = latest_by_symbol.get(sym)
 
         if not snap:
-            stale += 1
+            missing_count += 1
+            missing_rows.append(sym)
             continue
+
+        coverage_count += 1
 
         snap_asof = to_aware_utc(snap.asof)
 
         if snap_asof and snap_asof >= fresh_cutoff:
-            fresh += 1
+            fresh_count += 1
         else:
-            stale += 1
+            stale_count += 1
+            stale_rows.append(
+                {
+                    "Symbol": sym,
+                    "AsOf": str(snap_asof) if snap_asof else None,
+                }
+            )
 
         if snap_asof and (last_refresh is None or snap_asof > last_refresh):
             last_refresh = snap_asof
 
+    coverage_pct = round(
+        coverage_count / max(len(symbols), 1) * 100,
+        1,
+    )
+
+    fresh_pct = round(
+        fresh_count / max(len(symbols), 1) * 100,
+        1,
+    )
+
     col1, col2, col3, col4 = st.columns(4)
 
     col1.metric("Universe Size", len(symbols))
-    col2.metric("Fresh Symbols", fresh)
-    col3.metric("Stale Symbols", stale)
+    col2.metric("Covered Symbols", coverage_count)
+    col3.metric("Fresh Symbols", fresh_count)
+    col4.metric("Missing Symbols", missing_count)
+
+    col5, col6, col7 = st.columns(3)
+
+    col5.metric("Coverage %", coverage_pct)
+    col6.metric("Fresh %", fresh_pct)
+    col7.metric("Stale Analytics", stale_count)
 
     if last_refresh:
-        col4.metric("Last Refresh", last_refresh.strftime("%Y-%m-%d %H:%M"))
-    else:
-        col4.metric("Last Refresh", "Never")
+        st.info(
+            f"Latest Analytics Snapshot: "
+            f"{last_refresh.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        )
 
-    if stale > 0:
-        st.warning(f"{stale} symbols need refresh.")
-    else:
-        st.success("Universe fully refreshed.")
+    st.divider()
+
+    tab_missing, tab_stale = st.tabs(
+        ["Missing Symbols", "Stale Analytics"]
+    )
+
+    with tab_missing:
+
+        if missing_rows:
+
+            clean_missing = []
+
+            for row in missing_rows:
+                if isinstance(row, str):
+                    clean_missing.append(row)
+                elif hasattr(row, "_mapping"):
+                    clean_missing.append(list(row._mapping.values())[0])
+                elif isinstance(row, (tuple, list)):
+                    clean_missing.append(row[0])
+                else:
+                    clean_missing.append(str(row))
+
+            clean_missing = sorted(clean_missing)
+
+            total_rows = len(clean_missing)
+
+            st.metric(
+                "Missing Symbols",
+                f"{total_rows:,}"
+            )
+
+            page_size = st.selectbox(
+                "Rows Per Page",
+                [25, 50, 100, 250],
+                index=1,
+                key="missing_page_size",
+            )
+
+            total_pages = max(
+                1,
+                math.ceil(total_rows / page_size)
+            )
+
+            page = st.number_input(
+                "Page",
+                min_value=1,
+                max_value=total_pages,
+                value=1,
+                step=1,
+                key="missing_page",
+            )
+
+            start_idx = (page - 1) * page_size
+            end_idx = start_idx + page_size
+
+            page_symbols = clean_missing[
+                start_idx:end_idx
+            ]
+
+            st.caption(
+                f"Showing {start_idx + 1:,} - "
+                f"{min(end_idx, total_rows):,} "
+                f"of {total_rows:,}"
+            )
+
+            st.table(
+                pd.DataFrame(
+                    {"Symbol": page_symbols}
+                )
+            )
+
+        else:
+            st.success("No missing symbols.")
+
 
 
 # --------------------------------------------------
