@@ -185,12 +185,12 @@ def render_tenant_admin_panel(db, user):
                             is_active
                         )
                         VALUES (
-                            :id,
-                            :email,
-                            :pw,
-                            :role,
-                            :tenant,
-                            1
+                            %(id)s,
+                            %(email)s,
+                            %(pw)s,
+                            %(role)s,
+                            %(tenant)s,
+                            TRUE
                         )
                     """), {
                         "id": str(uuid.uuid4()),
