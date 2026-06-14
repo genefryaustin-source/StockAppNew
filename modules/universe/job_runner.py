@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 from sqlalchemy.orm import Session
-
+from modules.db.core import SessionLocal
 from modules.jobs.models import Job
 from modules.jobs.service import (
     start_job,
@@ -21,19 +21,18 @@ def run_one_queued_job(db: Session, tenant_id: str, universe_id: str = None):
     Executes ONE queued job for the tenant (optionally filtered by universe)
     """
 
+
+
+    # 🔥 CRITICAL FIX
     q = db.query(Job).filter(
         Job.tenant_id == tenant_id,
         Job.status == "queued",
     )
 
-    # 🔥 CRITICAL FIX
     if universe_id:
         q = q.filter(Job.universe_id == universe_id)
 
-    q = db.query(Job).filter(
-        Job.tenant_id == tenant_id,
-        Job.status == "queued",
-    )
+
 
     # 🔥 CRITICAL FIX
     if universe_id:
@@ -61,11 +60,44 @@ def run_one_queued_job(db: Session, tenant_id: str, universe_id: str = None):
                 raise Exception("Missing universe_id")
 
             def progress(done: int, total: int, symbol: str):
+
+                progress_db = SessionLocal()
+
                 try:
-                    set_progress(db, job, done + 1, total)
-                    append_log(db, job, f"{done+1}/{total} {symbol}")
-                except Exception:
-                    pass
+
+                    progress_job = (
+                        progress_db.query(Job)
+                        .filter(Job.id == job.id)
+                        .first()
+                    )
+
+                    if progress_job is None:
+                        return
+
+                    set_progress(
+                        progress_db,
+                        progress_job,
+                        done + 1,
+                        total,
+                    )
+
+                    append_log(
+                        progress_db,
+                        progress_job,
+                        f"{done + 1}/{total} {symbol}",
+                    )
+
+                    progress_db.commit()
+
+                except Exception as e:
+
+                    print("Progress update error:", e)
+
+                    progress_db.rollback()
+
+                finally:
+
+                    progress_db.close()
 
             print(
                 "🚨 STEP 1 — BEFORE refresh_universe_cache"
@@ -83,7 +115,7 @@ def run_one_queued_job(db: Session, tenant_id: str, universe_id: str = None):
                 universe_id=universe_id,
                 progress=progress,
             )
-
+            db.expire_all()
             print(
                 "🚨 STEP 2 — AFTER refresh_universe_cache"
             )
@@ -100,6 +132,11 @@ def run_one_queued_job(db: Session, tenant_id: str, universe_id: str = None):
 
         else:
             raise Exception(f"Unknown job_type: {job.job_type}")
+
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
         succeed_job(db, job)
         append_log(db, job, "Job completed successfully.")

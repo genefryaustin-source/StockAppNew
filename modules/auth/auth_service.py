@@ -4,7 +4,7 @@ from datetime import datetime, UTC
 from sqlalchemy import text
 
 
-SESSION_TIMEOUT_MINUTES = 30
+SESSION_TIMEOUT_MINUTES = 60
 
 
 def hash_password(password: str) -> str:

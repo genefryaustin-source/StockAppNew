@@ -112,7 +112,13 @@ def refresh_universe_cache(
     # --------------------------------------------
     # FAST PATH: vectorized price-based analytics
     # --------------------------------------------
-    ran_fast = run_vectorized_price_analytics(db, tenant_id, to_refresh)
+    fast_results = run_vectorized_price_analytics(
+        db=db,
+        tenant_id=tenant_id,
+        symbols=to_refresh,
+    )
+
+    ran_fast = len(fast_results)
 
     # progress for the fast path
     if progress:
@@ -145,12 +151,14 @@ def refresh_universe_cache(
     # de-dup
     need_full = sorted(set(need_full))
 
-    ran_full = 0
-    for sym in need_full:
-        snap = run_full_analytics(db, tenant_id, sym)
-        if snap is not None:
-            ran_full += 1
+    #ran_full = 0
+    #for sym in need_full:
+        #snap = run_full_analytics(db, tenant_id, sym)
+        #if snap is not None:
+            #ran_full += 1
+    #print("🚨 FULL ANALYTICS DISABLED FOR TEST")
 
+    ran_full = 0
     return {
         "symbols": total_symbols,
         "ran_analytics": ran_fast,
