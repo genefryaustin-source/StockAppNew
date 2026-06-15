@@ -12,7 +12,11 @@ from typing import Dict, List, Optional
 from modules.market_data.adaptive_rate_limit_manager import (
     get_rate_limit_manager,
 )
-
+from modules.data.provider_health_collector import (
+    provider_success,
+    provider_failure,
+    provider_rate_limited,
+)
 
 @dataclass
 class ProviderStatus:
@@ -150,6 +154,26 @@ class ProviderRouter:
 
             self.rate_manager.mark_success(provider.provider)
 
+            try:
+                from modules.database.session import new_db_session
+
+                db = new_db_session()
+
+                try:
+                    provider_success(
+                        db,
+                        provider.provider,
+                        latency_ms=latency_ms,
+                    )
+                finally:
+                    db.close()
+
+            except Exception as e:
+                print(
+                    "PROVIDER HEALTH SUCCESS ERROR:",
+                    e,
+                )
+
     def mark_failure(self, provider_name: str):
         with self._lock:
             provider = self.get_provider(provider_name)
@@ -165,6 +189,25 @@ class ProviderRouter:
             )
 
             self.rate_manager.mark_failure(provider.provider)
+
+            try:
+                from modules.database.session import new_db_session
+
+                db = new_db_session()
+
+                try:
+                    provider_failure(
+                        db,
+                        provider.provider,
+                    )
+                finally:
+                    db.close()
+
+            except Exception as e:
+                print(
+                    "PROVIDER HEALTH FAILURE ERROR:",
+                    e,
+                )
 
     def mark_rate_limited(
         self,
@@ -191,6 +234,26 @@ class ProviderRouter:
                 provider.provider,
                 cooldown_minutes=cooldown_minutes,
             )
+
+            try:
+                from modules.database.session import new_db_session
+
+                db = new_db_session()
+
+                try:
+                    provider_rate_limited(
+                        db,
+                        provider.provider,
+                        cooldown_minutes=cooldown_minutes,
+                    )
+                finally:
+                    db.close()
+
+            except Exception as e:
+                print(
+                    "PROVIDER HEALTH RATE LIMIT ERROR:",
+                    e,
+                )
 
     def disable_provider(self, provider_name: str):
         provider = self.get_provider(provider_name)

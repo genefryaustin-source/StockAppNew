@@ -50,7 +50,18 @@ SessionLocal = sessionmaker(
     autocommit=False,
     expire_on_commit=False,
 )
+# ---------------------------------------------------
+# Session Helper
+# ---------------------------------------------------
 
+def new_db_session():
+    """
+    Create a fresh SQLAlchemy session.
+
+    Used by background services, provider health,
+    analytics jobs, schedulers and autonomous workers.
+    """
+    return SessionLocal()
 # ---------------------------------------------------
 # Init Database
 # ---------------------------------------------------

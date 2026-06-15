@@ -9,7 +9,9 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-
+from modules.data.provider_health_service import (
+    provider_health_metrics
+)
 
 # -----------------------------------------------------------------------------
 # PostgreSQL / SQLAlchemy-safe database helpers
@@ -445,12 +447,17 @@ def get_provider_metrics(db: Session) -> Dict[str, Any]:
         providers = _read_sql(
             db,
             """
-            SELECT provider,
-                   health_score,
-                   success_count,
-                   failure_count,
-                   avg_latency_ms,
-                   cooldown_until
+            SELECT
+                provider,
+                health_score,
+                success_count,
+                failure_count,
+                rate_limit_count,
+                avg_latency_ms,
+                cooldown_until,
+                last_success,
+                last_failure,
+                updated_at
             FROM provider_health
             ORDER BY provider
             """,
@@ -501,11 +508,59 @@ def get_provider_metrics(db: Session) -> Dict[str, Any]:
         errors="coerce",
     ).fillna(0).sum()
 
+    avg_latency = 0.0
+    avg_health = 0.0
+    providers_online = 0
+    provider_count = 0
+    rate_limits = 0
+
+    if not providers.empty:
+
+        avg_latency = float(
+            pd.to_numeric(
+                providers.get("avg_latency_ms"),
+                errors="coerce",
+            ).fillna(0).mean()
+        )
+
+        avg_health = float(
+            pd.to_numeric(
+                providers.get("health_score"),
+                errors="coerce",
+            ).fillna(0).mean()
+        )
+
+        provider_count = len(providers)
+
+        providers_online = len(
+            providers[
+                providers["cooldown_until"].isna()
+            ]
+        )
+
+        if "rate_limit_count" in providers.columns:
+            rate_limits = int(
+                pd.to_numeric(
+                    providers["rate_limit_count"],
+                    errors="coerce",
+                ).fillna(0).sum()
+            )
+
     return {
-        "success_rate": _pct(total_success, total_success + total_failure),
-        "refresh_time": "Live",
+        "success_rate": _pct(
+            total_success,
+            total_success + total_failure,
+        ),
+        "refresh_time": f"{avg_latency:.0f} ms",
         "failed_symbols": failed_symbols,
         "queue_size": queue_size,
+
+        "avg_latency_ms": avg_latency,
+        "avg_health_score": avg_health,
+        "providers_online": providers_online,
+        "provider_count": provider_count,
+        "rate_limits": rate_limits,
+
         "providers": providers,
     }
 
@@ -1744,18 +1799,72 @@ def render_executive_dashboard(
     st.divider()
 
     st.markdown("### Data Provider Operations Center")
+
     _metric_row(
         [
-            ("Success Rate", _fmt_pct(provider["success_rate"])),
-            ("Refresh Time", provider["refresh_time"]),
-            ("Failed Symbols", _fmt_number(provider["failed_symbols"])),
-            ("Queue Size", _fmt_number(provider["queue_size"])),
+            (
+                "Success Rate",
+                _fmt_pct(provider["success_rate"])
+            ),
+            (
+                "Avg Health",
+                f"{provider.get('avg_health_score', 0):.1f}%"
+            ),
+            (
+                "Providers Online",
+                f"{provider.get('providers_online', 0)}/"
+                f"{provider.get('provider_count', 0)}"
+            ),
+            (
+                "Avg Latency",
+                f"{provider.get('avg_latency_ms', 0):.0f} ms"
+            ),
+            (
+                "Rate Limits",
+                _fmt_number(
+                    provider.get("rate_limits", 0)
+                )
+            ),
+            (
+                "Failed Symbols",
+                _fmt_number(
+                    provider["failed_symbols"]
+                )
+            ),
+            (
+                "Queue Size",
+                _fmt_number(
+                    provider["queue_size"]
+                )
+            ),
         ],
-        4,
+        7,
     )
 
     if not provider["providers"].empty:
-        _safe_dataframe(provider["providers"], height=320)
+        display_df = provider["providers"].copy()
+
+        display_df = display_df.rename(
+            columns={
+                "provider": "Provider",
+                "health_score": "Health",
+                "success_count": "Success",
+                "failure_count": "Failures",
+                "rate_limit_count": "Rate Limits",
+                "avg_latency_ms": "Latency (ms)",
+                "cooldown_until": "Cooldown Until",
+                "last_success": "Last Success",
+                "last_failure": "Last Failure",
+                "updated_at": "Last Update",
+            }
+        )
+
+        _safe_dataframe(
+            display_df,
+            height=320,
+        )
+
+
 
     if is_admin:
         st.divider()

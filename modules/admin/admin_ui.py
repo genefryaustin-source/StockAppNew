@@ -26,6 +26,9 @@ from modules.ui.admin.provider_health_dashboard_page import (
 from modules.admin.analytics_freshness_dashboard import (
     render_analytics_freshness_dashboard,
 )
+from ui.admin.provider_operations_dashboard import (
+    render_provider_operations_dashboard,
+)
 
 # ---------------------------------------------------------
 # ACTIVE TENANT
@@ -115,12 +118,14 @@ def render_admin_panel(db, user):
         tab_cleanup,
         provider_health_tab,
         analytics_freshness_tab,
+        provider_operations_tab,
     ) = st.tabs([
         "👤 Users",
         "💳 Plan Management",
         "🏢 Tenants",
         "🧹 Universe Cleanup",
         "🔌 Provider Health",
+        "🚀 Provider Operations",
         "📊 Universe Analytics",
     ])
 
@@ -433,6 +438,17 @@ def render_admin_panel(db, user):
     with provider_health_tab:
 
         render_provider_health_dashboard_page(
+            db=db,
+            user=user,
+        )
+
+    # =========================================================
+    # PROVIDER OPERATIONS TAB
+    # =========================================================
+
+    with provider_operations_tab:
+
+        render_provider_operations_dashboard(
             db=db,
             user=user,
         )

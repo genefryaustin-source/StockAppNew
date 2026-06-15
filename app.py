@@ -16,7 +16,9 @@ from streamlit.runtime.scriptrunner import RerunException
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, DBAPIError
 from branding.conduro_theme import load_conduro_theme, render_conduro_header
-
+from modules.data.provider_health_service import (
+        initialize_provider_health,
+    )
 # MUST BE FIRST STREAMLIT COMMAND
 # MUST BE FIRST STREAMLIT COMMAND
 st.set_page_config(
@@ -241,7 +243,15 @@ except Exception as e:
     st.exception(e)
     st.stop()
 
+# --------------------------------------------------
+# Provider Health Initialization
+# --------------------------------------------------
 
+try:
+    initialize_provider_health(db)
+except Exception as e:
+    safe_rollback(db)
+    print(f"Provider health initialization failed: {e}")
 
 try:
     ensure_default_bootstrap(db)
@@ -302,6 +312,10 @@ try:
     from modules.portfolio.nav_service import NavService
     from modules.portfolio.order_service import OrderService
     from modules.alerts.service import AlertService
+
+
+
+
 except Exception as e:
     safe_rollback(db)
     st.error(f"Critical module import failed: {e}")
