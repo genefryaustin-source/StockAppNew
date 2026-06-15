@@ -13,7 +13,7 @@ from modules.data.provider_health_service import (
     mark_provider_success,
 )
 
-from modules.db.core import new_db_session
+
 
 def bootstrap_provider_health(db: Session, providers: Optional[Iterable[str]] = None) -> None:
     initialize_provider_health(db, providers=providers)
@@ -49,18 +49,9 @@ def attach_provider_health_to_router(router: Any, db: Session) -> Any:
 
 
         def wrapped_success(provider: str, *args, **kwargs):
+
             try:
-                local_db = new_db_session()
-
-                try:
-                    provider_success(
-                        local_db,
-                        provider,
-                        latency_ms=kwargs.get("latency_ms")
-                    )
-                finally:
-                    local_db.close()
-
+                provider_failure(db, provider)
             except Exception as exc:
                 print(
                     "Provider health success write failed:",
