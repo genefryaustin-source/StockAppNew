@@ -10,15 +10,13 @@ from typing import Any, Callable, Optional
 
 
 import streamlit as st
-print("STREAMLIT VERSION =", st.__version__)
+
 
 from streamlit.runtime.scriptrunner import RerunException
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, DBAPIError
 from branding.conduro_theme import load_conduro_theme, render_conduro_header
-from modules.data.provider_health_service import (
-        initialize_provider_health,
-    )
+
 # MUST BE FIRST STREAMLIT COMMAND
 # MUST BE FIRST STREAMLIT COMMAND
 st.set_page_config(
@@ -248,7 +246,12 @@ except Exception as e:
 # --------------------------------------------------
 
 try:
+    from modules.data.provider_health_service import (
+        initialize_provider_health,
+    )
+
     initialize_provider_health(db)
+
 except Exception as e:
     safe_rollback(db)
     print(f"Provider health initialization failed: {e}")

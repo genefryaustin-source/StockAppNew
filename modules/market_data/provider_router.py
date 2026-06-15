@@ -155,7 +155,7 @@ class ProviderRouter:
             self.rate_manager.mark_success(provider.provider)
 
             try:
-                from modules.database.session import new_db_session
+                from modules.db.core import new_db_session
 
                 db = new_db_session()
 
@@ -174,6 +174,7 @@ class ProviderRouter:
                     e,
                 )
 
+
     def mark_failure(self, provider_name: str):
         with self._lock:
             provider = self.get_provider(provider_name)
@@ -191,7 +192,7 @@ class ProviderRouter:
             self.rate_manager.mark_failure(provider.provider)
 
             try:
-                from modules.database.session import new_db_session
+                from modules.db.core import new_db_session
 
                 db = new_db_session()
 
@@ -236,7 +237,7 @@ class ProviderRouter:
             )
 
             try:
-                from modules.database.session import new_db_session
+                from modules.db.core import new_db_session
 
                 db = new_db_session()
 
