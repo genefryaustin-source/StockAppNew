@@ -1029,16 +1029,14 @@ elif page == "Analyst Consensus":
         st.exception(e)
 
 elif page == "Smart Money":
-    if not check_page(user, "Smart Money", db):
-        require_page(user, "Smart Money", db)
-        st.stop()
-    try:
-        from modules.smc.smc_ui import render_smc_page
-        run_page("Smart Money", render_smc_page, db, user)
-    except Exception as e:
-        safe_rollback(db)
-        st.error("Smart Money failed.")
-        st.exception(e)
+    from modules.smc.smc_ui import render_smc_page
+    from modules.smart_money.smart_money_ui import render_smart_money_admin
+
+    render_smc_page(db, user)
+
+    st.divider()
+
+    render_smart_money_admin(db, user)
 
 elif page == "Export / Sheets":
     if not check_page(user, "Export / Sheets", db):

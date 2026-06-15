@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import streamlit as st
 import pandas as pd
+from sqlalchemy import text
 
 from modules.market_data.service import get_price_history
 from modules.smc.smc_engine import analyse
@@ -77,6 +78,12 @@ def render_smc_page(db, user):
 
     st.divider()
 
+    # ── Institutional / insider intelligence ──────────────────
+    smart_money_data = _load_symbol_smart_money(db, symbol)
+    _render_institutional_intelligence(smart_money_data, symbol)
+
+    st.divider()
+
     # ── Chart ─────────────────────────────────────────────────
     fig = render_smc_chart(df, result, symbol=symbol)
     st.pyplot(fig, use_container_width=True)
@@ -99,6 +106,325 @@ def render_smc_page(db, user):
     with tab_struct:
         _render_structure_table(result.structure)
 
+
+
+
+# ─────────────────────────────────────────────────────────────
+# Smart money data helpers
+# ─────────────────────────────────────────────────────────────
+
+def _smc_safe_rollback(db):
+    try:
+        db.rollback()
+    except Exception:
+        pass
+
+
+def _smc_scalar(db, sql: str, params: dict | None = None, default=None):
+    try:
+        return db.execute(text(sql), params or {}).scalar() or default
+    except Exception:
+        _smc_safe_rollback(db)
+        return default
+
+
+def _smc_read_sql(db, sql: str, params: dict | None = None) -> pd.DataFrame:
+    try:
+        rows = db.execute(text(sql), params or {}).mappings().all()
+        return pd.DataFrame(rows)
+    except Exception as exc:
+        _smc_safe_rollback(db)
+        print("SMC smart money SQL failed:", exc)
+        return pd.DataFrame()
+
+
+def _smc_has_table(db, table: str) -> bool:
+    try:
+        return bool(
+            _smc_scalar(
+                db,
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.tables
+                    WHERE table_schema = ANY (current_schemas(false))
+                      AND table_name = :table
+                )
+                """,
+                {"table": table},
+                False,
+            )
+        )
+    except Exception:
+        return False
+
+
+def _smc_has_column(db, table: str, column: str) -> bool:
+    try:
+        return bool(
+            _smc_scalar(
+                db,
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = ANY (current_schemas(false))
+                      AND table_name = :table
+                      AND column_name = :column
+                )
+                """,
+                {"table": table, "column": column},
+                False,
+            )
+        )
+    except Exception:
+        return False
+
+
+def _load_symbol_smart_money(db, symbol: str) -> dict:
+    sym = str(symbol or "").upper().strip()
+
+    data = {
+        "signals": pd.DataFrame(),
+        "insiders": pd.DataFrame(),
+        "institutional": pd.DataFrame(),
+        "form4": pd.DataFrame(),
+        "metrics": {
+            "smart_money_score": 0.0,
+            "accumulation_score": 0.0,
+            "distribution_score": 0.0,
+            "insider_score": 0.0,
+            "institutional_score": 0.0,
+            "options_score": 0.0,
+            "insider_buys": 0,
+            "insider_sells": 0,
+            "form4_filings": 0,
+            "institutional_changes": 0,
+        },
+    }
+
+    if not sym:
+        return data
+
+    if _smc_has_table(db, "smart_money_signals"):
+        cols = []
+        for col, label in [
+            ("symbol", "Symbol"),
+            ("smart_money_score", "Smart Money Score"),
+            ("accumulation_score", "Accumulation"),
+            ("distribution_score", "Distribution"),
+            ("insider_score", "Insider"),
+            ("institutional_score", "Institutional"),
+            ("options_score", "Options"),
+            ("created_at", "Created"),
+        ]:
+            if _smc_has_column(db, "smart_money_signals", col):
+                cols.append(f"{col} AS \"{label}\"")
+
+        if cols:
+            order_col = "created_at" if _smc_has_column(db, "smart_money_signals", "created_at") else "1"
+            signals = _smc_read_sql(
+                db,
+                f"""
+                SELECT {", ".join(cols)}
+                FROM smart_money_signals
+                WHERE UPPER(symbol) = :symbol
+                ORDER BY {order_col} DESC
+                LIMIT 25
+                """,
+                {"symbol": sym},
+            )
+            data["signals"] = signals
+
+            if not signals.empty:
+                latest = signals.iloc[0]
+                for key, col in [
+                    ("smart_money_score", "Smart Money Score"),
+                    ("accumulation_score", "Accumulation"),
+                    ("distribution_score", "Distribution"),
+                    ("insider_score", "Insider"),
+                    ("institutional_score", "Institutional"),
+                    ("options_score", "Options"),
+                ]:
+                    try:
+                        data["metrics"][key] = float(latest.get(col, 0) or 0)
+                    except Exception:
+                        data["metrics"][key] = 0.0
+
+    if _smc_has_table(db, "insider_transactions"):
+        type_col = "transaction_type" if _smc_has_column(db, "insider_transactions", "transaction_type") else None
+        date_col = "transaction_date" if _smc_has_column(db, "insider_transactions", "transaction_date") else (
+            "filing_date" if _smc_has_column(db, "insider_transactions", "filing_date") else None
+        )
+
+        select_cols = []
+        for col, label in [
+            ("symbol", "Symbol"),
+            ("insider_name", "Insider"),
+            ("owner_name", "Insider"),
+            ("title", "Title"),
+            ("transaction_type", "Transaction"),
+            ("shares", "Shares"),
+            ("price", "Price"),
+            ("value", "Value"),
+            ("transaction_date", "Transaction Date"),
+            ("filing_date", "Filing Date"),
+        ]:
+            if _smc_has_column(db, "insider_transactions", col):
+                select_cols.append(f"{col} AS \"{label}\"")
+
+        if select_cols:
+            order_col = date_col or "1"
+            insiders = _smc_read_sql(
+                db,
+                f"""
+                SELECT {", ".join(select_cols)}
+                FROM insider_transactions
+                WHERE UPPER(symbol) = :symbol
+                ORDER BY {order_col} DESC
+                LIMIT 25
+                """,
+                {"symbol": sym},
+            )
+            data["insiders"] = insiders
+
+            if type_col:
+                data["metrics"]["insider_buys"] = int(
+                    _smc_scalar(
+                        db,
+                        f"""
+                        SELECT COUNT(*)
+                        FROM insider_transactions
+                        WHERE UPPER(symbol) = :symbol
+                          AND UPPER(COALESCE({type_col}::text, '')) IN
+                              ('BUY', 'PURCHASE', 'P', 'ACQUIRE', 'ACQUIRED')
+                        """,
+                        {"symbol": sym},
+                        0,
+                    )
+                    or 0
+                )
+                data["metrics"]["insider_sells"] = int(
+                    _smc_scalar(
+                        db,
+                        f"""
+                        SELECT COUNT(*)
+                        FROM insider_transactions
+                        WHERE UPPER(symbol) = :symbol
+                          AND UPPER(COALESCE({type_col}::text, '')) IN
+                              ('SELL', 'SALE', 'S', 'DISPOSE', 'DISPOSED')
+                        """,
+                        {"symbol": sym},
+                        0,
+                    )
+                    or 0
+                )
+
+    if _smc_has_table(db, "institutional_holdings"):
+        inst_cols = []
+        for col, label in [
+            ("symbol", "Symbol"),
+            ("institution", "Institution"),
+            ("fund_name", "Institution"),
+            ("shares", "Shares"),
+            ("previous_shares", "Previous Shares"),
+            ("market_value", "Market Value"),
+            ("ownership_pct", "Ownership %"),
+            ("change_pct", "Change %"),
+            ("filing_date", "Filing Date"),
+        ]:
+            if _smc_has_column(db, "institutional_holdings", col):
+                inst_cols.append(f"{col} AS \"{label}\"")
+
+        if inst_cols:
+            order_col = "ABS(change_pct)" if _smc_has_column(db, "institutional_holdings", "change_pct") else "1"
+            institutional = _smc_read_sql(
+                db,
+                f"""
+                SELECT {", ".join(inst_cols)}
+                FROM institutional_holdings
+                WHERE UPPER(symbol) = :symbol
+                ORDER BY {order_col} DESC
+                LIMIT 25
+                """,
+                {"symbol": sym},
+            )
+            data["institutional"] = institutional
+            data["metrics"]["institutional_changes"] = len(institutional)
+
+    if _smc_has_table(db, "sec_form4_filings"):
+        form4_cols = []
+        for col, label in [
+            ("symbol", "Symbol"),
+            ("cik", "CIK"),
+            ("filing_date", "Filing Date"),
+            ("transaction_date", "Transaction Date"),
+            ("filing_type", "Type"),
+            ("filing_url", "URL"),
+            ("parsed", "Parsed"),
+        ]:
+            if _smc_has_column(db, "sec_form4_filings", col):
+                form4_cols.append(f"{col} AS \"{label}\"")
+
+        if form4_cols:
+            order_col = "filing_date" if _smc_has_column(db, "sec_form4_filings", "filing_date") else "1"
+            form4 = _smc_read_sql(
+                db,
+                f"""
+                SELECT {", ".join(form4_cols)}
+                FROM sec_form4_filings
+                WHERE UPPER(symbol) = :symbol
+                ORDER BY {order_col} DESC
+                LIMIT 25
+                """,
+                {"symbol": sym},
+            )
+            data["form4"] = form4
+            data["metrics"]["form4_filings"] = len(form4)
+
+    return data
+
+
+def _render_institutional_intelligence(data: dict, symbol: str):
+    metrics = data.get("metrics", {})
+
+    st.markdown(f"### 🏦 {symbol} — Smart Money Intelligence")
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("SM Score", f"{float(metrics.get('smart_money_score', 0) or 0):.1f}")
+    c2.metric("Accumulation", f"{float(metrics.get('accumulation_score', 0) or 0):.1f}")
+    c3.metric("Distribution", f"{float(metrics.get('distribution_score', 0) or 0):.1f}")
+    c4.metric("Insider Buys", int(metrics.get("insider_buys", 0) or 0))
+    c5.metric("Insider Sells", int(metrics.get("insider_sells", 0) or 0))
+    c6.metric("Form 4s", int(metrics.get("form4_filings", 0) or 0))
+
+    tab_sig, tab_ins, tab_inst, tab_form4 = st.tabs(
+        [
+            "Smart Money Signals",
+            "Insider Transactions",
+            "Institutional Holdings",
+            "SEC Form 4",
+        ]
+    )
+
+    with tab_sig:
+        _smc_show_table(data.get("signals"), "No smart money signal rows found for this symbol.")
+
+    with tab_ins:
+        _smc_show_table(data.get("insiders"), "No insider transactions found for this symbol.")
+
+    with tab_inst:
+        _smc_show_table(data.get("institutional"), "No institutional holdings found for this symbol.")
+
+    with tab_form4:
+        _smc_show_table(data.get("form4"), "No SEC Form 4 filings found for this symbol.")
+
+
+def _smc_show_table(df: pd.DataFrame, empty_message: str):
+    if df is None or df.empty:
+        st.info(empty_message)
+        return
+    st.dataframe(df, use_container_width=True, hide_index=True, height=320)
 
 # ─────────────────────────────────────────────────────────────
 # Dashboard
