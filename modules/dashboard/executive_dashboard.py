@@ -471,7 +471,7 @@ def get_provider_metrics(db: Session) -> Dict[str, Any]:
                 """
                 SELECT COUNT(DISTINCT symbol)
                 FROM price_history_failures
-                WHERE created_at >= NOW() - INTERVAL '24 hours'
+                WHERE created_at::timestamp >= NOW() - INTERVAL '24 hours'
                 """,
                 0,
             )
@@ -585,7 +585,7 @@ def get_analytics_fabric_metrics(
             """
             SELECT COUNT(*)
             FROM jobs
-            WHERE created_at >= NOW() - INTERVAL '24 hours'
+            WHERE created_at::timestamp >= NOW() - INTERVAL '24 hours'
             """,
             0,
         )
@@ -599,7 +599,7 @@ def get_analytics_fabric_metrics(
             SELECT COUNT(*)
             FROM jobs
             WHERE status IN ('failed', 'error')
-              AND created_at >= NOW() - INTERVAL '24 hours'
+              AND created_at::timestamp >= NOW() - INTERVAL '24 hours'
             """,
             0,
         )
@@ -815,6 +815,20 @@ def get_earnings_intelligence(
     watchlist instead of leaving the section visually dead.
     """
     tenant_clause, params = _analytics_tenant_clause(user)
+    tenant_id = None
+
+    if user:
+        tenant_id = user.get("tenant_id")
+
+    params = {}
+
+    analytics_filter = ""
+
+    if tenant_id:
+        analytics_filter = """
+            AND a.tenant_id = :tenant_id
+        """
+        params["tenant_id"] = tenant_id
 
     empty_table = pd.DataFrame(
         columns=[
@@ -832,9 +846,9 @@ def get_earnings_intelligence(
             db,
             f"""
             SELECT e.symbol,
-                   e.report_date,
-                   e.estimate_eps,
-                   e.actual_eps,
+                   e.earnings_date,
+                   e.eps_estimate,
+                   e.eps_actual,
                    a.composite_score,
                    COALESCE(a.rating, a.signal, 'N/A') AS rating
             FROM earnings_events e
@@ -846,13 +860,13 @@ def get_earnings_intelligence(
                        asof
                 FROM analytics_snapshots a
                 WHERE a.symbol = e.symbol
-                  {tenant_clause.replace("tenant_id", "a.tenant_id")}
+                  {analytics_filter}
                 ORDER BY a.asof DESC
                 LIMIT 1
             ) a ON TRUE
-            WHERE e.report_date >= CURRENT_DATE
-              AND e.report_date < CURRENT_DATE + INTERVAL '7 days'
-            ORDER BY e.report_date ASC
+            WHERE e.earnings_date >= CURRENT_DATE
+              AND e.earnings_date < CURRENT_DATE + INTERVAL '7 days'
+            ORDER BY e.earnings_date ASC
             LIMIT 25
             """,
             params,
@@ -862,9 +876,9 @@ def get_earnings_intelligence(
             upcoming = upcoming.rename(
                 columns={
                     "symbol": "Symbol",
-                    "report_date": "Event Date",
-                    "estimate_eps": "Estimate EPS",
-                    "actual_eps": "Actual EPS",
+                    "earnings_date": "Event Date",
+                    "eps_estimate": "Estimate EPS",
+                    "eps_actual": "Actual EPS",
                     "composite_score": "AI Score",
                     "rating": "Rating",
                 }

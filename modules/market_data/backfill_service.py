@@ -4,7 +4,7 @@ from typing import List
 import time
 
 from modules.db.core import SessionLocal
-from modules.market_data.price_history_service import get_price_history
+from modules.market_data.service import get_price_history
 
 
 # ---------------------------------------------------
