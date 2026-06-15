@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 
+from modules import db
+
 
 def risk_parity_weights(price_cache, symbols):
 
@@ -10,7 +12,11 @@ def risk_parity_weights(price_cache, symbols):
 
         from modules.market_data.service import get_price_history
 
-        df = get_price_history(db, symbol, period="1y")
+        df = get_price_history(
+            db,
+            s,
+            period="1y"
+        )
 
         if df is None or df.empty:
             continue

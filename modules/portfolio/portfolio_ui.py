@@ -602,67 +602,73 @@ def render_portfolio_ui(db_session, user, market_data_service):
                 params={"pid": portfolio_id}
             )
 
+
         except Exception as e:
+
             try:
+
                 db_session.rollback()
+
             except Exception:
+
                 pass
 
             st.error(f"POSITIONS ROOT ERROR: {e}")
-            raise
 
-            if df_pos.empty:
-                st.info("No positions available")
+            return
+
+        if df_pos.empty:
+            st.info("No positions available")
+        else:
+            total_value = df_pos["market_value"].sum()
+            df_pos["weight"] = df_pos["market_value"] / total_value
+
+            symbols = df_pos["symbol"].astype(str).str.upper().tolist()
+
+            price_data = {}
+            for sym in symbols:
+                hist = nav_service._safe_get_price_history(sym, period=attrib_period)
+                if hist is not None and not hist.empty:
+                    price_data[sym] = hist.set_index("Date")["Close"].rename(sym)
+
+            bench_hist = nav_service._safe_get_price_history("SPY", period=attrib_period)
+
+            if bench_hist is None or bench_hist.empty:
+                st.info("Benchmark data unavailable for attribution")
+            elif not price_data:
+                st.info("No position price data available")
             else:
-                total_value = df_pos["market_value"].sum()
-                df_pos["weight"] = df_pos["market_value"] / total_value
+                price_matrix = pd.concat(price_data.values(), axis=1)
+                price_matrix = price_matrix.sort_index().ffill().dropna(how="all")
 
-                symbols = df_pos["symbol"].astype(str).str.upper().tolist()
+                bench_series = bench_hist.set_index("Date")["Close"].reindex(price_matrix.index).ffill()
 
-                price_data = {}
-                for sym in symbols:
-                    hist = nav_service._safe_get_price_history(sym, period=attrib_period)
-                    if hist is not None and not hist.empty:
-                        price_data[sym] = hist.set_index("Date")["Close"].rename(sym)
+                returns = price_matrix.pct_change().fillna(0)
+                bench_returns = bench_series.pct_change().fillna(0)
 
-                bench_hist = nav_service._safe_get_price_history("SPY", period=attrib_period)
+                weights = (
+                    df_pos.assign(symbol=df_pos["symbol"].astype(str).str.upper())
+                    .set_index("symbol")["weight"]
+                )
 
-                if bench_hist is None or bench_hist.empty:
-                    st.info("Benchmark data unavailable for attribution")
-                elif not price_data:
-                    st.info("No position price data available")
-                else:
-                    price_matrix = pd.concat(price_data.values(), axis=1)
-                    price_matrix = price_matrix.sort_index().ffill().dropna(how="all")
+                usable = [c for c in returns.columns if c in weights.index]
+                returns = returns[usable]
+                weights = weights.reindex(usable).fillna(0)
 
-                    bench_series = bench_hist.set_index("Date")["Close"].reindex(price_matrix.index).ffill()
+                excess_returns = returns.sub(bench_returns, axis=0)
+                rel_contrib = excess_returns.mul(weights, axis=1)
+                total_rel_contrib = rel_contrib.sum().sort_values()
 
-                    returns = price_matrix.pct_change().fillna(0)
-                    bench_returns = bench_series.pct_change().fillna(0)
+                rel_df = pd.DataFrame({
+                    "symbol": total_rel_contrib.index,
+                    "relative_contribution": total_rel_contrib.values
+                })
 
-                    weights = (
-                        df_pos.assign(symbol=df_pos["symbol"].astype(str).str.upper())
-                        .set_index("symbol")["weight"]
-                    )
+                st.dataframe(rel_df, use_container_width=True)
+                st.bar_chart(rel_df.set_index("symbol")["relative_contribution"])
 
-                    usable = [c for c in returns.columns if c in weights.index]
-                    returns = returns[usable]
-                    weights = weights.reindex(usable).fillna(0)
-
-                    excess_returns = returns.sub(bench_returns, axis=0)
-                    rel_contrib = excess_returns.mul(weights, axis=1)
-                    total_rel_contrib = rel_contrib.sum().sort_values()
-
-                    rel_df = pd.DataFrame({
-                        "symbol": total_rel_contrib.index,
-                        "relative_contribution": total_rel_contrib.values
-                    })
-
-                    st.dataframe(rel_df, use_container_width=True)
-                    st.bar_chart(rel_df.set_index("symbol")["relative_contribution"])
-
-        except Exception as e:
-            st.error(f"Relative contribution error: {e}")
+        #except Exception as e:
+        #st.error(f"Relative contribution error: {e}")
 
         # ---------------------------------
         # 🏢 SECTOR ATTRIBUTION
