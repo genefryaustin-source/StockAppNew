@@ -175,34 +175,40 @@ def render_tenant_admin_panel(db, user):
                 st.warning("Email and password are required.")
             else:
                 try:
-                    db.execute(sql_text("""
-                        INSERT INTO users (
-                            id,
-                            email,
-                            password_hash,
-                            role,
-                            tenant_id,
-                            is_active
-                        )
-                        VALUES (
-                            %(id)s,
-                            %(email)s,
-                            %(pw)s,
-                            %(role)s,
-                            %(tenant)s,
-                            TRUE
-                        )
-                    """), {
-                        "id": str(uuid.uuid4()),
-                        "email": new_email.lower().strip(),
-                        "pw": _hash_password(new_password),
-                        "role": new_role,
-                        "tenant": tenant_id,
-                    })
+                    db.execute(
+                        sql_text("""
+                            INSERT INTO users (
+                                id,
+                                email,
+                                password_hash,
+                                role,
+                                tenant_id,
+                                is_active
+                            )
+                            VALUES (
+                                :id,
+                                :email,
+                                :pw,
+                                :role,
+                                :tenant,
+                                TRUE
+                            )
+                        """),
+                        {
+                            "id": str(uuid.uuid4()),
+                            "email": new_email.lower().strip(),
+                            "pw": _hash_password(new_password),
+                            "role": new_role,
+                            "tenant": tenant_id,
+                        }
+                    )
+
                     db.commit()
                     st.success("User created.")
                     st.rerun()
+
                 except Exception as e:
+                    db.rollback()
                     st.error(f"Failed to create user: {e}")
 
         # ---------------------------------
