@@ -29,11 +29,12 @@ DB_URL = st.secrets["DATABASE_URL"]
 engine = create_engine(
     DB_URL,
     pool_pre_ping=True,
-    pool_recycle=300,
-    pool_size=5,
-    max_overflow=10,
+    pool_recycle=180,
+    pool_size=3,
+    max_overflow=2,
     pool_timeout=30,
-    pool_reset_on_return="rollback",
+    pool_reset_on_return=None,
+    pool_use_lifo=True,
     echo=False,
 )
 

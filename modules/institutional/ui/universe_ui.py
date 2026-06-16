@@ -828,7 +828,7 @@ def render_universe(db, user):
 
         import time
 
-        time.sleep(3)
+        time.sleep(60)
 
         st.rerun()
 
