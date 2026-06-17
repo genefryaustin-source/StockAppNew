@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 import pandas as pd
 import streamlit as st
+from modules.options.options_refresh_framework import render_refresh_controls
 
 try:
     import plotly.graph_objects as go
@@ -85,6 +86,14 @@ def _fmt_num(v: Any, suffix: str = "") -> str:
 def render_options_volatility_dashboard(ticker: str):
     st.subheader(f"📊 Volatility & Earnings Intelligence — {ticker.upper()}")
     st.caption("IV rank · IV percentile · volatility surface · term structure · skew · earnings/event pricing · AI volatility read")
+
+    refresh_state = render_refresh_controls(
+        "options_volatility",
+        ticker if "ticker" in locals() else clean_ticker if "clean_ticker" in locals() else "",
+        cache_prefixes=['options_volatility_', 'phase4_vol_'],
+        default_mode="1 Minute",
+    )
+
 
     c_refresh, c_note = st.columns([1, 5])
     with c_refresh:

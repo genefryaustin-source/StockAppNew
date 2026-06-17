@@ -7,10 +7,10 @@ Renders dealer gamma/delta exposure, walls, zero-gamma, pin risk, and AI comment
 from __future__ import annotations
 
 from typing import Any
-import uuid
 
 import pandas as pd
 import streamlit as st
+from modules.options.options_refresh_framework import render_refresh_controls
 
 try:
     import plotly.graph_objects as go
@@ -51,11 +51,19 @@ def render_options_dealer_analytics_dashboard(ticker: str):
     st.subheader(f"🧲 Dealer Analytics Center — {clean_ticker}")
     st.caption("Gamma exposure · delta exposure · zero-gamma · walls · pin risk · hedging pressure")
 
+    refresh_state = render_refresh_controls(
+        "options_dealer",
+        ticker if "ticker" in locals() else clean_ticker if "clean_ticker" in locals() else "",
+        cache_prefixes=['dealer_exposure_report_', 'dealer_ai_'],
+        default_mode="1 Minute",
+    )
+
+
     c_refresh, c_note = st.columns([1, 5])
     with c_refresh:
         refresh = st.button(
             "↺ Refresh",
-            key=f"dealer_refresh_{clean_ticker}_{uuid.uuid4().hex[:8]}",
+            key=f"dealer_refresh_{clean_ticker}",
             use_container_width=True,
         )
     with c_note:

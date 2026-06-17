@@ -175,7 +175,7 @@ def _render_custom_builder(ticker: str):
         st.dataframe(pd.DataFrame(legs), use_container_width=True, hide_index=True)
         if st.button("Clear Custom Legs", key="phase5_clear_custom"):
             st.session_state["phase5_custom_legs"] = []
-            st.rerun()
+            st.success("Custom legs cleared.")
     else:
         st.info("Add legs to construct a custom strategy.")
 

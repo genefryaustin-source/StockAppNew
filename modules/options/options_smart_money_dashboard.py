@@ -20,6 +20,7 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+from modules.options.options_refresh_framework import render_refresh_controls
 
 try:
     import plotly.graph_objects as go
@@ -93,6 +94,14 @@ def render_options_smart_money_dashboard(ticker: str):
     """Render the Phase 1 Options Smart Money Center."""
     st.subheader(f"🐋 Options Smart Money Center — {ticker.upper()}")
     st.caption("Whale flow · sweep activity · premium imbalance · institutional sentiment · conviction scoring")
+
+    refresh_state = render_refresh_controls(
+        "options_smart_money",
+        ticker if "ticker" in locals() else clean_ticker if "clean_ticker" in locals() else "",
+        cache_prefixes=['options_smart_money_report_', 'ai_smart_money_commentary_'],
+        default_mode="1 Minute",
+    )
+
 
     c_refresh, c_note = st.columns([1, 5])
     with c_refresh:

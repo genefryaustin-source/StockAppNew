@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import streamlit as st
+from modules.options.options_refresh_framework import render_refresh_controls
 
 try:
     import plotly.graph_objects as go

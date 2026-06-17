@@ -15,6 +15,7 @@ Add to app.py:
 """
 from __future__ import annotations
 import math
+import time
 from datetime import datetime, timezone
 
 import numpy as np
@@ -41,6 +42,11 @@ from modules.options.options_ai import (
 from modules.options.options_broker import AlpacaOptionsBroker, OptionsOrderRequest
 from modules.options.options_models import ensure_tables, save_order, get_order_history
 from modules.options.options_workstation_ui import render_full_options_workstation
+from modules.options.options_refresh_framework import (
+    cache_status_caption,
+    load_session_cached,
+    render_refresh_controls,
+)
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
 CALL_CLR = "#1D9E75"
@@ -72,29 +78,34 @@ def render_options_trading_page(db, user: dict):
         st.info("Enter a ticker to begin.")
         return
 
-    tabs = st.tabs([
-        "📊 Chain Viewer",
-        "🎯 Order Ticket",
-        "📈 Positions",
-        "🏗 Strategy Builder",
-        "💰 P&L Calculator",
-        "🤖 AI Analysis",
-        "🚀 Advanced Workstation",
-    ])
+    workspace = st.radio(
+        "Options Workspace",
+        [
+            "📊 Chain Viewer",
+            "🎯 Order Ticket",
+            "📈 Positions",
+            "🏗 Strategy Builder",
+            "💰 P&L Calculator",
+            "🤖 AI Analysis",
+            "🧠 Full Workstation",
+        ],
+        horizontal=True,
+        key="options_workspace",
+    )
 
-    with tabs[0]:
+    if workspace == "📊 Chain Viewer":
         _render_chain_viewer(ticker)
-    with tabs[1]:
+    elif workspace == "🎯 Order Ticket":
         _render_order_ticket(db, ticker, tenant_id, user_id, paper)
-    with tabs[2]:
+    elif workspace == "📈 Positions":
         _render_positions(db, tenant_id, paper)
-    with tabs[3]:
+    elif workspace == "🏗 Strategy Builder":
         _render_strategy_builder(ticker)
-    with tabs[4]:
+    elif workspace == "💰 P&L Calculator":
         _render_pnl_calculator(ticker)
-    with tabs[5]:
+    elif workspace == "🤖 AI Analysis":
         _render_ai_analysis(ticker, paper)
-    with tabs[6]:
+    elif workspace == "🧠 Full Workstation":
         render_full_options_workstation(ticker, paper)
 
 
@@ -107,17 +118,22 @@ def _render_chain_viewer(ticker: str):
     st.caption("Live chain from MarketData.app · Greeks · IV · Open Interest")
 
     cache_key = f"opt_chain_{ticker}"
-    col_r, col_f = st.columns([1, 4])
-    with col_r:
-        if st.button("↺ Refresh", key="chain_refresh"):
-            if cache_key in st.session_state:
-                del st.session_state[cache_key]
 
-    if cache_key not in st.session_state:
-        with st.spinner(f"Loading options chain for {ticker}…"):
-            st.session_state[cache_key] = get_options_chain(ticker)
+    col_controls, col_exp = st.columns([3, 4])
+    with col_controls:
+        refresh_state = render_refresh_controls(
+            "options_chain",
+            ticker,
+            exact_cache_keys=[cache_key],
+            default_mode="1 Minute",
+        )
 
-    data = st.session_state[cache_key]
+    data, loaded_at = load_session_cached(
+        cache_key,
+        lambda: get_options_chain(ticker),
+        refresh_state=refresh_state,
+        ttl_seconds=refresh_state.ttl_seconds,
+    )
 
     if "error" in data:
         st.error(data["error"])
@@ -128,8 +144,9 @@ def _render_chain_viewer(ticker: str):
         st.warning("No expirations found.")
         return
 
-    # ── Expiry selector ───────────────────────────────────────
-    with col_f:
+    cache_status_caption(loaded_at=loaded_at, source=data.get("source", "unknown"), refresh_state=refresh_state)
+
+    with col_exp:
         sel_exp = st.selectbox(
             "Expiration",
             expirations,
@@ -137,47 +154,40 @@ def _render_chain_viewer(ticker: str):
             key="chain_exp",
         )
 
-    chain = data["chain"].get(sel_exp, {})
+    chain = data.get("chain", {}).get(sel_exp, {})
     calls = chain.get("calls", pd.DataFrame())
-    puts  = chain.get("puts",  pd.DataFrame())
+    puts = chain.get("puts", pd.DataFrame())
 
-    # ── Summary metrics ───────────────────────────────────────
     all_rows = data.get("all_rows", pd.DataFrame())
-    if not all_rows.empty:
-        total_vol = int(all_rows["volume"].fillna(0).sum())
-        total_oi  = int(all_rows["open_interest"].fillna(0).sum())
-        avg_iv    = all_rows["iv"].dropna().mean()
-        pcr = (
-            all_rows[all_rows["type"]=="put"]["volume"].fillna(0).sum() /
-            max(1, all_rows[all_rows["type"]=="call"]["volume"].fillna(0).sum())
-        )
-        c1,c2,c3,c4,c5 = st.columns(5)
-        c1.metric("Expirations",  len(expirations))
+    if isinstance(all_rows, pd.DataFrame) and not all_rows.empty:
+        total_vol = int(all_rows["volume"].fillna(0).sum()) if "volume" in all_rows.columns else 0
+        total_oi = int(all_rows["open_interest"].fillna(0).sum()) if "open_interest" in all_rows.columns else 0
+        avg_iv = all_rows["iv"].dropna().mean() if "iv" in all_rows.columns else None
+        call_vol = all_rows[all_rows["type"] == "call"]["volume"].fillna(0).sum() if "type" in all_rows.columns and "volume" in all_rows.columns else 0
+        put_vol = all_rows[all_rows["type"] == "put"]["volume"].fillna(0).sum() if "type" in all_rows.columns and "volume" in all_rows.columns else 0
+        pcr = put_vol / max(1, call_vol)
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Expirations", len(expirations))
         c2.metric("Total Volume", f"{total_vol:,}")
-        c3.metric("Open Interest",f"{total_oi:,}")
-        c4.metric("Avg IV",       f"{avg_iv*100:.1f}%" if avg_iv else "—")
-        c5.metric("Put/Call Vol", f"{pcr:.2f}",
-                  delta="Bearish" if pcr > 1.2 else "Bullish" if pcr < 0.7 else "Neutral",
-                  delta_color="inverse" if pcr > 1.2 else "normal" if pcr < 0.7 else "off")
+        c3.metric("Open Interest", f"{total_oi:,}")
+        c4.metric("Avg IV", f"{avg_iv * 100:.1f}%" if avg_iv else "—")
+        c5.metric("Put/Call Vol", f"{pcr:.2f}", delta="Bearish" if pcr > 1.2 else "Bullish" if pcr < 0.7 else "Neutral", delta_color="inverse" if pcr > 1.2 else "normal" if pcr < 0.7 else "off")
 
-    # ── Calls / Puts tabs ─────────────────────────────────────
-    tab_c, tab_p, tab_surface = st.tabs(["Calls", "Puts", "IV Surface"])
+    display_cols = ["strike", "last", "bid", "ask", "volume", "open_interest", "iv", "delta", "gamma", "theta", "vega", "option_symbol"]
 
-    display_cols = ["strike","last","bid","ask","volume","open_interest","iv","delta","gamma","theta","vega","option_symbol"]
+    chain_view = st.radio("Chain View", ["Calls", "Puts", "IV Surface"], horizontal=True, key="chain_view_mode")
 
-    with tab_c:
+    if chain_view == "Calls":
         if not calls.empty:
             _render_chain_table(calls, "call", display_cols)
         else:
             st.info("No call data for this expiry.")
-
-    with tab_p:
+    elif chain_view == "Puts":
         if not puts.empty:
             _render_chain_table(puts, "put", display_cols)
         else:
             st.info("No put data for this expiry.")
-
-    with tab_surface:
+    elif chain_view == "IV Surface":
         _render_iv_surface(ticker)
 
 
@@ -486,11 +496,23 @@ def _render_positions(db, tenant_id: str, paper: bool):
               f"{(total_pnl/max(0.01,total_value)*100):+.1f}%")
 
     df = pd.DataFrame(rows)
-    styled = df.style.applymap(
-        lambda v: f"color: {CALL_CLR}" if isinstance(v,float) and v>0
-                  else (f"color: {PUT_CLR}" if isinstance(v,float) and v<0 else ""),
-        subset=["Unreal P&L","P&L %"]
-    ).format({"Unreal P&L": "${:,.2f}", "P&L %": "{:+.1f}%"})
+
+    def _pnl_style(v):
+        if isinstance(v, (int, float)):
+            if v > 0:
+                return f"color: {CALL_CLR}"
+            if v < 0:
+                return f"color: {PUT_CLR}"
+        return ""
+
+    styled = (
+        df.style
+        .map(_pnl_style, subset=["Unreal P&L", "P&L %"])
+        .format({
+            "Unreal P&L": "${:,.2f}",
+            "P&L %": "{:+.1f}%"
+        })
+    )
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
     # ── DTE heatmap ───────────────────────────────────────────
@@ -621,7 +643,7 @@ def _render_strategy_builder(ticker: str):
                 if st.button(f"Apply: {rec_name}", key="apply_rec"):
                     if rec_name in STRATEGIES:
                         st.session_state["sb_strategy"] = rec_name
-                        st.rerun()
+                        st.success(f"Applied strategy: {rec_name}")
 
     # ── Leg configuration ─────────────────────────────────────
     st.markdown("#### Legs")
@@ -634,20 +656,29 @@ def _render_strategy_builder(ticker: str):
         with st.container():
             c1,c2,c3,c4,c5 = st.columns([1,1,1,1,2])
             c1.markdown(f"**Leg {i+1}**")
-            side = c2.selectbox("",["buy","sell"],
-                                 index=0 if side_def=="buy" else 1,
-                                 key=f"sb_side_{i}",
-                                 label_visibility="collapsed")
+            side = c2.selectbox(
+                "Side",
+                ["buy", "sell"],
+                index=0 if side_def == "buy" else 1,
+                key=f"sb_side_{i}",
+                label_visibility="collapsed"
+            )
             if not is_stock:
-                opt_type = c3.selectbox("",["call","put"],
-                                         index=0 if type_def=="call" else 1,
-                                         key=f"sb_type_{i}",
-                                         label_visibility="collapsed")
-                strike = c4.number_input("",
-                                          value=float(round(current_price * (1.02 if i%2==0 else 0.98), 2)),
-                                          min_value=0.01, step=1.0,
-                                          key=f"sb_strike_{i}",
-                                          label_visibility="collapsed")
+                opt_type = c3.selectbox(
+                    "Option Type",
+                    ["call", "put"],
+                    index=0 if type_def == "call" else 1,
+                    key=f"sb_type_{i}",
+                    label_visibility="collapsed",
+                )
+                strike = c4.number_input(
+                    "Strike",
+                    value=float(current_price),
+                    min_value=0.01,
+                    step=1.0,
+                    key=f"sb_strike_{i}",
+                    label_visibility="collapsed",
+                )
                 premium = c5.number_input("Premium ($)",
                                            value=2.0, min_value=0.0, step=0.1,
                                            key=f"sb_prem_{i}")
@@ -655,8 +686,8 @@ def _render_strategy_builder(ticker: str):
                               "premium":premium,"qty":100})
             else:
                 c3.markdown("Stock")
-                strike = c4.number_input("",value=float(current_price), min_value=0.01,
-                                          step=1.0, key=f"sb_strike_{i}",
+                strike = c4.number_input("Strike", value=float(current_price), min_value=0.01,
+                                          step=1.0, key=f"sb_stock_strike_{i}",
                                           label_visibility="collapsed")
                 legs.append({"side":side,"type":"stock","strike":float(strike),
                               "premium":float(current_price),"qty":1})
@@ -935,7 +966,7 @@ def _render_pnl_calculator(ticker: str):
                     else "")
         except: return ""
 
-    styled = sc_df.style.applymap(_color, subset=["P&L Today","P&L Expiry"])
+    styled = sc_df.style.map(_color, subset=["P&L Today","P&L Expiry"])
     styled = styled.format({"P&L Today": "${:,.2f}", "P&L Expiry": "${:,.2f}"})
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
@@ -948,19 +979,31 @@ def _render_ai_analysis(ticker: str, paper: bool):
     st.subheader(f"🤖 AI Options Analysis — {ticker}")
     st.caption("Chain Q&A · Unusual flow interpretation · AI-powered options intelligence")
 
-    # Load chain for context
     chain_key = f"opt_chain_{ticker}"
-    if chain_key not in st.session_state:
-        with st.spinner("Loading chain…"):
-            st.session_state[chain_key] = get_options_chain(ticker)
-    chain_data = st.session_state.get(chain_key, {})
+    refresh_state = render_refresh_controls(
+        "options_ai_analysis",
+        ticker,
+        exact_cache_keys=[chain_key],
+        default_mode="1 Minute",
+    )
 
-    tab_qa, tab_flow = st.tabs(["💬 Chain Q&A", "🌊 Flow Alerts"])
+    chain_data, loaded_at = load_session_cached(
+        chain_key,
+        lambda: get_options_chain(ticker),
+        refresh_state=refresh_state,
+        ttl_seconds=refresh_state.ttl_seconds,
+    )
+    cache_status_caption(
+        loaded_at=loaded_at,
+        source=chain_data.get("source", "unknown") if isinstance(chain_data, dict) else "unknown",
+        refresh_state=refresh_state,
+    )
 
-    with tab_qa:
+    ai_view = st.radio("AI Workspace", ["💬 Chain Q&A", "🌊 Flow Alerts"], horizontal=True, key="options_ai_workspace")
+
+    if ai_view == "💬 Chain Q&A":
         _render_qa_assistant(ticker, chain_data)
-
-    with tab_flow:
+    elif ai_view == "🌊 Flow Alerts":
         _render_flow_alerts(ticker, chain_data)
 
 
@@ -1037,7 +1080,7 @@ def _render_qa_assistant(ticker: str, chain_data: dict):
     if history:
         if st.button("🗑 Clear conversation", key=f"qa_clear_{ticker}"):
             st.session_state[hist_key] = []
-            st.rerun()
+            st.success("Conversation cleared.")
 
 
 def _render_flow_alerts(ticker: str, chain_data: dict):

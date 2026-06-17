@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+from modules.options.options_refresh_framework import render_refresh_controls
 
 from modules.options_flow.flow_service import (
     unusual_whales_available,
@@ -77,12 +78,19 @@ def render_options_flow_page(db, user: dict):
             key="flow_ticker",
         ).upper().strip()
     with col_ref:
-        st.write("")
-        if st.button("↺ Refresh", key="flow_refresh", use_container_width=True):
-            keys = [k for k in st.session_state if k.startswith("flow_cache_")]
-            for k in keys:
-                del st.session_state[k]
-            st.rerun()
+        refresh_state = render_refresh_controls(
+            "options_flow",
+            ticker,
+            cache_prefixes=["flow_cache_"],
+            default_mode="1 Minute",
+        )
+        if refresh_state.force_refresh:
+            try:
+                from modules.options_flow import flow_service as _flow_service
+                if hasattr(_flow_service, "_CACHE"):
+                    _flow_service._CACHE.clear()
+            except Exception:
+                pass
 
     if not ticker:
         st.info("Enter a ticker symbol to begin.")
