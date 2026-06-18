@@ -15,7 +15,6 @@ Add to app.py:
 """
 from __future__ import annotations
 import math
-import time
 from datetime import datetime, timezone
 
 import numpy as np
@@ -42,11 +41,146 @@ from modules.options.options_ai import (
 from modules.options.options_broker import AlpacaOptionsBroker, OptionsOrderRequest
 from modules.options.options_models import ensure_tables, save_order, get_order_history
 from modules.options.options_workstation_ui import render_full_options_workstation
-from modules.options.options_refresh_framework import (
-    cache_status_caption,
-    load_session_cached,
-    render_refresh_controls,
+from modules.options.options_intelligence_dashboard import render_options_intelligence_dashboard
+from modules.options.options_flow_intelligence_dashboard import render_flow_intelligence_dashboard
+from modules.options.options_market_maker_intelligence_dashboard import (render_market_maker_intelligence_dashboard,)
+from modules.options.options_volatility_intelligence_dashboard import (
+    render_volatility_intelligence_dashboard,
 )
+from modules.options.options_strategy_factory_dashboard import (
+    render_strategy_factory_dashboard,
+)
+from modules.options.options_portfolio_risk_dashboard import (
+    render_portfolio_risk_dashboard,
+)
+from modules.options.options_stress_testing_dashboard import (
+    render_stress_testing_dashboard,
+)
+from modules.options.options_greeks_exposure_dashboard import (
+    render_greeks_exposure_dashboard,
+)
+from modules.options.options_risk_guardrails_dashboard import render_risk_guardrails_dashboard
+from modules.options.options_portfolio_construction_dashboard import (
+    render_portfolio_construction_dashboard,
+)
+from modules.options.options_execution_quality_dashboard import (
+    render_execution_quality_dashboard,
+)
+from modules.options.options_liquidity_dashboard import (
+    render_liquidity_intelligence_dashboard,
+)
+
+from modules.options.options_position_sizing_dashboard import (
+    render_position_sizing_dashboard,
+)
+from modules.options.options_capital_allocation_dashboard import (
+    render_capital_allocation_dashboard,
+)
+from modules.options.options_trade_optimization_dashboard import (
+    render_trade_optimization_dashboard,
+)
+from modules.options.options_portfolio_hedging_dashboard import (
+    render_portfolio_hedging_dashboard,
+)
+
+from modules.options.options_dynamic_risk_adjustment_dashboard import (
+    render_dynamic_risk_adjustment_dashboard,
+)
+
+from modules.options.options_institutional_trade_planner_dashboard import (
+    render_institutional_trade_planner_dashboard,
+)
+
+from modules.options.options_cross_asset_exposure_dashboard import (
+    render_cross_asset_exposure_dashboard,
+)
+from modules.options.options_autonomous_portfolio_manager_dashboard import (
+    render_autonomous_portfolio_manager_dashboard,
+)
+from modules.options.options_roll_dashboard import (
+    render_roll_dashboard,
+)
+from modules.options.options_position_lifecycle_dashboard import (
+    render_position_lifecycle_dashboard,
+)
+
+from modules.options.options_income_dashboard import (
+    render_income_dashboard,
+)
+
+from modules.options.options_assignment_dashboard import (
+    render_assignment_dashboard,
+)
+from modules.options.options_portfolio_command_dashboard import (
+    render_portfolio_command_center_dashboard,
+)
+
+from modules.options.options_institutional_operations_dashboard import (
+    render_institutional_operations_dashboard,
+)
+
+from modules.options.options_wheel_dashboard import (
+    render_wheel_dashboard,
+)
+from modules.options.options_covered_call_factory_dashboard import (
+    render_covered_call_factory_dashboard,
+)
+from modules.options.options_cash_secured_put_factory_dashboard import (
+    render_cash_secured_put_factory_dashboard,
+)
+from modules.options.options_income_command_dashboard import (
+    render_income_command_center_dashboard,
+)
+from modules.options.options_volatility_surface_dashboard import (
+    render_volatility_surface_dashboard,
+)
+from modules.options.options_volatility_regime_dashboard import (
+    render_volatility_regime_dashboard,
+)
+from modules.options.options_skew_dashboard import (
+    render_skew_dashboard,
+)
+from modules.options.options_term_structure_dashboard import (
+    render_term_structure_dashboard,
+)
+from modules.options.options_volatility_command_center_dashboard import (
+    render_volatility_command_center_dashboard,
+)
+from modules.options.options_dealer_positioning_dashboard import (
+    render_dealer_positioning_dashboard,
+)
+from modules.options.options_gamma_exposure_dashboard import (
+    render_gamma_exposure_dashboard,
+)
+from modules.options.options_liquidity_provider_dashboard import (
+    render_liquidity_provider_dashboard,
+)
+from modules.options.options_dealer_hedging_flow_dashboard import (
+    render_dealer_hedging_flow_dashboard,
+)
+from modules.options.options_market_maker_command_center_dashboard import (
+    render_market_maker_command_center_dashboard,
+)
+from modules.options.options_portfolio_optimization_ai_dashboard import (
+    render_portfolio_optimization_ai_dashboard,
+)
+from modules.options.options_autonomous_trade_selection_dashboard import (
+    render_autonomous_trade_selection_dashboard,
+)
+
+from modules.options.options_autonomous_risk_rebalancing_dashboard import (
+    render_autonomous_risk_rebalancing_dashboard,
+)
+from modules.options.options_autonomous_income_management_dashboard import (
+    render_autonomous_income_management_dashboard,
+)
+
+from modules.options.options_institutional_cio_dashboard import (
+    render_institutional_options_cio_dashboard,
+)
+
+
+
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
 CALL_CLR = "#1D9E75"
@@ -78,36 +212,441 @@ def render_options_trading_page(db, user: dict):
         st.info("Enter a ticker to begin.")
         return
 
-    workspace = st.radio(
-        "Options Workspace",
+    # ============================================================================
+    # OPTIONS OPERATING SYSTEM NAVIGATION
+    # ============================================================================
+
+    section = st.radio(
+        "Options Section",
         [
-            "📊 Chain Viewer",
-            "🎯 Order Ticket",
-            "📈 Positions",
-            "🏗 Strategy Builder",
-            "💰 P&L Calculator",
-            "🤖 AI Analysis",
-            "🧠 Full Workstation",
+            "📈 Trading",
+            "🧠 Intelligence",
+            "🏛 Institutional",
+            "⚙️ Execution",
         ],
         horizontal=True,
-        key="options_workspace",
+        key="options_section",
+        label_visibility="collapsed",
     )
 
-    if workspace == "📊 Chain Viewer":
-        _render_chain_viewer(ticker)
-    elif workspace == "🎯 Order Ticket":
-        _render_order_ticket(db, ticker, tenant_id, user_id, paper)
-    elif workspace == "📈 Positions":
-        _render_positions(db, tenant_id, paper)
-    elif workspace == "🏗 Strategy Builder":
-        _render_strategy_builder(ticker)
-    elif workspace == "💰 P&L Calculator":
-        _render_pnl_calculator(ticker)
-    elif workspace == "🤖 AI Analysis":
-        _render_ai_analysis(ticker, paper)
-    elif workspace == "🧠 Full Workstation":
-        render_full_options_workstation(ticker, paper)
+    chain_key = f"opt_chain_{ticker}"
+    chain_data = st.session_state.get(chain_key)
 
+    if not chain_data:
+        with st.spinner(f"Loading options chain for {ticker}..."):
+            chain_data = get_options_chain(ticker)
+            st.session_state[chain_key] = chain_data
+
+    # ============================================================================
+    # TRADING WORKSPACE
+    # ============================================================================
+
+    if section == "📈 Trading":
+
+        workspace = st.radio(
+            "Workspace",
+            [
+                "📊 Chain",
+                "🎯 Trade",
+                "📈 Positions",
+                "🏗 Builder",
+                "💰 P&L",
+            ],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
+        if workspace == "📊 Chain":
+            _render_chain_viewer(ticker)
+
+        elif workspace == "🎯 Trade":
+            _render_order_ticket(
+                db,
+                ticker,
+                tenant_id,
+                user_id,
+                paper,
+            )
+
+        elif workspace == "📈 Positions":
+            _render_positions(
+                db,
+                tenant_id,
+                paper,
+            )
+
+        elif workspace == "🏗 Builder":
+            _render_strategy_builder(ticker)
+
+        elif workspace == "💰 P&L":
+            _render_pnl_calculator(ticker)
+
+
+
+    # ============================================================================
+    # INTELLIGENCE WORKSPACE
+    # ============================================================================
+
+    elif section == "🧠 Intelligence":
+
+        workspace = st.radio(
+            "Analysis Workspace",
+            [
+                "🤖 AI",
+                "🧠 Intelligence",
+                "🌊 Flow",
+                "🏦 Market Maker",
+                "🏛 Dealer Positioning",
+                "⚛ Gamma Exposure",
+                "🌊 Dealer Hedging Flow",
+                "🏪 Liquidity Providers",
+                "🏦 MM Command",
+                "🌪 Volatility",
+                "🌋 Vol Surface",
+                "📡 Vol Regime",
+                "🧱 Term Structure",
+                "⚡ Skew",
+                "🏦 Vol Command",
+            ],
+            label_visibility="collapsed"
+        )
+
+        if workspace == "🤖 AI":
+            _render_ai_analysis(
+                ticker,
+                paper,
+            )
+
+        elif workspace == "🧠 Intelligence":
+            render_options_intelligence_dashboard(
+                ticker,
+                chain_data,
+            )
+
+        elif workspace == "🌊 Flow":
+            render_flow_intelligence_dashboard(
+                ticker,
+                chain_data,
+            )
+
+        elif workspace == "🏦 Market Maker":
+            render_market_maker_intelligence_dashboard(
+                ticker,
+                chain_data,
+            )
+
+        elif workspace == "🏛 Dealer Positioning":
+            render_dealer_positioning_dashboard(
+                ticker=ticker,
+                paper=paper,
+                chain_data=chain_data,
+            )
+
+        elif workspace == "⚛ Gamma Exposure":
+            render_gamma_exposure_dashboard(
+                ticker=ticker,
+                paper=paper,
+                chain_data=chain_data,
+            )
+
+        elif workspace == "🌊 Dealer Hedging Flow":
+            render_dealer_hedging_flow_dashboard(
+                ticker=ticker,
+                paper=paper,
+                chain_data=chain_data,
+            )
+
+
+
+        elif workspace == "🏪 Liquidity Providers":
+            render_liquidity_provider_dashboard(
+                ticker=ticker,
+                paper=paper,
+                chain_data=chain_data,
+            )
+
+        elif workspace == "🏦 MM Command":
+            render_market_maker_command_center_dashboard(
+                ticker=ticker,
+                paper=paper,
+                chain_data=chain_data,
+            )
+
+        elif workspace == "🌪 Volatility":
+            render_volatility_intelligence_dashboard(
+                ticker,
+                chain_data,
+            )
+
+        elif workspace == "🌋 Vol Surface":
+            render_volatility_surface_dashboard(
+                ticker=ticker,
+                paper=paper,
+                chain_data=chain_data,
+            )
+
+        elif workspace == "📡 Vol Regime":
+            render_volatility_regime_dashboard(
+                ticker=ticker,
+                paper=paper,
+                chain_data=chain_data,
+            )
+        elif workspace == "🧱 Term Structure":
+            render_term_structure_dashboard(
+                ticker=ticker,
+                paper=paper,
+                chain_data=chain_data,
+            )
+
+        elif workspace == "⚡ Skew":
+            render_skew_dashboard(
+                ticker=ticker,
+                paper=paper,
+                chain_data=chain_data,
+            )
+        elif workspace == "🏦 Vol Command":
+            render_volatility_command_center_dashboard(
+                ticker=ticker,
+                paper=paper,
+                chain_data=chain_data,
+            )
+
+
+
+    # ============================================================================
+    # INSTITUTIONAL WORKSPACE
+    # ============================================================================
+
+    elif section == "🏛 Institutional":
+
+        workspace = st.radio(
+            "Institutional Workspace",
+            [
+                "🏦 Command Center",
+                "🏢 Operations",
+                "🧠 Portfolio Optimization AI",
+                "🤖 Trade Selection",
+                "🧭 Risk Rebalancing",
+                "💰 Auto Income",
+                "🏛 CIO Dashboard",
+                "💰 Income Command",
+                "🛡 Portfolio Risk",
+                "🔥 Stress Testing",
+                "📈 Greeks",
+                "🚦 Guardrails",
+                "🏗 Construction",
+                "🔄 Lifecycle",
+                "🔁 Rolling",
+                "💵 Income",
+                "🛞 Wheel",
+                "🏭 Covered Call Factory",
+                "🏦 Cash Secured Put Factory",
+                "⏳ Assignment",
+                "🛡 Hedging",
+                "🧭 Dynamic Risk",
+                "🌐 Cross Asset",
+                "🤖 Auto Manager",
+                "🏭 Strategy Factory",
+                "🚀 Workstation",
+            ],
+            horizontal=True,
+            key="options_institutional_workspace",
+            label_visibility="collapsed",
+        )
+
+        if workspace == "🏦 Command Center":
+            render_portfolio_command_center_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+        elif workspace == "🏢 Operations":
+            render_institutional_operations_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "🧠 Portfolio Optimization AI":
+            render_portfolio_optimization_ai_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "🤖 Trade Selection":
+            render_autonomous_trade_selection_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "🧭 Risk Rebalancing":
+            render_autonomous_risk_rebalancing_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "💰 Auto Income":
+            render_autonomous_income_management_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "🏛 CIO Dashboard":
+            render_institutional_options_cio_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "💰 Income Command":
+            render_income_command_center_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+        elif workspace == "🛡 Portfolio Risk":
+            render_portfolio_risk_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "🔥 Stress Testing":
+            render_stress_testing_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "📈 Greeks":
+            render_greeks_exposure_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+        elif workspace == "🚦 Guardrails":
+            render_risk_guardrails_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "🏗 Construction":
+            render_portfolio_construction_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+        elif workspace == "🔄 Lifecycle":
+            render_position_lifecycle_dashboard(
+                ticker=ticker,
+                paper=paper,
+        )
+
+        elif workspace == "🔁 Rolling":
+            render_roll_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+        elif workspace == "💵 Income":
+            render_income_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "🛞 Wheel":
+            render_wheel_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "🏭 Covered Call Factory":
+            render_covered_call_factory_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "🏦 Cash Secured Put Factory":
+            render_cash_secured_put_factory_dashboard(
+                ticker=ticker,
+                paper=paper,
+                chain_data=chain_data,
+            )
+
+        elif workspace == "⏳ Assignment":
+            render_assignment_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "🛡 Hedging":
+            render_portfolio_hedging_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+
+
+        elif workspace == "🧭 Dynamic Risk":
+            render_dynamic_risk_adjustment_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "🌐 Cross Asset":
+            render_cross_asset_exposure_dashboard()
+
+        elif workspace == "🤖 Auto Manager":
+            render_autonomous_portfolio_manager_dashboard(
+                ticker=ticker,
+                paper=paper,
+            )
+
+        elif workspace == "🏭 Strategy Factory":
+            render_strategy_factory_dashboard(
+                ticker,
+                chain_data,
+            )
+
+        elif workspace == "🚀 Workstation":
+            render_full_options_workstation(
+                ticker,
+                paper,
+            )
+
+
+    elif section == "⚙️ Execution":
+
+        workspace = st.radio(
+            "Execution Workspace",
+            [
+                "⚙️ Execution Quality",
+                "💧 Liquidity",
+                "📏 Position Sizing",
+                "💼 Capital Allocation",
+                "🎯 Trade Optimization",
+                "📋 Trade Planner",
+            ],
+            horizontal=True,
+            key="options_execution_workspace",
+            label_visibility="collapsed",
+        )
+
+        if workspace == "⚙️ Execution Quality":
+            render_execution_quality_dashboard(
+                db=db,
+                tenant_id=tenant_id,
+            )
+
+        elif workspace == "💧 Liquidity":
+            render_liquidity_intelligence_dashboard(
+                ticker=ticker,
+                chain_data=chain_data,
+            )
+
+        elif workspace == "📏 Position Sizing":
+            render_position_sizing_dashboard()
+
+
+        elif workspace == "💼 Capital Allocation":
+            render_capital_allocation_dashboard()
+
+        elif workspace == "🎯 Trade Optimization":
+            render_trade_optimization_dashboard()
+
+        elif workspace == "📋 Trade Planner":
+            render_institutional_trade_planner_dashboard()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — CHAIN VIEWER
@@ -118,22 +657,17 @@ def _render_chain_viewer(ticker: str):
     st.caption("Live chain from MarketData.app · Greeks · IV · Open Interest")
 
     cache_key = f"opt_chain_{ticker}"
+    col_r, col_f = st.columns([1, 4])
+    with col_r:
+        if st.button("↺ Refresh", key="chain_refresh"):
+            if cache_key in st.session_state:
+                del st.session_state[cache_key]
 
-    col_controls, col_exp = st.columns([3, 4])
-    with col_controls:
-        refresh_state = render_refresh_controls(
-            "options_chain",
-            ticker,
-            exact_cache_keys=[cache_key],
-            default_mode="1 Minute",
-        )
+    if cache_key not in st.session_state:
+        with st.spinner(f"Loading options chain for {ticker}…"):
+            st.session_state[cache_key] = get_options_chain(ticker)
 
-    data, loaded_at = load_session_cached(
-        cache_key,
-        lambda: get_options_chain(ticker),
-        refresh_state=refresh_state,
-        ttl_seconds=refresh_state.ttl_seconds,
-    )
+    data = st.session_state[cache_key]
 
     if "error" in data:
         st.error(data["error"])
@@ -144,9 +678,8 @@ def _render_chain_viewer(ticker: str):
         st.warning("No expirations found.")
         return
 
-    cache_status_caption(loaded_at=loaded_at, source=data.get("source", "unknown"), refresh_state=refresh_state)
-
-    with col_exp:
+    # ── Expiry selector ───────────────────────────────────────
+    with col_f:
         sel_exp = st.selectbox(
             "Expiration",
             expirations,
@@ -154,40 +687,47 @@ def _render_chain_viewer(ticker: str):
             key="chain_exp",
         )
 
-    chain = data.get("chain", {}).get(sel_exp, {})
+    chain = data["chain"].get(sel_exp, {})
     calls = chain.get("calls", pd.DataFrame())
-    puts = chain.get("puts", pd.DataFrame())
+    puts  = chain.get("puts",  pd.DataFrame())
 
+    # ── Summary metrics ───────────────────────────────────────
     all_rows = data.get("all_rows", pd.DataFrame())
-    if isinstance(all_rows, pd.DataFrame) and not all_rows.empty:
-        total_vol = int(all_rows["volume"].fillna(0).sum()) if "volume" in all_rows.columns else 0
-        total_oi = int(all_rows["open_interest"].fillna(0).sum()) if "open_interest" in all_rows.columns else 0
-        avg_iv = all_rows["iv"].dropna().mean() if "iv" in all_rows.columns else None
-        call_vol = all_rows[all_rows["type"] == "call"]["volume"].fillna(0).sum() if "type" in all_rows.columns and "volume" in all_rows.columns else 0
-        put_vol = all_rows[all_rows["type"] == "put"]["volume"].fillna(0).sum() if "type" in all_rows.columns and "volume" in all_rows.columns else 0
-        pcr = put_vol / max(1, call_vol)
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Expirations", len(expirations))
+    if not all_rows.empty:
+        total_vol = int(all_rows["volume"].fillna(0).sum())
+        total_oi  = int(all_rows["open_interest"].fillna(0).sum())
+        avg_iv    = all_rows["iv"].dropna().mean()
+        pcr = (
+            all_rows[all_rows["type"]=="put"]["volume"].fillna(0).sum() /
+            max(1, all_rows[all_rows["type"]=="call"]["volume"].fillna(0).sum())
+        )
+        c1,c2,c3,c4,c5 = st.columns(5)
+        c1.metric("Expirations",  len(expirations))
         c2.metric("Total Volume", f"{total_vol:,}")
-        c3.metric("Open Interest", f"{total_oi:,}")
-        c4.metric("Avg IV", f"{avg_iv * 100:.1f}%" if avg_iv else "—")
-        c5.metric("Put/Call Vol", f"{pcr:.2f}", delta="Bearish" if pcr > 1.2 else "Bullish" if pcr < 0.7 else "Neutral", delta_color="inverse" if pcr > 1.2 else "normal" if pcr < 0.7 else "off")
+        c3.metric("Open Interest",f"{total_oi:,}")
+        c4.metric("Avg IV",       f"{avg_iv*100:.1f}%" if avg_iv else "—")
+        c5.metric("Put/Call Vol", f"{pcr:.2f}",
+                  delta="Bearish" if pcr > 1.2 else "Bullish" if pcr < 0.7 else "Neutral",
+                  delta_color="inverse" if pcr > 1.2 else "normal" if pcr < 0.7 else "off")
 
-    display_cols = ["strike", "last", "bid", "ask", "volume", "open_interest", "iv", "delta", "gamma", "theta", "vega", "option_symbol"]
+    # ── Calls / Puts tabs ─────────────────────────────────────
+    tab_c, tab_p, tab_surface = st.tabs(["Calls", "Puts", "IV Surface"])
 
-    chain_view = st.radio("Chain View", ["Calls", "Puts", "IV Surface"], horizontal=True, key="chain_view_mode")
+    display_cols = ["strike","last","bid","ask","volume","open_interest","iv","delta","gamma","theta","vega","option_symbol"]
 
-    if chain_view == "Calls":
+    with tab_c:
         if not calls.empty:
             _render_chain_table(calls, "call", display_cols)
         else:
             st.info("No call data for this expiry.")
-    elif chain_view == "Puts":
+
+    with tab_p:
         if not puts.empty:
             _render_chain_table(puts, "put", display_cols)
         else:
             st.info("No put data for this expiry.")
-    elif chain_view == "IV Surface":
+
+    with tab_surface:
         _render_iv_surface(ticker)
 
 
@@ -496,23 +1036,11 @@ def _render_positions(db, tenant_id: str, paper: bool):
               f"{(total_pnl/max(0.01,total_value)*100):+.1f}%")
 
     df = pd.DataFrame(rows)
-
-    def _pnl_style(v):
-        if isinstance(v, (int, float)):
-            if v > 0:
-                return f"color: {CALL_CLR}"
-            if v < 0:
-                return f"color: {PUT_CLR}"
-        return ""
-
-    styled = (
-        df.style
-        .map(_pnl_style, subset=["Unreal P&L", "P&L %"])
-        .format({
-            "Unreal P&L": "${:,.2f}",
-            "P&L %": "{:+.1f}%"
-        })
-    )
+    styled = df.style.map(
+        lambda v: f"color: {CALL_CLR}" if isinstance(v,float) and v>0
+                  else (f"color: {PUT_CLR}" if isinstance(v,float) and v<0 else ""),
+        subset=["Unreal P&L","P&L %"]
+    ).format({"Unreal P&L": "${:,.2f}", "P&L %": "{:+.1f}%"})
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
     # ── DTE heatmap ───────────────────────────────────────────
@@ -643,7 +1171,7 @@ def _render_strategy_builder(ticker: str):
                 if st.button(f"Apply: {rec_name}", key="apply_rec"):
                     if rec_name in STRATEGIES:
                         st.session_state["sb_strategy"] = rec_name
-                        st.success(f"Applied strategy: {rec_name}")
+                        st.rerun()
 
     # ── Leg configuration ─────────────────────────────────────
     st.markdown("#### Legs")
@@ -669,32 +1197,57 @@ def _render_strategy_builder(ticker: str):
                     ["call", "put"],
                     index=0 if type_def == "call" else 1,
                     key=f"sb_type_{i}",
-                    label_visibility="collapsed",
+                    label_visibility="collapsed"
                 )
+
                 strike = c4.number_input(
                     "Strike",
+                    value=float(round(current_price * (1.02 if i % 2 == 0 else 0.98), 2)),
+                    min_value=0.01,
+                    step=1.0,
+                    key=f"sb_strike_{i}",
+                    label_visibility="collapsed"
+                )
+
+                premium = c5.number_input(
+                    "Premium ($)",
+                    value=2.0,
+                    min_value=0.0,
+                    step=0.1,
+                    key=f"sb_prem_{i}"
+                )
+
+                legs.append({
+                    "side": side,
+                    "type": opt_type,
+                    "strike": strike,
+                    "premium": premium,
+                    "qty": 100,
+                })
+
+            else:
+                c3.markdown("Stock")
+
+                strike = c4.number_input(
+                    "Stock Strike",
                     value=float(current_price),
                     min_value=0.01,
                     step=1.0,
                     key=f"sb_strike_{i}",
-                    label_visibility="collapsed",
+                    label_visibility="collapsed"
                 )
-                premium = c5.number_input("Premium ($)",
-                                           value=2.0, min_value=0.0, step=0.1,
-                                           key=f"sb_prem_{i}")
-                legs.append({"side":side,"type":opt_type,"strike":strike,
-                              "premium":premium,"qty":100})
-            else:
-                c3.markdown("Stock")
-                strike = c4.number_input("Strike", value=float(current_price), min_value=0.01,
-                                          step=1.0, key=f"sb_stock_strike_{i}",
-                                          label_visibility="collapsed")
-                legs.append({"side":side,"type":"stock","strike":float(strike),
-                              "premium":float(current_price),"qty":1})
 
-    # ── Payoff calculation ────────────────────────────────────
-    price_range = np.linspace(current_price * 0.6, current_price * 1.4, 300)
-    payoff = np.zeros(len(price_range))
+                legs.append({
+                    "side": side,
+                    "type": "stock",
+                    "strike": float(strike),
+                    "premium": float(current_price),
+                    "qty": 1,
+                })
+
+            # ── Payoff calculation ────────────────────────────────────
+            price_range = np.linspace(current_price * 0.6, current_price * 1.4, 300)
+            payoff = np.zeros(len(price_range))
 
     for leg in legs:
         mult = 1 if leg["side"] == "buy" else -1
@@ -979,31 +1532,19 @@ def _render_ai_analysis(ticker: str, paper: bool):
     st.subheader(f"🤖 AI Options Analysis — {ticker}")
     st.caption("Chain Q&A · Unusual flow interpretation · AI-powered options intelligence")
 
+    # Load chain for context
     chain_key = f"opt_chain_{ticker}"
-    refresh_state = render_refresh_controls(
-        "options_ai_analysis",
-        ticker,
-        exact_cache_keys=[chain_key],
-        default_mode="1 Minute",
-    )
+    if chain_key not in st.session_state:
+        with st.spinner("Loading chain…"):
+            st.session_state[chain_key] = get_options_chain(ticker)
+    chain_data = st.session_state.get(chain_key, {})
 
-    chain_data, loaded_at = load_session_cached(
-        chain_key,
-        lambda: get_options_chain(ticker),
-        refresh_state=refresh_state,
-        ttl_seconds=refresh_state.ttl_seconds,
-    )
-    cache_status_caption(
-        loaded_at=loaded_at,
-        source=chain_data.get("source", "unknown") if isinstance(chain_data, dict) else "unknown",
-        refresh_state=refresh_state,
-    )
+    tab_qa, tab_flow = st.tabs(["💬 Chain Q&A", "🌊 Flow Alerts"])
 
-    ai_view = st.radio("AI Workspace", ["💬 Chain Q&A", "🌊 Flow Alerts"], horizontal=True, key="options_ai_workspace")
-
-    if ai_view == "💬 Chain Q&A":
+    with tab_qa:
         _render_qa_assistant(ticker, chain_data)
-    elif ai_view == "🌊 Flow Alerts":
+
+    with tab_flow:
         _render_flow_alerts(ticker, chain_data)
 
 
@@ -1080,7 +1621,7 @@ def _render_qa_assistant(ticker: str, chain_data: dict):
     if history:
         if st.button("🗑 Clear conversation", key=f"qa_clear_{ticker}"):
             st.session_state[hist_key] = []
-            st.success("Conversation cleared.")
+            st.rerun()
 
 
 def _render_flow_alerts(ticker: str, chain_data: dict):
