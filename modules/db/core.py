@@ -50,11 +50,10 @@ if DB_URL.startswith("sqlite"):
 
     engine = create_engine(
         DB_URL,
-        connect_args={
-            "check_same_thread": False
-        },
+        connect_args={"check_same_thread": False},
         poolclass=StaticPool,
         echo=False,
+        future=True,
     )
 
 else:
@@ -66,9 +65,9 @@ else:
         pool_size=3,
         max_overflow=2,
         pool_timeout=30,
-        pool_reset_on_return=None,
-        pool_use_lifo=True,
+        pool_reset_on_return="rollback",
         echo=False,
+        future=True,
     )
 
 
@@ -151,11 +150,10 @@ def init_database():
             print("=" * 80)
 
 
+
     except Exception as e:
 
-        db.rollback()
-
-        st.error(...)
+        print("Database health check failed:", e)
 
 
 
