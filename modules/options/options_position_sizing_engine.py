@@ -1,39 +1,139 @@
-"""Position sizing helpers for options trading."""
+
+"""
+Sprint 6 Phase 3 — Position Sizing Intelligence Engine
+"""
+
 from __future__ import annotations
-from typing import Any
+import pandas as pd
+
+from modules.options.options_liquidity_engine import analyze_chain_liquidity
 
 
-def _n(v: Any, d: float = 0.0) -> float:
-    try:
-        return float(v or d)
-    except Exception:
-        return d
+def calculate_position_size(
+    portfolio_value: float,
+    risk_percent: float,
+    max_loss_per_contract: float,
+) -> dict:
 
+    portfolio_risk_budget = portfolio_value * (risk_percent / 100.0)
 
-def calculate_position_size(account_equity: float, max_risk_pct: float, max_loss_per_contract: float, heat_limit_pct: float = 0.20) -> dict[str, Any]:
-    account_equity = _n(account_equity)
-    max_loss = max(_n(max_loss_per_contract), 0.01)
-    risk_budget = account_equity * max_risk_pct
-    heat_budget = account_equity * heat_limit_pct
-    contracts_by_risk = int(risk_budget // max_loss)
-    contracts_by_heat = int(heat_budget // max_loss)
-    recommended = max(0, min(contracts_by_risk, contracts_by_heat))
+    contracts = 0
+    if max_loss_per_contract > 0:
+        contracts = int(portfolio_risk_budget / max_loss_per_contract)
+
+    capital_at_risk = contracts * max_loss_per_contract
+
+    utilization = 0.0
+    if portfolio_risk_budget > 0:
+        utilization = (capital_at_risk / portfolio_risk_budget) * 100
+
     return {
-        "account_equity": account_equity,
-        "max_risk_pct": max_risk_pct,
-        "risk_budget": risk_budget,
-        "heat_budget": heat_budget,
-        "max_loss_per_contract": max_loss,
-        "contracts_by_risk": contracts_by_risk,
-        "contracts_by_heat": contracts_by_heat,
-        "recommended_contracts": recommended,
+        "portfolio_value": portfolio_value,
+        "risk_percent": risk_percent,
+        "risk_budget": round(portfolio_risk_budget, 2),
+        "max_loss_per_contract": round(max_loss_per_contract, 2),
+        "recommended_contracts": max(0, contracts),
+        "capital_at_risk": round(capital_at_risk, 2),
+        "risk_budget_utilization": round(utilization, 2),
     }
 
+def kelly_fraction(
+    win_probability: float,
+    reward_risk_ratio: float,
+) -> float:
+    """
+    Kelly Criterion position sizing.
 
-def kelly_fraction(prob_win: float, avg_win: float, avg_loss: float) -> float:
-    p = max(0.0, min(1.0, _n(prob_win)))
-    q = 1.0 - p
-    b = _n(avg_win) / max(_n(avg_loss), 0.01)
-    if b <= 0:
+    win_probability:
+        Probability of winning (0-1)
+
+    reward_risk_ratio:
+        Average reward divided by average risk
+
+    Returns:
+        Fraction of capital to allocate.
+    """
+
+    try:
+        p = float(win_probability)
+        b = float(reward_risk_ratio)
+
+        if b <= 0:
+            return 0.0
+
+        q = 1.0 - p
+
+        kelly = (b * p - q) / b
+
+        return round(max(0.0, kelly), 4)
+
+    except Exception:
         return 0.0
-    return max(0.0, min(0.25, (b * p - q) / b))
+
+def calculate_liquidity_score(chain_data):
+    """
+    Backward compatibility wrapper.
+
+    Existing dashboards expect a single score object.
+    """
+
+    report = analyze_chain_liquidity(chain_data)
+
+    if not report.get("available"):
+        return {
+            "score": 0,
+            "grade": "N/A",
+            "summary": report.get("reason", "No liquidity data"),
+        }
+
+    summary = report.get("summary", {})
+
+    return {
+        "score": summary.get("avg_liquidity_score", 0),
+        "grade": summary.get("market_liquidity_grade", "N/A"),
+        "liquid_contracts": summary.get("liquid_contracts", 0),
+        "tradable_contracts": summary.get("tradable_contracts", 0),
+        "avg_spread_pct": summary.get("avg_spread_pct", 0),
+        "total_volume": summary.get("total_volume", 0),
+        "total_open_interest": summary.get("total_open_interest", 0),
+    }
+
+def build_position_sizing_matrix(
+    portfolio_value: float,
+    max_loss_per_contract: float,
+) -> pd.DataFrame:
+
+    rows = []
+
+    for risk_pct in [0.25, 0.5, 1, 2, 3, 5]:
+        result = calculate_position_size(
+            portfolio_value,
+            risk_pct,
+            max_loss_per_contract,
+        )
+
+        rows.append({
+            "risk_pct": risk_pct,
+            "risk_budget": result["risk_budget"],
+            "recommended_contracts": result["recommended_contracts"],
+            "capital_at_risk": result["capital_at_risk"],
+        })
+
+    return pd.DataFrame(rows)
+
+
+def classify_position_size(contracts: int) -> str:
+
+    if contracts <= 1:
+        return "Starter"
+
+    if contracts <= 5:
+        return "Small"
+
+    if contracts <= 20:
+        return "Medium"
+
+    if contracts <= 50:
+        return "Large"
+
+    return "Institutional"

@@ -279,12 +279,12 @@ def render_market_dashboard(db):
 
     has_change = df["Change %"].notna().sum() if "Change %" in df.columns else 0
     as_of = df["As Of"].dropna().iloc[0] if "As Of" in df.columns and not df["As Of"].dropna().empty else ""
-    st.write("MARKET STEP B")
+
     st.caption(
         f"{len(df)} of {len(symbols)} symbols have price data · "
         f"{has_change} with daily change · As of: {as_of}"
     )
-    st.write("MARKET STEP C")
+
 
 
     col_g, col_l = st.columns(2)

@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import time
 from typing import Optional
-
+import datetime
 import requests
 import streamlit as st
 
@@ -107,7 +107,7 @@ def _get_options_marketdata(ticker: str) -> dict:
                 "Accept": "application/json",
             },
             params={"dateformat": "timestamp"},
-            timeout=15,
+            timeout=(10, 45),
         )
         if r.status_code == 401:
             return {"error": "MarketData.app API key invalid"}
@@ -529,20 +529,54 @@ def get_finra_dark_pool(ticker: str) -> dict:
 
     Falls back to institutional proxy from options chain if no key.
     """
-    cache_key = f"dp_{ticker}"
-    cached = _get_cached(cache_key)
-    if cached is not None:
-        return cached
+    cache_key = f"finra_dp_{ticker}"
+
+    cached = st.session_state.get(cache_key)
+
+    if cached:
+        age = (
+                datetime.utcnow()
+                - cached["timestamp"]
+        ).total_seconds()
+
+        if age < 3600:
+            return cached["data"]
 
     # ── Real FINRA data (if key present) ─────────────────────
     finra_raw = _get_secret("FINRA_API_KEY") or ""
+
     if finra_raw and ":" in finra_raw:
         token = _get_finra_token()
+
         if token:
-            result = _fetch_finra_ats(ticker, token)
+            try:
+                result = _fetch_finra_ats(ticker, token)
+
+            except Exception as e:
+                print(f"[finra] data fetch failed: {e}")
+
+                if cached:
+                    print("[finra] using stale cached data")
+                    return cached["data"]
+
+                result = {
+                    "source": "finra_timeout",
+                    "ticker": ticker,
+                    "dark_pool_volume": 0,
+                    "dark_pool_percent": 0,
+                    "sentiment": "Unknown",
+                    "error": str(e)
+                }
+
+            # Cache EVERYTHING
+            st.session_state[cache_key] = {
+                "timestamp": datetime.utcnow(),
+                "data": result
+            }
+
             if "error" not in result:
-                _set_cached(cache_key, result)
                 return result
+
             print(f"[finra] data fetch failed: {result.get('error')}")
 
     # ── Fallback: institutional proxy from options chain ──────

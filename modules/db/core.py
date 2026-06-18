@@ -14,7 +14,27 @@ from sqlalchemy.pool import StaticPool
 
 
 
-DB_URL = st.secrets["DATABASE_URL"]
+
+
+
+try:
+    DB_URL = st.secrets.get("DATABASE_URL")
+except Exception:
+    DB_URL = None
+
+if not DB_URL:
+
+    local_db = os.path.join(
+        os.getcwd(),
+        "stockapp.db"
+    )
+
+    DB_URL = f"sqlite:///{local_db}"
+
+    print(
+        f"[database] DATABASE_URL missing. "
+        f"Using SQLite fallback: {local_db}"
+    )
 
 
 
@@ -26,17 +46,30 @@ DB_URL = st.secrets["DATABASE_URL"]
 # Engine
 # ---------------------------------------------------
 
-engine = create_engine(
-    DB_URL,
-    pool_pre_ping=True,
-    pool_recycle=180,
-    pool_size=3,
-    max_overflow=2,
-    pool_timeout=30,
-    pool_reset_on_return=None,
-    pool_use_lifo=True,
-    echo=False,
-)
+if DB_URL.startswith("sqlite"):
+
+    engine = create_engine(
+        DB_URL,
+        connect_args={
+            "check_same_thread": False
+        },
+        poolclass=StaticPool,
+        echo=False,
+    )
+
+else:
+
+    engine = create_engine(
+        DB_URL,
+        pool_pre_ping=True,
+        pool_recycle=180,
+        pool_size=3,
+        max_overflow=2,
+        pool_timeout=30,
+        pool_reset_on_return=None,
+        pool_use_lifo=True,
+        echo=False,
+    )
 
 
 
