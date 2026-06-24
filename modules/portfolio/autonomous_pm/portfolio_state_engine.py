@@ -20,6 +20,7 @@ def _num(v: Any, default: float = 0.0) -> float:
 def _option_positions(paper: bool = True) -> list[dict[str, Any]]:
     try:
         from modules.options.options_broker import AlpacaOptionsBroker
+
         broker = AlpacaOptionsBroker(paper=paper)
         positions = broker.list_options_positions()
         rows = []

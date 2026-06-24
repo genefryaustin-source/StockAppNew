@@ -120,7 +120,7 @@ class OrderService:
                     "requested_qty": qty,
                     "available_qty": available_qty,
                 })
-                print("✅ PASSED SELL VALIDATION — CONTINUING EXECUTION")
+                
                 if available_qty < qty:
                     raise ValueError(
                         f"Not enough shares to sell: requested {qty}, available {available_qty}"
@@ -131,6 +131,15 @@ class OrderService:
             # GET REFERENCE PRICE
             # ---------------------------------------
             ref_price = self._get_reference_price(symbol)
+
+            print("=" * 80)
+            print("SUBMIT ORDER DEBUG")
+            print("SYMBOL:", symbol)
+            print("REF PRICE FROM MARKET:", ref_price)
+            print("LIMIT PRICE:", limit_price)
+            print("ORDER TYPE:", order_type)
+            print("SIDE:", side)
+            print("=" * 80)
 
             # ---------------------------------------
             # BUILD ORDER REQUEST
@@ -148,10 +157,33 @@ class OrderService:
             # ---------------------------------------
             # FORCE PAPER EXECUTION (BYPASS BROKER VALIDATION)
             # ---------------------------------------
+            # ---------------------------------------
+            # FORCE PAPER EXECUTION PRICE
+            # ---------------------------------------
+            try:
+                ref_price = float(ref_price or 0.0)
+            except Exception:
+                ref_price = 0.0
+
+            if ref_price <= 0 and limit_price is not None:
+                try:
+                    ref_price = float(limit_price or 0.0)
+                except Exception:
+                    ref_price = 0.0
+            print("REF PRICE AFTER FALLBACK:", ref_price)
+
+            if ref_price <= 0:
+                raise ValueError(
+                    f"Unable to execute paper trade for {symbol}: missing valid reference price."
+                )
+            if not ref_price or float(ref_price) <= 0:
+                raise ValueError(
+                    f"No valid execution price available for {symbol}"
+                )
             broker_resp = SimulatedBrokerResponse(req, ref_price)
             broker_name = "paper"
 
-            exec_price = float(broker_resp.avg_fill_price or ref_price or 0.0)
+            exec_price = float(broker_resp.avg_fill_price or ref_price)
 
             order = TradeOrder(
                 portfolio_id=portfolio_id,
@@ -325,7 +357,10 @@ class OrderService:
                         net_pnl = gross_pnl - total_cost
 
                         opened_at = prior_updated_at
-                        closed_at = datetime.now(UTC)
+                        closed_at = datetime.utcnow()
+
+                        if opened_at is not None and getattr(opened_at, "tzinfo", None) is not None:
+                            opened_at = opened_at.replace(tzinfo=None)
 
                         holding_period_days = 0.0
                         if opened_at:

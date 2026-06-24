@@ -8,7 +8,7 @@ import requests
 import streamlit as st
 import yfinance as yf
 from diskcache import Cache
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 from modules.utils.symbol_utils import normalize_symbol, is_valid_symbol
 from modules.market_data.models import PriceHistory
@@ -17,17 +17,8 @@ from modules.utils.config import get_secret
 from modules.market_data.providers.marketdata_provider import (
     get_history as marketdata_history,
 )
-
 from modules.market_data.providers.alpha_vantage_provider import (
     get_history as alpha_history,
-)
-
-
-from modules.market_data.providers.polygon import (
-    fetch_ohlcv as polygon_history,
-)
-from modules.market_data.provider_router import (
-    get_provider_router,
 )
 from modules.market_data.providers.polygon import (
     fetch_ohlcv as polygon_history,
@@ -35,11 +26,6 @@ from modules.market_data.providers.polygon import (
 from modules.market_data.provider_router import (
     get_provider_router,
     is_rate_limit_error,
-)
-
-
-from modules.market_data.autonomous_market_data_orchestrator import (
-    get_autonomous_market_data_orchestrator,
 )
 
 
@@ -63,10 +49,18 @@ _PROVIDER_STATE = {
     "finnhub_disabled_until": 0.0,
     "eodhd_disabled_until": 0.0,
     "yahoo_disabled_until": 0.0,
+    "polygon_disabled_until": 0.0,
+    "marketdata_disabled_until": 0.0,
+    "alpha_vantage_disabled_until": 0.0,
 }
 
 _FAILED_SYMBOLS = {}
 FAILED_SYMBOL_TTL_SECONDS = 60 * 30
+
+# small in-process latest-price cache to stop Alpha/Recommendations from
+# repeatedly refetching the same symbols during one Streamlit rerun.
+_LATEST_PRICE_CACHE: Dict[str, tuple[float, float]] = {}
+LATEST_PRICE_TTL_SECONDS = 60 * 5
 
 
 # ---------------------------------------------------
@@ -85,8 +79,10 @@ def _now_ts() -> float:
 
 
 def _provider_disabled(provider: str) -> bool:
+    provider = str(provider or "").lower().strip()
     key = f"{provider}_disabled_until"
     return _now_ts() < float(_PROVIDER_STATE.get(key, 0.0) or 0.0)
+
 
 def _all_history_providers_disabled() -> bool:
     return (
@@ -97,6 +93,7 @@ def _all_history_providers_disabled() -> bool:
 
 
 def _disable_provider(provider: str, seconds: int = 900, reason: str = "") -> None:
+    provider = str(provider or "").lower().strip()
     key = f"{provider}_disabled_until"
     _PROVIDER_STATE[key] = _now_ts() + seconds
     print(f"🚨 {provider.upper()} DISABLED FOR {seconds // 60} MIN {reason}".strip())
@@ -128,12 +125,10 @@ def _safe_json(response: requests.Response, provider: str, symbol: str) -> Optio
             err = f"{provider.upper()} HTTP {response.status_code}: {symbol}"
 
             if response.status_code in (401, 403):
-                seconds = 900
-                _disable_provider(provider, seconds=seconds, reason=f"for {symbol}")
+                _disable_provider(provider, seconds=900, reason=f"for {symbol}")
 
             elif response.status_code == 429:
-                seconds = 900
-                _disable_provider(provider, seconds=seconds, reason=f"rate-limited for {symbol}")
+                _disable_provider(provider, seconds=900, reason=f"rate-limited for {symbol}")
 
             print(err)
             return None
@@ -150,9 +145,6 @@ def _safe_json(response: requests.Response, provider: str, symbol: str) -> Optio
 
 
 def _normalize_df(df):
-
-    import pandas as pd
-
     REQUIRED_COLS = [
         "Date",
         "Open",
@@ -166,57 +158,31 @@ def _normalize_df(df):
         return pd.DataFrame(columns=REQUIRED_COLS)
 
     df = df.copy()
-
-    # ---------------------------------
-    # COLUMN NORMALIZATION
-    # ---------------------------------
     rename_map = {}
 
     for c in df.columns:
-
         lc = str(c).lower().strip()
-
         if lc in ("date", "datetime", "timestamp", "time"):
             rename_map[c] = "Date"
-
         elif lc == "open":
             rename_map[c] = "Open"
-
         elif lc == "high":
             rename_map[c] = "High"
-
         elif lc == "low":
             rename_map[c] = "Low"
-
         elif lc in ("close", "adj close", "adjusted_close"):
             rename_map[c] = "Close"
-
         elif lc in ("volume", "vol"):
             rename_map[c] = "Volume"
 
     df.rename(columns=rename_map, inplace=True)
 
-    # ---------------------------------
-    # ENSURE REQUIRED COLS EXIST
-    # ---------------------------------
     for col in REQUIRED_COLS:
-
         if col not in df.columns:
+            df[col] = pd.NaT if col == "Date" else 0.0
 
-            if col == "Date":
-                df[col] = pd.NaT
-            else:
-                df[col] = 0.0
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
 
-    # ---------------------------------
-    # DATE CLEANUP
-    # ---------------------------------
-    df["Date"] = pd.to_datetime(
-        df["Date"],
-        errors="coerce"
-    )
-
-    # remove timezone awareness
     try:
         if getattr(df["Date"].dt, "tz", None) is not None:
             df["Date"] = df["Date"].dt.tz_convert(None)
@@ -226,32 +192,10 @@ def _normalize_df(df):
         except Exception:
             pass
 
-    # ---------------------------------
-    # NUMERIC CLEANUP
-    # ---------------------------------
-    numeric_cols = [
-        "Open",
-        "High",
-        "Low",
-        "Close",
-        "Volume",
-    ]
+    for col in ["Open", "High", "Low", "Close", "Volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    for col in numeric_cols:
-
-        df[col] = pd.to_numeric(
-            df[col],
-            errors="coerce"
-        )
-
-    # ---------------------------------
-    # DROP BAD ROWS
-    # ---------------------------------
     df = df.dropna(subset=["Date", "Close"])
-
-    # ---------------------------------
-    # SORT + DEDUPE
-    # ---------------------------------
     df = (
         df
         .sort_values("Date")
@@ -259,12 +203,7 @@ def _normalize_df(df):
         .reset_index(drop=True)
     )
 
-    # ---------------------------------
-    # FINAL COLUMN ORDER
-    # ---------------------------------
-    df = df[REQUIRED_COLS]
-
-    return df
+    return df[REQUIRED_COLS]
 
 
 def _base(sym: str) -> str:
@@ -293,6 +232,47 @@ def _valid_base_symbol(symbol: str) -> str:
     return sym
 
 
+def _coerce_price_payload(payload):
+    if payload is None:
+        return None
+
+    if isinstance(payload, dict):
+        payload = payload.get("price")
+
+    try:
+        payload = float(payload)
+        if payload > 0:
+            return payload
+    except Exception:
+        return None
+
+    return None
+
+
+def _cache_latest_price(symbol: str, price: float) -> None:
+    sym = _valid_base_symbol(symbol)
+    price = _coerce_price_payload(price)
+    if sym and price is not None:
+        _LATEST_PRICE_CACHE[sym] = (price, _now_ts() + LATEST_PRICE_TTL_SECONDS)
+
+
+def _get_cached_latest_price(symbol: str):
+    sym = _valid_base_symbol(symbol)
+    if not sym:
+        return None
+
+    item = _LATEST_PRICE_CACHE.get(sym)
+    if not item:
+        return None
+
+    price, expires = item
+    if _now_ts() > expires:
+        _LATEST_PRICE_CACHE.pop(sym, None)
+        return None
+
+    return _coerce_price_payload(price)
+
+
 # ---------------------------------------------------
 # FINNHUB PRICE
 # ---------------------------------------------------
@@ -309,8 +289,11 @@ def _get_prices_finnhub(symbols: Iterable[str]) -> Dict[str, Dict[str, float]]:
     out = {}
 
     for raw_sym in symbols:
-        sym = _valid_base_symbol(raw_sym)
+        if _provider_disabled("finnhub"):
+            print("FINNHUB LOOP ABORTED")
+            break
 
+        sym = _valid_base_symbol(raw_sym)
         if not sym:
             continue
 
@@ -320,7 +303,7 @@ def _get_prices_finnhub(symbols: Iterable[str]) -> Dict[str, Dict[str, float]]:
                 params={"symbol": sym, "token": key},
                 timeout=5,
             )
-
+            print("FINNHUB REQUEST:", [sym])
             data = _safe_json(r, "finnhub", sym)
             if not isinstance(data, dict):
                 continue
@@ -336,10 +319,10 @@ def _get_prices_finnhub(symbols: Iterable[str]) -> Dict[str, Dict[str, float]]:
 
         except Exception as e:
             err = str(e)
-
             if "403" in err or "Forbidden" in err:
                 _disable_provider("finnhub", reason=f"for {sym}")
-
+            if "429" in err or "rate" in err.lower():
+                _disable_provider("finnhub", reason=f"rate-limited for {sym}")
             print(f"PRICE FETCH ERROR (Finnhub): {sym} {e}")
 
     return out
@@ -355,7 +338,6 @@ def _get_price_finnhub(symbol: str):
 # ---------------------------------------------------
 
 def _get_price_eod(sym: str):
-
     return None
 
 
@@ -364,6 +346,8 @@ def _get_price_eod(sym: str):
 # ---------------------------------------------------
 
 def _get_price_yahoo(sym: str):
+    # Yahoo has been consistently rate-limited in this deployment. Leave the
+    # function for compatibility, but do not use it in latest-price routing.
     if _provider_disabled("yahoo"):
         print("⚠️ YAHOO TEMP DISABLED")
         return None
@@ -374,7 +358,6 @@ def _get_price_yahoo(sym: str):
 
     try:
         time.sleep(0.25)
-
         df = yf.Ticker(base).history(period="5d")
 
         if df is not None and not df.empty:
@@ -385,10 +368,8 @@ def _get_price_yahoo(sym: str):
 
     except Exception as e:
         err = str(e)
-
         if "Too Many Requests" in err or "Rate limited" in err or "429" in err:
             _disable_provider("yahoo", reason=f"rate-limited for {base}")
-
         print("Yahoo failed for", base, e)
 
     return None
@@ -406,16 +387,12 @@ def _get_price_massive(sym: str):
         return None
 
 
-
-
-
 # ---------------------------------------------------
 # EODHD HISTORY
 # ---------------------------------------------------
 
 def _get_history_eodhd(symbol: str) -> pd.DataFrame:
     if _provider_disabled("eodhd"):
-
         return _empty_history()
 
     key = get_secret("EODHD_API_KEY")
@@ -429,11 +406,7 @@ def _get_history_eodhd(symbol: str) -> pd.DataFrame:
     try:
         r = requests.get(
             f"https://eodhd.com/api/eod/{sym}.US",
-            params={
-                "api_token": key,
-                "fmt": "json",
-                "period": "d",
-            },
+            params={"api_token": key, "fmt": "json", "period": "d"},
             timeout=12,
         )
 
@@ -442,7 +415,6 @@ def _get_history_eodhd(symbol: str) -> pd.DataFrame:
             return _empty_history()
 
         df = pd.DataFrame(data)
-
         df.rename(columns={
             "date": "Date",
             "open": "Open",
@@ -456,14 +428,8 @@ def _get_history_eodhd(symbol: str) -> pd.DataFrame:
 
     except Exception as e:
         err = str(e)
-
         if "401" in err or "Unauthorized" in err:
-            # disable quietly
-            _disable_provider(
-                "eodhd",
-                reason=f"for {sym}",
-            )
-
+            _disable_provider("eodhd", reason=f"for {sym}")
             return _empty_history()
 
         print("EODHD HISTORY ERROR:", sym, e)
@@ -486,7 +452,6 @@ def _get_history_yahoo(symbol: str, period: str = "1y", interval: str = "1d") ->
 
     try:
         time.sleep(0.25)
-
         df = yf.Ticker(sym).history(period=period, interval=interval)
 
         if df is None or df.empty:
@@ -503,10 +468,8 @@ def _get_history_yahoo(symbol: str, period: str = "1y", interval: str = "1d") ->
 
     except Exception as e:
         err = str(e)
-
         if "Too Many Requests" in err or "Rate limited" in err or "429" in err:
             _disable_provider("yahoo", reason=f"rate-limited for {sym}")
-
         print("YAHOO HISTORY FALLBACK ERROR:", sym, e)
 
     return _empty_history()
@@ -525,46 +488,19 @@ def get_price_history_internal(
     provider_override=None,
 ):
     print("🔥 PRICE HISTORY CALLED:", symbol)
-    end = int(datetime.now(UTC).timestamp())
-
-    if period == "1y":
-        start = int(
-            (datetime.now(UTC) - timedelta(days=365))
-            .timestamp()
-        )
-
-    elif period == "6mo":
-        start = int(
-            (datetime.now(UTC) - timedelta(days=180))
-            .timestamp()
-        )
-
-    elif period == "3mo":
-        start = int(
-            (datetime.now(UTC) - timedelta(days=90))
-            .timestamp()
-        )
-
-    else:
-        start = int(
-            (datetime.now(UTC) - timedelta(days=365))
-            .timestamp()
-        )
     sym = _valid_base_symbol(symbol)
     router = get_provider_router()
-    print(
-        "PROVIDER OVERRIDE:",
-        provider_override,
-    )
+    print("PROVIDER OVERRIDE:", provider_override)
+
     if provider_override:
-        provider_override = (
-            provider_override.upper()
-        )
+        provider_override = provider_override.upper()
+
     if not sym:
         return _empty_history()
 
     cache_key = f"{sym}:{period}:{interval}"
     print("CACHE CHECK:", cache_key)
+
     if False and not force_refresh and cache_key in CACHE:
         cached_df = CACHE[cache_key]
         if cached_df is not None and not cached_df.empty:
@@ -580,22 +516,13 @@ def get_price_history_internal(
         return _empty_history()
 
     # -----------------------------------
-    # 1. POLYGON PRIMARY
+    # 1. POLYGON PRIMARY FOR HISTORY ONLY
     # -----------------------------------
-
-    if (
-            provider_override in (None, "POLYGON")
-            and router.is_available("POLYGON")
-    ):
-
+    if provider_override in (None, "POLYGON") and router.is_available("POLYGON"):
         try:
             start_time = time.time()
-
             router.wait_for_provider("POLYGON")
-
-            polygon_key = get_secret(
-                "POLYGON_API_KEY"
-            )
+            polygon_key = get_secret("POLYGON_API_KEY")
 
             df = polygon_history(
                 symbol=sym,
@@ -607,75 +534,42 @@ def get_price_history_internal(
 
             if df is not None and not df.empty:
                 latency_ms = (time.time() - start_time) * 1000
+                router.mark_success("POLYGON", latency_ms=latency_ms)
 
-                router.mark_success(
-                    "POLYGON",
-                    latency_ms=latency_ms,
-                )
-
-                if interval == "1d":
-                    _save_history_to_db(
-                        db,
-                        sym,
-                        df,
-                    )
+                if interval == "1d" and db is not None:
+                    _save_history_to_db(db, sym, df)
                 else:
-                    print(
-                        f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}"
-                    )
+                    print(f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}")
 
                 CACHE[cache_key] = df
-
                 return df
 
             router.mark_failure("POLYGON")
 
         except Exception as e:
             if is_rate_limit_error(e):
-                router.mark_rate_limited(
-                    "POLYGON",
-                    cooldown_minutes=15,
-                )
+                router.mark_rate_limited("POLYGON", cooldown_minutes=15)
             else:
                 router.mark_failure("POLYGON")
-
-            print(
-                f"POLYGON HISTORY ERROR: {sym}",
-                e,
-            )
+            print(f"POLYGON HISTORY ERROR: {sym}", e)
 
     # -----------------------------------
-    # 1. MARKETDATA.APP PRIMARY
+    # 2. MARKETDATA.APP HISTORY BACKUP
     # -----------------------------------
-    if (
-            provider_override in (None, "MARKETDATA")
-            and router.is_available("MARKETDATA")
-    ):
-
+    if provider_override in (None, "MARKETDATA") and router.is_available("MARKETDATA"):
         try:
             start_time = time.time()
             router.wait_for_provider("MARKETDATA")
 
-            df = marketdata_history(
-                symbol,
-                period=period,
-                start=None,
-                end=None,
-                interval=interval,
-            )
+            df = marketdata_history(sym, period="5d", interval="1d")
 
             if df is not None and not df.empty:
-                router.mark_success(
-                    "MARKETDATA",
-                    latency_ms=(time.time() - start_time) * 1000,
-                )
+                router.mark_success("MARKETDATA", latency_ms=(time.time() - start_time) * 1000)
 
-                if interval == "1d":
+                if interval == "1d" and db is not None:
                     _save_history_to_db(db, sym, df)
                 else:
-                    print(
-                        f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}"
-                    )
+                    print(f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}")
 
                 CACHE[cache_key] = df
                 return df
@@ -687,40 +581,25 @@ def get_price_history_internal(
                 router.mark_rate_limited("MARKETDATA", cooldown_minutes=15)
             else:
                 router.mark_failure("MARKETDATA")
-
             print(f"MARKETDATA HISTORY ERROR: {sym}", e)
-    # -----------------------------------
-    # 2. ALPHA VANTAGE BACKUP
-    # -----------------------------------
-    if (
-            provider_override in (None, "ALPHA_VANTAGE")
-            and router.is_available("ALPHA_VANTAGE")
-    ):
 
+    # -----------------------------------
+    # 3. ALPHA VANTAGE HISTORY BACKUP
+    # -----------------------------------
+    if provider_override in (None, "ALPHA_VANTAGE") and router.is_available("ALPHA_VANTAGE"):
         try:
             start_time = time.time()
             router.wait_for_provider("ALPHA_VANTAGE")
 
-            df = alpha_history(
-                symbol,
-                period=period,
-                start=None,
-                end=None,
-                interval=interval,
-            )
+            df = alpha_history(sym, period="5d", interval="1d")
 
             if df is not None and not df.empty:
-                router.mark_success(
-                    "ALPHA_VANTAGE",
-                    latency_ms=(time.time() - start_time) * 1000,
-                )
+                router.mark_success("ALPHA_VANTAGE", latency_ms=(time.time() - start_time) * 1000)
 
-                if interval == "1d":
+                if interval == "1d" and db is not None:
                     _save_history_to_db(db, sym, df)
                 else:
-                    print(
-                        f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}"
-                    )
+                    print(f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}")
 
                 CACHE[cache_key] = df
                 return df
@@ -732,52 +611,11 @@ def get_price_history_internal(
                 router.mark_rate_limited("ALPHA_VANTAGE", cooldown_minutes=60)
             else:
                 router.mark_failure("ALPHA_VANTAGE")
-
             print(f"ALPHA HISTORY ERROR: {sym}", e)
-    # -----------------------------------
-    # 3. YAHOO EMERGENCY FALLBACK
-    # -----------------------------------
-    if (
-            provider_override in (None, "YAHOO")
-            and router.is_available("YAHOO")
-    ):
 
-        try:
-            start_time = time.time()
-            router.wait_for_provider("YAHOO")
+    return _empty_history()
 
-            df = _get_history_yahoo(
-                symbol,
-                period=period,
-                interval=interval,
-            )
 
-            if df is not None and not df.empty:
-                router.mark_success(
-                    "YAHOO",
-                    latency_ms=(time.time() - start_time) * 1000,
-                )
-
-                if interval == "1d":
-                    _save_history_to_db(db, sym, df)
-                else:
-                    print(
-                        f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}"
-                    )
-
-                CACHE[cache_key] = df
-                return df
-
-            router.mark_failure("YAHOO")
-
-        except Exception as e:
-            if is_rate_limit_error(e):
-                router.mark_rate_limited("YAHOO", cooldown_minutes=30)
-            else:
-                router.mark_failure("YAHOO")
-
-            print(f"YAHOO HISTORY ERROR: {sym}", e)
-        return _empty_history()
 def get_price_history(
     db,
     symbol,
@@ -789,9 +627,7 @@ def get_price_history(
         get_autonomous_market_data_orchestrator,
     )
 
-    orchestrator = (
-        get_autonomous_market_data_orchestrator()
-    )
+    orchestrator = get_autonomous_market_data_orchestrator()
 
     result = orchestrator.fetch_price_history(
         db=db,
@@ -801,11 +637,12 @@ def get_price_history(
     )
 
     df = result.get("data")
-
     if df is not None:
         return df
 
     return pd.DataFrame()
+
+
 # ---------------------------------------------------
 # BULK PRICE FETCH
 # ---------------------------------------------------
@@ -816,15 +653,12 @@ def get_prices_many(db, symbols):
     clean_symbols = []
     for s in symbols or []:
         sym = _valid_base_symbol(s)
-        if sym:
+        if sym and sym not in clean_symbols:
             clean_symbols.append(sym)
 
     if not clean_symbols:
         return results
 
-    # -----------------------------
-    # 1. FINNHUB BULK FIRST
-    # -----------------------------
     fh = _get_prices_finnhub(clean_symbols)
 
     for sym in clean_symbols:
@@ -840,138 +674,222 @@ def get_prices_many(db, symbols):
             }])
             continue
 
-        # -----------------------------
-        # 2. EODHD
-        # -----------------------------
-        eod = _get_price_eod(sym)
-        if eod:
-            results[sym] = pd.DataFrame([{
-                "Date": pd.Timestamp.now(UTC),
-                "Close": eod["price"],
-                "Volume": eod["volume"],
-            }])
-            continue
-
-        # -----------------------------
-        # 3. YAHOO LAST
-        # -----------------------------
-        yh = _get_price_yahoo(sym)
-        if yh:
-            results[sym] = pd.DataFrame([{
-                "Date": pd.Timestamp.now(UTC),
-                "Close": yh["price"],
-                "Volume": yh["volume"],
-            }])
-            continue
-
         results[sym] = pd.DataFrame()
 
     return results
 
 
 # ---------------------------------------------------
-# LATEST PRICE
+# LATEST PRICE HELPERS
 # ---------------------------------------------------
 
-def get_latest_price_internal(
-    symbol: str
-):
+def _latest_from_history_provider(provider_name: str, symbol: str):
+    """
+    Latest-price fallback for providers that only have history functions here.
+
+    Important: POLYGON latest quotes are intentionally NOT called here. Your
+    Polygon history route works, but the latest/trade quote endpoint produced
+    403/429 in this environment. For latest-price requests, POLYGON returns
+    None so the caller's failover loop can continue to MARKETDATA, ALPHA, then
+    FINNHUB instead of poisoning the run with Polygon quote failures.
+    """
     sym = _valid_base_symbol(symbol)
     if not sym:
         return None
 
-    try:
-        fh = _get_price_finnhub(sym)
-        if fh:
-            return fh
-    except Exception as e:
-        print(f"PRICE FETCH ERROR (Finnhub): {sym} {e}")
+    provider_name = str(provider_name or "").upper().strip()
+    router = get_provider_router()
+
+    if provider_name == "POLYGON":
+        print(f"SKIPPING POLYGON LATEST QUOTE: {sym}")
+        return None
+
+    if not router.is_available(provider_name):
+        return None
 
     try:
-        eod = _get_price_eod(sym)
-        if eod:
-            return eod
-    except Exception as e:
-        print(f"PRICE FETCH ERROR (EODHD): {sym} {e}")
+        router.wait_for_provider(provider_name)
 
-    try:
-        yh = _get_price_yahoo(sym)
-        if yh:
-            return yh
-    except Exception as e:
-        print(f"PRICE FETCH ERROR (Yahoo): {sym} {e}")
+        if provider_name == "MARKETDATA":
+            df = marketdata_history(sym, period="5d", interval="1d")
 
-    try:
-        massive = _get_price_massive(sym)
-        if massive:
-            return massive
+        elif provider_name == "ALPHA_VANTAGE":
+            df = alpha_history(
+                sym,
+                period="5d",
+                interval="1d",
+            )
+
+        elif provider_name == "TWELVEDATA":
+            try:
+                from modules.market_data.providers.twelvedata_provider import (
+                    get_history as twelvedata_history,
+                )
+            except Exception:
+                return None
+
+            df = twelvedata_history(
+                sym,
+                period="5d",
+                interval="1d",
+            )
+
+        else:
+            return None
+
+        df = _normalize_df(df)
+        if df is None or df.empty or "Close" not in df.columns:
+            return None
+
+        close = pd.to_numeric(df["Close"], errors="coerce").dropna()
+        if close.empty:
+            return None
+
+        return _coerce_price_payload(close.iloc[-1])
+
     except Exception as e:
-        print(f"PRICE FETCH ERROR (Massive): {sym} {e}")
+        if is_rate_limit_error(e):
+            router.mark_rate_limited(provider_name, cooldown_minutes=15)
+        else:
+            router.mark_failure(provider_name)
+
+        print(f"LATEST PRICE HISTORY FALLBACK ERROR: {provider_name} {sym} {e}")
+        return None
+
+
+# ---------------------------------------------------
+# LATEST PRICE
+# ---------------------------------------------------
+
+def get_latest_price_internal(symbol: str, provider_override: str | None = None):
+    sym = _valid_base_symbol(symbol)
+    if not sym:
+        return None
+
+    cached = _get_cached_latest_price(sym)
+    if cached is not None:
+        return cached
+
+    provider = str(provider_override).upper().strip() if provider_override else None
+
+    provider_order = [provider] if provider else [
+        "MARKETDATA",
+        "ALPHA_VANTAGE",
+        "FINNHUB",
+    ]
+
+    for provider_name in provider_order:
+        try:
+            if provider_name == "POLYGON":
+                return None
+
+            if provider_name == "FINNHUB":
+                if _provider_disabled("finnhub"):
+                    return None
+                price = _coerce_price_payload(_get_price_finnhub(sym))
+
+            elif provider_name == "MARKETDATA":
+                price = _latest_from_history_provider("MARKETDATA", sym)
+
+            elif provider_name == "ALPHA_VANTAGE":
+                price = _latest_from_history_provider("ALPHA_VANTAGE", sym)
+
+            else:
+                price = None
+
+            if price is not None and price > 0:
+                _cache_latest_price(sym, price)
+                return price
+
+        except Exception as e:
+            print(f"PRICE FETCH ERROR ({provider_name}): {sym} {e}")
 
     return None
+
+
 def get_latest_price(
     symbol: str,
     db=None,
 ):
+    # Single-symbol route can still use the orchestrator.
     from modules.market_data.autonomous_market_data_orchestrator import (
         get_autonomous_market_data_orchestrator,
     )
 
-    orchestrator = (
-        get_autonomous_market_data_orchestrator()
-    )
+    orchestrator = get_autonomous_market_data_orchestrator()
 
     result = orchestrator.fetch_latest_price(
         db=db,
         symbol=symbol,
     )
 
-    return result.get("price")
+    if isinstance(result, dict):
+        return result.get("price")
+
+    return None
+
 
 # ---------------------------------------------------
 # LATEST PRICE MAP
 # ---------------------------------------------------
 
 def get_latest_prices(symbols):
-    out = {}
+    out: Dict[str, float] = {}
 
     clean_symbols = []
     for s in symbols or []:
         sym = _valid_base_symbol(s)
-        if sym:
+        if sym and sym not in clean_symbols:
             clean_symbols.append(sym)
 
     if not clean_symbols:
         return out
 
-    fh = _get_prices_finnhub(clean_symbols)
-
     for sym in clean_symbols:
-        if sym in fh:
-            out[sym] = fh[sym]["price"]
-            continue
+        cached = _get_cached_latest_price(sym)
+        if cached is not None:
+            out[sym] = cached
 
-        eod = _get_price_eod(sym)
-        if eod:
-            out[sym] = eod["price"]
-            continue
+    missing = [s for s in clean_symbols if s not in out]
+    if not missing:
+        return out
 
-        yh = _get_price_yahoo(sym)
-        if yh:
-            out[sym] = yh["price"]
-            continue
+    # Finnhub pass. It is not true batch, but this preserves current behavior.
+    if not _provider_disabled("finnhub"):
+        for sym in missing:
+            if _provider_disabled("finnhub"):
+                break
 
-        massive = _get_price_massive(sym)
-        if massive:
-            out[sym] = massive["price"]
-            continue
+            payload = _get_price_finnhub(sym)
+            price = _coerce_price_payload(payload)
 
-        out[sym] = 0.0
+            if price is not None and price > 0:
+                out[sym] = price
+                _cache_latest_price(sym, price)
+
+    missing = [s for s in clean_symbols if s not in out]
+
+    # Important: only fallback for small lists like Alpha Engine.
+    # Do not do 100 MarketData/Alpha history calls for recommendation scans.
+    if len(clean_symbols) <= 20:
+        for sym in missing:
+            price = get_latest_price_internal(sym, provider_override="MARKETDATA")
+            price = _coerce_price_payload(price)
+
+            if price is not None and price > 0:
+                out[sym] = price
+                _cache_latest_price(sym, price)
 
     return out
 
 
 def get_latest_price_map(symbols):
+    print("=" * 80)
+    print("GET_LATEST_PRICE_MAP")
+    print("COUNT:", len(symbols or []))
+    print("FIRST 20:", list(symbols or [])[:20])
+    print("=" * 80)
+
     return get_latest_prices(symbols)
 
 
@@ -982,6 +900,7 @@ def get_latest_price_map(symbols):
 def clear_price_cache():
     CACHE.clear()
     _FAILED_SYMBOLS.clear()
+    _LATEST_PRICE_CACHE.clear()
     return True
 
 
@@ -1014,7 +933,7 @@ def build_shared_price_cache(
     period="6mo",
     interval="1d",
     max_api_calls=1000,
-    **kwargs
+    **kwargs,
 ):
     api_calls = 0
     price_cache = {}
@@ -1034,13 +953,7 @@ def build_shared_price_cache(
             break
 
         try:
-            df = get_price_history(
-                db,
-                sym,
-                period=period,
-                interval=interval,
-            )
-
+            df = get_price_history(db, sym, period=period, interval=interval)
             api_calls += 1
 
             if df is None or len(df) < min_rows:
@@ -1068,10 +981,7 @@ def get_price_history_page_from_db(db, symbol, page=1, page_size=250, period="1y
 
 def massive_fetch_ohlc(symbol: str, period="1y") -> pd.DataFrame:
     try:
-
-        polygon_key = get_secret(
-            "POLYGON_API_KEY"
-        )
+        polygon_key = get_secret("POLYGON_API_KEY")
 
         df = polygon_history(
             symbol=symbol,
@@ -1085,30 +995,17 @@ def massive_fetch_ohlc(symbol: str, period="1y") -> pd.DataFrame:
             return _normalize_df(df)
 
     except Exception as e:
-
-        print(
-            "POLYGON MASSIVE FALLBACK ERROR:",
-            symbol,
-            e,
-        )
+        print("POLYGON MASSIVE FALLBACK ERROR:", symbol, e)
 
     return _empty_history()
 
 
-
 def preload_histories(
-        db,
-        symbols,
-        period="1y",
-        interval="1d",
+    db,
+    symbols,
+    period="1y",
+    interval="1d",
 ):
-    """
-    Bulk preload normalized price histories.
-
-    Returns:
-        dict[symbol] -> normalized dataframe
-    """
-
     history_map = {}
 
     symbols = list(dict.fromkeys([
@@ -1120,12 +1017,10 @@ def preload_histories(
     print(f"🚀 PRELOADING HISTORIES: {len(symbols)} symbols")
 
     for i, sym in enumerate(symbols):
-
         if i % 50 == 0:
             print(f"History preload {i}/{len(symbols)}")
 
         try:
-
             df = get_price_history(
                 db=db,
                 symbol=sym,
@@ -1142,12 +1037,11 @@ def preload_histories(
             history_map[sym] = df
 
         except Exception as e:
-
             print("PRELOAD ERROR:", sym, e)
 
     print(f"✅ PRELOAD COMPLETE: {len(history_map)} loaded")
-
     return history_map
+
 
 # ---------------------------------------------------
 # PRICE HISTORY PERSISTENCE
@@ -1159,22 +1053,18 @@ def _save_history_to_db(
     df: pd.DataFrame,
 ):
     """
-    Persist normalized daily price history.
-
-    PostgreSQL price_history uses PRIMARY KEY (symbol, date), so this function
-    collapses intraday/provider duplicate rows down to one row per date before
-    attempting inserts or updates.
+    Persist normalized daily price history using one bulk upsert.
     """
+
+    if db is None:
+        return 0
 
     if df is None or df.empty:
         return 0
 
     sym = _valid_base_symbol(symbol)
-
     if not sym:
         return 0
-
-    rows_saved = 0
 
     try:
         work_df = df.copy()
@@ -1183,13 +1073,7 @@ def _save_history_to_db(
             print("PRICE HISTORY SAVE SKIPPED - missing Date column:", sym)
             return 0
 
-        # ---------------------------------------------------
-        # Normalize provider timestamps to daily dates
-        # ---------------------------------------------------
-        work_df["Date"] = pd.to_datetime(
-            work_df["Date"],
-            errors="coerce",
-        )
+        work_df["Date"] = pd.to_datetime(work_df["Date"], errors="coerce")
 
         try:
             if getattr(work_df["Date"].dt, "tz", None) is not None:
@@ -1201,30 +1085,18 @@ def _save_history_to_db(
                 pass
 
         work_df = work_df.dropna(subset=["Date"])
-
         if work_df.empty:
             return 0
 
-        # ---------------------------------------------------
-        # Ensure required numeric columns exist
-        # ---------------------------------------------------
         for col in ["Open", "High", "Low", "Close", "Volume"]:
             if col not in work_df.columns:
                 work_df[col] = 0.0
-
-            work_df[col] = pd.to_numeric(
-                work_df[col],
-                errors="coerce",
-            )
+            work_df[col] = pd.to_numeric(work_df[col], errors="coerce")
 
         work_df = work_df.dropna(subset=["Close"])
-
         if work_df.empty:
             return 0
 
-        # ---------------------------------------------------
-        # Collapse intraday/provider duplicates to one row/day.
-        # ---------------------------------------------------
         work_df["Date"] = work_df["Date"].dt.date
         work_df = (
             work_df
@@ -1239,64 +1111,55 @@ def _save_history_to_db(
             })
         )
 
-        # ---------------------------------------------------
-        # Upsert row-by-row through ORM to preserve compatibility
-        # with the existing SQLAlchemy model/session setup.
-        # ---------------------------------------------------
+        payload = []
         for _, row in work_df.iterrows():
-            try:
-                dt = row["Date"]
+            payload.append({
+                "symbol": sym,
+                "date": row["Date"],
+                "open": float(row["Open"] or 0.0),
+                "high": float(row["High"] or 0.0),
+                "low": float(row["Low"] or 0.0),
+                "close": float(row["Close"] or 0.0),
+                "volume": float(row["Volume"] or 0.0),
+            })
 
-                existing = (
-                    db.query(PriceHistory)
-                    .filter(
-                        PriceHistory.symbol == sym,
-                        PriceHistory.date == dt,
-                    )
-                    .first()
-                )
+        if not payload:
+            return 0
 
-                open_value = float(row["Open"] or 0.0)
-                high_value = float(row["High"] or 0.0)
-                low_value = float(row["Low"] or 0.0)
-                close_value = float(row["Close"] or 0.0)
-                volume_value = float(row["Volume"] or 0.0)
+        upsert_sql = text("""
+            INSERT INTO price_history (
+                symbol,
+                date,
+                open,
+                high,
+                low,
+                close,
+                volume
+            )
+            VALUES (
+                :symbol,
+                :date,
+                :open,
+                :high,
+                :low,
+                :close,
+                :volume
+            )
+            ON CONFLICT (symbol, date)
+            DO UPDATE SET
+                open = EXCLUDED.open,
+                high = EXCLUDED.high,
+                low = EXCLUDED.low,
+                close = EXCLUDED.close,
+                volume = EXCLUDED.volume
+        """)
 
-                if existing:
-                    existing.open = open_value
-                    existing.high = high_value
-                    existing.low = low_value
-                    existing.close = close_value
-                    existing.volume = volume_value
-
-                else:
-                    db.add(
-                        PriceHistory(
-                            symbol=sym,
-                            date=dt,
-                            open=open_value,
-                            high=high_value,
-                            low=low_value,
-                            close=close_value,
-                            volume=volume_value,
-                        )
-                    )
-
-                rows_saved += 1
-
-            except Exception as row_error:
-                print(
-                    "PRICE ROW SAVE ERROR:",
-                    sym,
-                    row_error,
-                )
-
+        db.execute(upsert_sql, payload)
         db.commit()
 
-        print(
-            f"✅ SAVED {rows_saved} ROWS:",
-            sym,
-        )
+        rows_saved = len(payload)
+        print(f"✅ SAVED {rows_saved} ROWS:", sym)
+        return rows_saved
 
     except Exception as e:
         try:
@@ -1304,10 +1167,5 @@ def _save_history_to_db(
         except Exception:
             pass
 
-        print(
-            "PRICE HISTORY SAVE ERROR:",
-            sym,
-            e,
-        )
-
-    return rows_saved
+        print("PRICE HISTORY SAVE ERROR:", sym, e)
+        return 0

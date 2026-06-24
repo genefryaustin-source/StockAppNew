@@ -1,3 +1,5 @@
+import os
+import traceback
 import pandas as pd
 from sqlalchemy import text
 from datetime import datetime, timedelta, UTC
@@ -7,40 +9,186 @@ import uuid
 class NavService:
 
     def __init__(self, db_session, market_data_service):
+        self.instance_id = str(uuid.uuid4())[:8]
         self.db = db_session
         self.market_data = market_data_service
+        self._history_cache = {}
+        self._benchmark_metrics_cache = {}
+        self._debug_sequence = 0
+
+        self._debug_cache_state(
+            "NAV SERVICE CREATED",
+            extra={
+                "db_id": id(db_session),
+                "market_data_id": id(market_data_service),
+            },
+        )
 
     # =====================================================
-    # 🔧 INTERNAL HELPERS
+    # 🧪 DEBUG HELPERS
     # =====================================================
+    def _nav_debug_enabled(self) -> bool:
+        """
+        Debug logging is OFF by default.
+
+        Enable only when actively diagnosing NAV/cache issues:
+            set STOCKAPP_NAV_DEBUG=1
+        """
+        value = os.getenv("STOCKAPP_NAV_DEBUG", "1")
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _next_debug_sequence(self) -> int:
+        self._debug_sequence += 1
+        return self._debug_sequence
+
+    def _debug_cache_state(
+            self,
+            location: str,
+            cache_key: str | None = None,
+            extra: dict | None = None,
+            include_stack: bool = False,
+    ):
+        if not self._nav_debug_enabled():
+            return
+
+        try:
+            seq = self._next_debug_sequence()
+            print("\n" + "-" * 80)
+            print(f"NAV DEBUG #{seq}: {location}")
+            print(f"INSTANCE_ID={getattr(self, 'instance_id', 'unknown')}")
+            print(f"SELF_ID={id(self)}")
+            print(f"DB_ID={id(getattr(self, 'db', None))}")
+            print(f"CACHE_ID={id(getattr(self, '_history_cache', {}))}")
+            print(f"CACHE_SIZE={len(getattr(self, '_history_cache', {}))}")
+
+            if cache_key is not None:
+                print(f"CACHE_KEY={repr(cache_key)}")
+                print(f"CACHE_CONTAINS={cache_key in self._history_cache}")
+
+            if extra:
+                for k, v in extra.items():
+                    print(f"{k}={v}")
+
+            if include_stack:
+                print("STACK TRACE:")
+                traceback.print_stack(limit=12)
+
+            print("-" * 80)
+        except Exception as e:
+            print(f"NAV DEBUG FAILED at {location}: {e}")
+
+    def _make_history_cache_key(self, symbol, period="6mo") -> str:
+        symbol_key = str(symbol or "").upper().strip()
+        period_key = str(period or "6mo").lower().strip()
+        return f"{symbol_key}:{period_key}"
+
+    def _copy_metric_pack(self, pack):
+        if pack is None:
+            return None
+        out = {}
+        for key, value in pack.items():
+            if isinstance(value, pd.DataFrame):
+                out[key] = value.copy()
+            else:
+                out[key] = value
+        return out
     def _safe_get_price_history(self, symbol, period="6mo"):
+        symbol_norm = str(symbol or "").upper().strip()
+        period_norm = str(period or "6mo").lower().strip()
+        cache_key = self._make_history_cache_key(symbol_norm, period_norm)
+
+        if not symbol_norm:
+            self._debug_cache_state(
+                "PRICE HISTORY INVALID SYMBOL",
+                cache_key=cache_key,
+            )
+            return pd.DataFrame()
+
+        if cache_key in self._history_cache:
+            cached = self._history_cache[cache_key]
+            self._debug_cache_state(
+                f"PRICE HISTORY CACHE HIT {cache_key}",
+                cache_key=cache_key,
+                extra={"rows": len(cached) if hasattr(cached, "__len__") else "unknown"},
+            )
+            return cached.copy()
+
+        self._debug_cache_state(
+            f"PRICE HISTORY CACHE MISS {cache_key}",
+            cache_key=cache_key,
+            include_stack=True,
+        )
+
         try:
             from modules.market_data.service import get_price_history
 
-            df = get_price_history(self.db, symbol, period=period)
+            df = get_price_history(
+                self.db,
+                symbol_norm,
+                period=period_norm,
+            )
 
             if df is None or df.empty:
+                self._debug_cache_state(
+                    f"PRICE HISTORY EMPTY RESULT {cache_key}",
+                    cache_key=cache_key,
+                )
                 return pd.DataFrame()
 
             if "Date" not in df.columns or "Close" not in df.columns:
+                self._debug_cache_state(
+                    f"PRICE HISTORY INVALID COLUMNS {cache_key}",
+                    cache_key=cache_key,
+                    extra={"columns": list(df.columns)},
+                )
                 return pd.DataFrame()
 
-            df = df.copy()
-            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+            clean_df = df.copy()
+            clean_df["Date"] = pd.to_datetime(clean_df["Date"], errors="coerce")
 
-            # normalize timezone safely
-            if df["Date"].dt.tz is not None:
-                df["Date"] = df["Date"].dt.tz_convert(None)
+            try:
+                if clean_df["Date"].dt.tz is not None:
+                    clean_df["Date"] = clean_df["Date"].dt.tz_convert(None)
+            except Exception:
+                try:
+                    clean_df["Date"] = clean_df["Date"].dt.tz_localize(None)
+                except Exception:
+                    pass
 
-            df["Date"] = df["Date"].dt.normalize()
-            df = df.dropna(subset=["Date", "Close"])
+            clean_df["Date"] = clean_df["Date"].dt.normalize()
+            clean_df = clean_df.dropna(subset=["Date", "Close"])
+            clean_df = clean_df.sort_values("Date")
 
-            return df.sort_values("Date")
+            if clean_df.empty:
+                self._debug_cache_state(
+                    f"PRICE HISTORY EMPTY AFTER CLEAN {cache_key}",
+                    cache_key=cache_key,
+                )
+                return pd.DataFrame()
+
+            self._history_cache[cache_key] = clean_df.copy()
+
+            self._debug_cache_state(
+                f"PRICE HISTORY AFTER STORE {cache_key}",
+                cache_key=cache_key,
+                extra={
+                    "rows": len(clean_df),
+                    "cache_size": len(self._history_cache),
+                    "cache_keys": list(self._history_cache.keys()),
+                },
+            )
+
+            return clean_df.copy()
 
         except Exception as e:
-            print(f"⚠️ Price history error for {symbol}: {e}")
+            self._debug_cache_state(
+                f"PRICE HISTORY ERROR {cache_key}",
+                cache_key=cache_key,
+                extra={"error": repr(e)},
+                include_stack=True,
+            )
+            print(f"⚠️ Price history error for {symbol_norm}: {e}")
             return pd.DataFrame()
-
     def _get_sector(self, symbol: str) -> str:
         try:
             if hasattr(self, "market_data") and self.market_data:
@@ -82,32 +230,44 @@ class NavService:
     # 📈 BUILD NAV SERIES
     # =====================================================
     def build_nav_series(self, portfolio_id, period="6mo"):
+        period_norm = str(period or "6mo").lower().strip()
+
+        self._debug_cache_state(
+            f"build_nav_series START portfolio_id={portfolio_id} period={period_norm}",
+        )
 
         positions = self._get_positions(portfolio_id)
+
         if not positions:
+            self._debug_cache_state("build_nav_series NO POSITIONS")
             return pd.DataFrame()
 
         price_data = {}
+
         for pos in positions:
-            hist = self._safe_get_price_history(pos["symbol"], period=period)
-            if not hist.empty:
-                price_data[pos["symbol"]] = hist.set_index("Date")["Close"]
+            sym = str(pos.get("symbol", "")).upper().strip()
+            hist = self._safe_get_price_history(sym, period=period_norm)
+
+            self._debug_cache_state(
+                f"build_nav_series SYMBOL {sym}",
+                extra={"rows": len(hist) if hist is not None else 0},
+            )
+
+            if hist is not None and not hist.empty:
+                price_data[sym] = hist.set_index("Date")["Close"]
 
         if not price_data:
+            self._debug_cache_state("build_nav_series NO PRICE DATA")
             return pd.DataFrame()
 
         price_matrix = pd.concat(price_data, axis=1)
-
-        # CLEAN
         price_matrix = price_matrix.sort_index().ffill().dropna(how="all")
 
-        # NORMALIZE INDEX
         price_matrix.index = pd.to_datetime(price_matrix.index).tz_localize(None)
         price_matrix.index = price_matrix.index.normalize()
 
-        # TIME WINDOW
         end_date = pd.Timestamp.now(UTC).tz_localize(None).normalize()
-        start_date = (end_date - pd.Timedelta(days=self._get_period_days(period))).normalize()
+        start_date = (end_date - pd.Timedelta(days=self._get_period_days(period_norm))).normalize()
 
         price_matrix = price_matrix[
             (price_matrix.index >= start_date) &
@@ -115,47 +275,66 @@ class NavService:
         ]
 
         if price_matrix.empty:
+            self._debug_cache_state("build_nav_series EMPTY PRICE MATRIX")
             return pd.DataFrame()
 
-        # BUILD NAV
         nav = None
+
         for pos in positions:
-            sym = pos["symbol"]
-            qty = pos["qty"]
+            sym = str(pos.get("symbol", "")).upper().strip()
+            qty = float(pos.get("qty", 0) or 0)
 
             if sym in price_matrix.columns:
                 series = price_matrix[sym] * qty
                 nav = series if nav is None else nav.add(series, fill_value=0)
 
         if nav is None:
+            self._debug_cache_state("build_nav_series NAV NONE")
             return pd.DataFrame()
 
         nav_df = nav.reset_index()
         nav_df.columns = ["Date", "NAV"]
         nav_df["Date"] = pd.to_datetime(nav_df["Date"]).dt.normalize()
 
+        self._debug_cache_state(
+            f"build_nav_series END portfolio_id={portfolio_id}",
+            extra={"nav_rows": len(nav_df)},
+        )
+
         return nav_df
-
-    # =====================================================
-    # 📊 BUILD BENCHMARK SERIES
-    # =====================================================
     def build_benchmark_series(self, symbol="SPY", period="6mo"):
+        symbol_norm = str(symbol or "SPY").upper().strip()
+        period_norm = str(period or "6mo").lower().strip()
 
-        hist = self._safe_get_price_history(symbol, period=period)
-        if hist.empty:
+        self._debug_cache_state(
+            f"build_benchmark_series START symbol={symbol_norm} period={period_norm}",
+            cache_key=self._make_history_cache_key(symbol_norm, period_norm),
+        )
+
+        hist = self._safe_get_price_history(symbol_norm, period=period_norm)
+
+        if hist is None or hist.empty:
+            self._debug_cache_state(
+                f"build_benchmark_series EMPTY symbol={symbol_norm} period={period_norm}"
+            )
             return pd.DataFrame()
 
         hist = hist.copy()
         hist["Date"] = pd.to_datetime(hist["Date"], errors="coerce")
 
-        if hist["Date"].dt.tz is not None:
-            hist["Date"] = hist["Date"].dt.tz_convert(None)
+        try:
+            if hist["Date"].dt.tz is not None:
+                hist["Date"] = hist["Date"].dt.tz_convert(None)
+        except Exception:
+            try:
+                hist["Date"] = hist["Date"].dt.tz_localize(None)
+            except Exception:
+                pass
 
         hist["Date"] = hist["Date"].dt.normalize()
 
-        # TIME WINDOW
         end_date = pd.Timestamp.now(UTC).tz_localize(None).normalize()
-        start_date = (end_date - pd.Timedelta(days=self._get_period_days(period))).normalize()
+        start_date = (end_date - pd.Timedelta(days=self._get_period_days(period_norm))).normalize()
 
         hist = hist[
             (hist["Date"] >= start_date) &
@@ -163,32 +342,50 @@ class NavService:
         ]
 
         if hist.empty:
+            self._debug_cache_state(
+                f"build_benchmark_series EMPTY AFTER WINDOW symbol={symbol_norm}",
+            )
             return pd.DataFrame()
 
         first_close = float(hist["Close"].iloc[0])
+
         if first_close <= 0:
+            self._debug_cache_state(
+                f"build_benchmark_series INVALID FIRST CLOSE symbol={symbol_norm}",
+                extra={"first_close": first_close},
+            )
             return pd.DataFrame()
 
         hist["Benchmark"] = hist["Close"] / first_close
+        out = hist[["Date", "Benchmark"]]
 
-        return hist[["Date", "Benchmark"]]
+        self._debug_cache_state(
+            f"build_benchmark_series END symbol={symbol_norm} period={period_norm}",
+            extra={"benchmark_rows": len(out)},
+        )
 
-    # =====================================================
-    # ⚖️ NAV VS BENCHMARK
-    # =====================================================
+        return out
     def compute_nav_vs_benchmark(self, portfolio_id, benchmark="SPY", period="6mo"):
+        benchmark_norm = str(benchmark or "SPY").upper().strip()
+        period_norm = str(period or "6mo").lower().strip()
 
-        nav_df = self.build_nav_series(portfolio_id, period=period)
-        bench_df = self.build_benchmark_series(benchmark, period=period)
+        self._debug_cache_state(
+            f"compute_nav_vs_benchmark START portfolio_id={portfolio_id} benchmark={benchmark_norm} period={period_norm}",
+        )
 
-        if nav_df.empty or bench_df.empty:
+        nav_df = self.build_nav_series(portfolio_id, period=period_norm)
+        bench_df = self.build_benchmark_series(benchmark_norm, period=period_norm)
+
+        if nav_df is None or bench_df is None or nav_df.empty or bench_df.empty:
+            self._debug_cache_state("compute_nav_vs_benchmark EMPTY INPUT")
             return None
 
-        # ENSURE CLEAN DATES
+        nav_df = nav_df.copy()
+        bench_df = bench_df.copy()
+
         nav_df["Date"] = pd.to_datetime(nav_df["Date"]).dt.normalize()
         bench_df["Date"] = pd.to_datetime(bench_df["Date"]).dt.normalize()
 
-        # MERGE
         df = pd.merge(
             nav_df[["Date", "NAV"]],
             bench_df[["Date", "Benchmark"]],
@@ -199,25 +396,28 @@ class NavService:
         df = df.sort_values("Date").drop_duplicates(subset=["Date"])
 
         if len(df) < 5:
+            self._debug_cache_state(
+                "compute_nav_vs_benchmark TOO FEW MERGED ROWS",
+                extra={"merged_rows": len(df)},
+            )
             return None
 
-        # RETURNS
         df["rp"] = df["NAV"].pct_change().clip(-0.95, 0.95).fillna(0)
         df["rb"] = df["Benchmark"].pct_change().clip(-0.95, 0.95).fillna(0)
 
-        # CUMULATIVE RETURNS
         df["cum_p"] = (1 + df["rp"]).cumprod() - 1
         df["cum_b"] = (1 + df["rb"]).cumprod() - 1
+
+        self._debug_cache_state(
+            f"compute_nav_vs_benchmark END portfolio_id={portfolio_id}",
+            extra={"comparison_rows": len(df)},
+        )
 
         return {
             "nav_df": nav_df,
             "benchmark_df": bench_df,
             "comparison_df": df
         }
-
-    # =====================================================
-    # 📊 NAV HISTORY (COMPATIBILITY LAYER)
-    # =====================================================
     def get_nav_history(self, portfolio_id, period="6mo"):
         """
         Compatibility wrapper used by UI / reporting.
@@ -1757,8 +1957,8 @@ class NavService:
             meta = []
             for sym in symbols:
                 try:
-                    sec = self.get_security_metadata(sym)
-                    meta.append({"Symbol": sym, "Sector": sec.get("sector", "Unknown")})
+                    sector = self._get_sector(sym)
+                    meta.append({"Symbol": sym, "Sector": sector or "Unknown"})
                 except Exception:
                     meta.append({"Symbol": sym, "Sector": "Unknown"})
 
@@ -1886,5 +2086,104 @@ class NavService:
             print("⚠️ BENCHMARK FETCH ERROR:", e)
             return 0.0
 
+    def get_benchmark_history(
+            self,
+            symbol="SPY",
+            days=180,
+    ):
+        symbol_norm = str(symbol or "SPY").upper().strip()
+        days_int = int(days or 180)
+        period = "6mo"
 
+        if days_int >= 365:
+            period = "1y"
+        elif days_int >= 180:
+            period = "6mo"
+        elif days_int >= 90:
+            period = "3mo"
+        elif days_int >= 30:
+            period = "1mo"
 
+        self._debug_cache_state(
+            f"get_benchmark_history symbol={symbol_norm} days={days_int} period={period}",
+            cache_key=self._make_history_cache_key(symbol_norm, period),
+        )
+
+        return self.build_benchmark_series(
+            symbol=symbol_norm,
+            period=period,
+        )
+    def compute_benchmark_metrics(
+            self,
+            portfolio_id,
+            benchmark_symbol="SPY",
+            days=180,
+    ):
+        benchmark_norm = str(benchmark_symbol or "SPY").upper().strip()
+        days_int = int(days or 180)
+        cache_key = f"{portfolio_id}:{benchmark_norm}:{days_int}"
+
+        self._debug_cache_state(
+            f"compute_benchmark_metrics START portfolio_id={portfolio_id} benchmark={benchmark_norm} days={days_int}",
+        )
+
+        if cache_key in self._benchmark_metrics_cache:
+            self._debug_cache_state(
+                f"compute_benchmark_metrics CACHE HIT {cache_key}",
+                extra={"benchmark_metrics_cache_size": len(self._benchmark_metrics_cache)},
+            )
+            return self._copy_metric_pack(self._benchmark_metrics_cache[cache_key])
+
+        period = "6mo"
+
+        if days_int >= 365:
+            period = "1y"
+        elif days_int >= 180:
+            period = "6mo"
+        elif days_int >= 90:
+            period = "3mo"
+        elif days_int >= 30:
+            period = "1mo"
+
+        result = self.compute_nav_vs_benchmark(
+            portfolio_id=portfolio_id,
+            benchmark=benchmark_norm,
+            period=period,
+        )
+
+        if not result:
+            self._debug_cache_state(
+                f"compute_benchmark_metrics NO RESULT portfolio_id={portfolio_id}",
+            )
+            return None
+
+        df = result["comparison_df"].copy()
+
+        portfolio_return = float(df["cum_p"].iloc[-1])
+        benchmark_return = float(df["cum_b"].iloc[-1])
+
+        pack = {
+            "alpha": portfolio_return - benchmark_return,
+            "beta": 1.0,
+            "tracking_error": float(
+                (df["rp"] - df["rb"]).std()
+            ),
+            "relative_return": portfolio_return - benchmark_return,
+            "aligned_df": pd.DataFrame({
+                "Date": df["Date"],
+                "cum_portfolio": df["cum_p"],
+                "cum_benchmark": df["cum_b"],
+                "active_return": (
+                        df["cum_p"] - df["cum_b"]
+                ),
+            }),
+        }
+
+        self._benchmark_metrics_cache[cache_key] = self._copy_metric_pack(pack)
+
+        self._debug_cache_state(
+            f"compute_benchmark_metrics END portfolio_id={portfolio_id}",
+            extra={"benchmark_metrics_cache_size": len(self._benchmark_metrics_cache)},
+        )
+
+        return self._copy_metric_pack(pack)

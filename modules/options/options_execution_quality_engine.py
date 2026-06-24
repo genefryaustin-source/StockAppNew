@@ -227,10 +227,51 @@ def analyze_execution_quality(orders: Any) -> dict[str, Any]:
     filled = enriched[enriched["is_filled"]].copy()
     fill_rate = round(float(len(filled) / max(1, len(enriched)) * 100), 2)
 
-    avg_score = round(float(filled["execution_score"].mean()), 2) if not filled.empty else 0.0
-    avg_slippage_bps = round(float(filled["slippage_bps"].mean()), 2) if not filled.empty else 0.0
-    avg_spread_paid = round(float(filled["spread_paid_pct"].mean()), 2) if not filled.empty else 0.0
-    avg_mid_capture = round(float(filled["midpoint_capture_pct"].mean()), 2) if not filled.empty else 0.0
+    score_col = filled["execution_score"]
+
+    if isinstance(score_col, pd.DataFrame):
+        score_col = score_col.iloc[:, 0]
+
+    avg_score = (
+        round(float(pd.to_numeric(score_col, errors="coerce").mean()), 2)
+        if not filled.empty
+        else 0.0
+    )
+    slippage_col = filled["slippage_bps"]
+
+    if isinstance(slippage_col, pd.DataFrame):
+        slippage_col = slippage_col.iloc[:, 0]
+
+    avg_slippage_bps = round(
+        float(pd.to_numeric(slippage_col, errors="coerce").mean()),
+        2,
+    )
+    spread_col = filled["spread_paid_pct"]
+
+    if isinstance(spread_col, pd.DataFrame):
+        spread_col = spread_col.iloc[:, 0]
+
+    avg_spread_paid = (
+        round(
+            float(pd.to_numeric(spread_col, errors="coerce").mean()),
+            2,
+        )
+        if not filled.empty
+        else 0.0
+    )
+    mid_capture_col = filled["midpoint_capture_pct"]
+
+    if isinstance(mid_capture_col, pd.DataFrame):
+        mid_capture_col = mid_capture_col.iloc[:, 0]
+
+    avg_mid_capture = (
+        round(
+            float(pd.to_numeric(mid_capture_col, errors="coerce").mean()),
+            2,
+        )
+        if not filled.empty
+        else 0.0
+    )
 
     if avg_score >= 85:
         grade = "A"
@@ -260,17 +301,52 @@ def analyze_execution_quality(orders: Any) -> dict[str, Any]:
     }
 
 
-def analyze_execution_by_group(orders: Any, group_col: str) -> dict[str, Any]:
-    report = analyze_execution_quality(orders)
-    if not report.get("available"):
-        return report
+def analyze_execution_by_group(
+    orders: Any,
+    group_col: str
+) -> dict[str, Any]:
 
-    df = report.get("orders")
+    # Already-enriched dataframe passed from build_execution_quality_report()
+    if isinstance(orders, pd.DataFrame):
+        df = orders.copy()
+
+    else:
+        report = analyze_execution_quality(orders)
+
+        if not report.get("available"):
+            return report
+
+        df = report.get("orders")
+
     if not isinstance(df, pd.DataFrame) or df.empty:
-        return {"available": False, "reason": "No enriched orders available."}
+        return {
+            "available": False,
+            "reason": "No enriched orders available."
+        }
+
+    # Remove duplicate columns caused by accidental re-enrichment
+    df = df.loc[:, ~df.columns.duplicated()]
 
     if group_col not in df.columns:
         df[group_col] = "Unknown"
+
+    # Force numeric columns
+    for col in [
+        "execution_score",
+        "slippage_bps",
+        "spread_paid_pct",
+        "midpoint_capture_pct",
+    ]:
+        if col not in df.columns:
+            df[col] = 0
+
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce"
+        ).fillna(0)
+
+    if "is_filled" not in df.columns:
+        df["is_filled"] = False
 
     grouped = (
         df.groupby(group_col, as_index=False)
@@ -285,12 +361,29 @@ def analyze_execution_by_group(orders: Any, group_col: str) -> dict[str, Any]:
         .reset_index(drop=True)
     )
 
-    grouped["fill_rate"] = (grouped["filled"] / grouped["orders"].replace(0, 1) * 100).round(2)
+    grouped["fill_rate"] = (
+        grouped["filled"]
+        / grouped["orders"].replace(0, 1)
+        * 100
+    ).round(2)
 
-    for col in ["avg_score", "avg_slippage_bps", "avg_spread_paid_pct", "avg_midpoint_capture_pct"]:
-        grouped[col] = pd.to_numeric(grouped[col], errors="coerce").fillna(0).round(2)
+    for col in [
+        "avg_score",
+        "avg_slippage_bps",
+        "avg_spread_paid_pct",
+        "avg_midpoint_capture_pct",
+    ]:
+        grouped[col] = (
+            pd.to_numeric(grouped[col], errors="coerce")
+            .fillna(0)
+            .round(2)
+        )
 
-    return {"available": True, "group": group_col, "table": grouped}
+    return {
+        "available": True,
+        "group": group_col,
+        "table": grouped,
+    }
 
 
 def build_execution_quality_report(orders: Any) -> dict[str, Any]:

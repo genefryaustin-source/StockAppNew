@@ -399,7 +399,15 @@ except Exception:
 # ============================================================
 try:
     db = ensure_live_session(db)
-    nav_service = NavService(db, market_data_service)
+
+    if "nav_service" not in st.session_state:
+        st.session_state.nav_service = NavService(
+            db,
+            market_data_service
+        )
+
+    nav_service = st.session_state.nav_service
+
     alert_service = AlertService(db)
     order_service = OrderService(db)
 except Exception as e:
@@ -859,7 +867,7 @@ elif page == "Portfolio Construction":
         render_module_error("Portfolio Construction", construction_mod)
     else:
         rows = st.session_state.get("rank_rows")
-        run_page("Portfolio Construction", construction_mod.render_portfolio_construction, rows)
+        run_page("Portfolio Construction", construction_mod.render_portfolio_construction, rows, db, user)
 
 elif page == "Portfolio Deployment":
     if not check_page(user, "Portfolio Deployment", db):
@@ -1195,7 +1203,7 @@ elif page == "Portfolio Construction & Capital Allocation":
     st.header("📐 Portfolio Construction & Capital Allocation")
     st.caption("Advanced multi-factor capital allocation with risk budgeting.")
     try:
-        pc_mod = safe_import("modules.portfolio.construction")
+        pc_mod = safe_import("modules.portfolio.construction_ui")
         if hasattr(pc_mod, "render_portfolio_construction"):
             run_page("Portfolio Construction", pc_mod.render_portfolio_construction, db, user)
         else:

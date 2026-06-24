@@ -159,15 +159,6 @@ def _load_positions(db, portfolio_id: str) -> list[dict]:
             WHERE portfolio_id = :pid
         """), {"pid": portfolio_id}).mappings().fetchall()
 
-        if not rows:
-            # Try alternate column names
-            rows = db.execute(text("""
-                SELECT symbol, quantity as qty, cost_basis as avg_cost,
-                       0.0 as market_value, 0.0 as unrealized_pnl
-                FROM portfolio_positions
-                WHERE portfolio_id = :pid
-            """), {"pid": portfolio_id}).mappings().fetchall()
-
         return [dict(r) for r in rows] if rows else []
     except Exception as e:
         print(f"[portfolio_digest] positions load error: {e}")

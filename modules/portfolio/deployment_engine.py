@@ -62,8 +62,8 @@ def _load_current_positions(db, portfolio_id: int) -> pd.DataFrame:
             """
             SELECT
                 symbol AS ticker,
-                quantity AS shares,
-                cost_basis
+                qty AS shares,
+                avg_cost AS cost_basis
             FROM portfolio_positions
             WHERE portfolio_id = :portfolio_id
             """
@@ -193,7 +193,6 @@ def _build_trade_blotter(
     blotter["abs_delta_value"] = blotter["delta_value"].abs()
     blotter = blotter.sort_values(["abs_delta_value", "ticker"], ascending=[False, True]).reset_index(drop=True)
     blotter.drop(columns=["abs_delta_value"], inplace=True, errors="ignore")
-    return blotter
 
     # -----------------------------------
     # EXECUTION INTELLIGENCE
@@ -204,6 +203,8 @@ def _build_trade_blotter(
         max_turnover=0.30,
         slippage_bps=10
     )
+
+    return blotter
 
 
 def _to_csv_download(df: pd.DataFrame) -> bytes:
@@ -266,6 +267,29 @@ def render_portfolio_deployment(db, user):
     tickers = sorted(set(target_df["ticker"].tolist()) | set(current_df["ticker"].tolist()))
     price_map = _build_last_price_map(price_cache, tickers)
 
+    # _build_last_price_map silently returns 0.0 for any ticker it has no
+    # cached data for -- which collapses every target/delta share count to
+    # zero downstream and produces a misleading "No trades to generate."
+    # Fall back to a live quote lookup for just the missing ones.
+    missing_price_tickers = [t for t in tickers if price_map.get(t, 0.0) <= 0]
+    if missing_price_tickers:
+        from modules.market_data.service import get_latest_prices
+
+        fetched = get_latest_prices(missing_price_tickers)
+        for t, px in fetched.items():
+            if px and px > 0:
+                price_map[t] = px
+
+        still_missing = [t for t in missing_price_tickers if price_map.get(t, 0.0) <= 0]
+        if still_missing:
+            st.warning(
+                "No current price available for: "
+                + ", ".join(still_missing)
+                + ". These can't be sized into the trade blotter until a price "
+                "is available (configure a market data provider, or visit a "
+                "page that loads prices for these symbols first)."
+            )
+
     current_market_value = 0.0
     if not current_df.empty:
         tmp = current_df.copy()
@@ -296,6 +320,9 @@ def render_portfolio_deployment(db, user):
     )
 
     if blotter.empty:
+        if missing_price_tickers:
+            # Already explained above -- don't pile on a second, vaguer warning.
+            return
         st.warning("No trades to generate.")
         return
 
@@ -355,12 +382,23 @@ def render_portfolio_deployment(db, user):
     plan_name = st.text_input("Plan Name", value=f"Rebalance - {selected_name}", key="deploy_plan_name")
 
     if st.button("Save Deployment Plan", key="deploy_save_plan"):
+        # SERIAL is Postgres-only -- SQLite doesn't treat it as an alias for
+        # its rowid autoincrement (only an exact "INTEGER PRIMARY KEY" does),
+        # so on the SQLite fallback every inserted id/plan_id would silently
+        # come back NULL. Use the right syntax for whichever backend this is.
+        dialect = db.bind.dialect.name if db.bind is not None else "sqlite"
+        id_type = (
+            "SERIAL PRIMARY KEY"
+            if dialect == "postgresql"
+            else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        )
+
         db.execute(
             text(
-                """
+                f"""
                 CREATE TABLE IF NOT EXISTS portfolio_rebalance_plans (
-                    id SERIAL PRIMARY KEY,
-                    portfolio_id INTEGER,
+                    id {id_type},
+                    portfolio_id TEXT,
                     tenant_id TEXT,
                     plan_name TEXT,
                     created_at TEXT
@@ -371,9 +409,9 @@ def render_portfolio_deployment(db, user):
 
         db.execute(
             text(
-                """
+                f"""
                 CREATE TABLE IF NOT EXISTS portfolio_rebalance_trades (
-                    id SERIAL PRIMARY KEY,
+                    id {id_type},
                     plan_id INTEGER,
                     ticker TEXT,
                     action TEXT,
@@ -501,17 +539,34 @@ def _apply_execution_intelligence(
         return df
 
     # -----------------------------------
-    # 4. TURNOVER CONTROL
+    # 4. TURNOVER CONTROL (scale-down to fit budget)
     # -----------------------------------
+    # Rather than dropping trades outright once a size-sorted running total
+    # crosses the budget (which can zero out an entire rebalance if a single
+    # trade's value alone exceeds the cap), scale every trade down
+    # proportionally so the book still hits its target tilt -- just smaller --
+    # and stays within the turnover budget.
     total_turnover = df["exec_value"].abs().sum()
 
     if total_turnover > 0:
         turnover_limit = total_turnover * max_turnover
 
-        df = df.sort_values("exec_value", key=lambda x: x.abs(), ascending=False)
+        if total_turnover > turnover_limit:
+            scale = turnover_limit / total_turnover
 
-        cumulative = df["exec_value"].abs().cumsum()
-        df = df[cumulative <= turnover_limit]
+            # Scale the underlying share count (not just the dollar value),
+            # then re-round to whole shares and recompute value/direction
+            # from those final lots.
+            df["exec_shares"] = (df["exec_shares"] * scale).round(0)
+            df["exec_value"] = df["exec_shares"] * df["last_price"]
+
+            # Re-apply the min trade filter: scaling down can shrink some
+            # trades below the minimum size (or to zero shares) -- those are
+            # no longer worth executing.
+            df = df[df["exec_value"].abs() >= min_trade_value].copy()
+
+            if df.empty:
+                return df
 
     # -----------------------------------
     # 5. SLIPPAGE MODEL

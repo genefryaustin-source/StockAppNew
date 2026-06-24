@@ -40,19 +40,16 @@ class ProviderRouter:
         self.register_provider("POLYGON")
         self.register_provider("MARKETDATA")
         self.register_provider("ALPHA_VANTAGE")
-        self.register_provider("YAHOO")
         self.register_provider("FINNHUB")
         self.register_provider("TWELVEDATA")
 
     def register_provider(self, provider_name: str):
-        provider_name = provider_name.upper()
+        provider_name = str(provider_name).upper().strip()
         if provider_name not in self.providers:
-            self.providers[provider_name] = ProviderStatus(
-                provider=provider_name
-            )
+            self.providers[provider_name] = ProviderStatus(provider=provider_name)
 
     def get_provider(self, provider_name: str) -> Optional[ProviderStatus]:
-        return self.providers.get(provider_name.upper())
+        return self.providers.get(str(provider_name).upper().strip())
 
     def all_providers(self) -> List[ProviderStatus]:
         return list(self.providers.values())
@@ -84,10 +81,7 @@ class ProviderRouter:
         allowed_set = None
 
         if allowed:
-            allowed_set = {
-                str(p).upper()
-                for p in allowed
-            }
+            allowed_set = {str(p).upper().strip() for p in allowed}
 
         providers = []
 
@@ -99,18 +93,6 @@ class ProviderRouter:
                 continue
 
             providers.append(provider)
-        print("=== ROUTER STATE ===")
-
-        for p in self.providers.values():
-            print(
-                p.provider,
-                "enabled=",
-                getattr(p, "enabled", None),
-                "health=",
-                getattr(p, "health_score", None),
-                "cooldown=",
-                getattr(p, "cooldown_until", None),
-            )
 
         providers.sort(
             key=lambda p: p.health_score,
@@ -120,9 +102,9 @@ class ProviderRouter:
         return providers
 
     def mark_success(
-            self,
-            provider_name: str,
-            latency_ms: float = 0,
+        self,
+        provider_name: str,
+        latency_ms: float = 0,
     ):
         with self._lock:
             provider = self.get_provider(provider_name)
@@ -139,8 +121,8 @@ class ProviderRouter:
                     provider.avg_latency_ms = latency_ms
                 else:
                     provider.avg_latency_ms = (
-                            provider.avg_latency_ms * 0.90
-                            + latency_ms * 0.10
+                        provider.avg_latency_ms * 0.90
+                        + latency_ms * 0.10
                     )
 
             provider.health_score = min(
@@ -148,14 +130,9 @@ class ProviderRouter:
                 provider.health_score + 1.0,
             )
 
-            self.rate_manager.mark_success(
-                provider.provider
-            )
+            self.rate_manager.mark_success(provider.provider)
 
-    def mark_failure(
-            self,
-            provider_name: str,
-    ):
+    def mark_failure(self, provider_name: str):
         with self._lock:
             provider = self.get_provider(provider_name)
 
@@ -170,14 +147,12 @@ class ProviderRouter:
                 provider.health_score - 5.0,
             )
 
-            self.rate_manager.mark_failure(
-                provider.provider
-            )
+            self.rate_manager.mark_failure(provider.provider)
 
     def mark_rate_limited(
-            self,
-            provider_name: str,
-            cooldown_minutes: int = 15,
+        self,
+        provider_name: str,
+        cooldown_minutes: int = 15,
     ):
         with self._lock:
             provider = self.get_provider(provider_name)
@@ -187,10 +162,8 @@ class ProviderRouter:
 
             provider.rate_limit_count += 1
             provider.last_failure = datetime.now(UTC)
-
-            provider.cooldown_until = (
-                    datetime.now(UTC)
-                    + timedelta(minutes=cooldown_minutes)
+            provider.cooldown_until = datetime.now(UTC) + timedelta(
+                minutes=cooldown_minutes
             )
 
             provider.health_score = max(
@@ -205,13 +178,11 @@ class ProviderRouter:
 
     def disable_provider(self, provider_name: str):
         provider = self.get_provider(provider_name)
-
         if provider:
             provider.enabled = False
 
     def enable_provider(self, provider_name: str):
         provider = self.get_provider(provider_name)
-
         if provider:
             provider.enabled = True
 
@@ -221,7 +192,7 @@ class ProviderRouter:
         if not provider:
             return
 
-        provider.health_score = 100
+        provider.health_score = 100.0
         provider.cooldown_until = None
         provider.failure_count = 0
         provider.rate_limit_count = 0
@@ -230,28 +201,25 @@ class ProviderRouter:
         rows = []
 
         for p in self.providers.values():
-            rows.append({
-                "provider": p.provider,
-                "enabled": p.enabled,
-                "health_score": round(p.health_score, 2),
-                "success_count": p.success_count,
-                "failure_count": p.failure_count,
-                "rate_limit_count": p.rate_limit_count,
-                "avg_latency_ms": round(p.avg_latency_ms, 2),
-                "cooldown_until": p.cooldown_until,
-                "last_success": p.last_success,
-                "last_failure": p.last_failure,
-            })
+            rows.append(
+                {
+                    "provider": p.provider,
+                    "enabled": p.enabled,
+                    "health_score": round(p.health_score, 2),
+                    "success_count": p.success_count,
+                    "failure_count": p.failure_count,
+                    "rate_limit_count": p.rate_limit_count,
+                    "avg_latency_ms": round(p.avg_latency_ms, 2),
+                    "cooldown_until": p.cooldown_until,
+                    "last_success": p.last_success,
+                    "last_failure": p.last_failure,
+                }
+            )
 
         return rows
 
-
-_router: Optional[ProviderRouter] = None
-def get_provider_snapshot(self):
-    snapshot = []
-
-    for p in self.providers.values():
-        snapshot.append(
+    def get_provider_snapshot(self):
+        return [
             {
                 "provider": p.provider,
                 "enabled": p.enabled,
@@ -264,9 +232,12 @@ def get_provider_snapshot(self):
                 "last_success": p.last_success,
                 "last_failure": p.last_failure,
             }
-        )
+            for p in self.providers.values()
+        ]
 
-    return snapshot
+
+_router: Optional[ProviderRouter] = None
+
 
 def get_provider_router() -> ProviderRouter:
     global _router
@@ -292,4 +263,3 @@ def is_rate_limit_error(error: Exception | str) -> bool:
     ]
 
     return any(m in msg for m in markers)
-

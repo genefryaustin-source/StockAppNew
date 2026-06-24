@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+from datetime import datetime, timedelta, UTC
 
 from sqlalchemy import text
 
@@ -75,6 +76,11 @@ def render_analytics_freshness_dashboard(db, user):
     role = user.get("role")
     tenant_id = user.get("tenant_id")
 
+    # NOW() - (n || ' days')::interval is Postgres-only syntax (string concat
+    # + interval cast); SQLite has neither. Compute the cutoff once here in
+    # Python and bind it as a plain literal -- works identically on both.
+    freshness_cutoff = datetime.now(UTC) - timedelta(days=FRESHNESS_DAYS)
+
     if role == "super_admin":
         universe_sql = """
         WITH latest_analytics AS (
@@ -100,7 +106,7 @@ def render_analytics_freshness_dashboard(db, user):
 
             COUNT(
                 DISTINCT CASE
-                    WHEN la.latest_asof >= NOW() - (:freshness_days || ' days')::interval
+                    WHEN la.latest_asof >= :freshness_cutoff
                     THEN us.symbol
                 END
             ) AS fresh_symbols,
@@ -115,7 +121,7 @@ def render_analytics_freshness_dashboard(db, user):
             COUNT(
                 DISTINCT CASE
                     WHEN la.symbol IS NOT NULL
-                     AND la.latest_asof < NOW() - (:freshness_days || ' days')::interval
+                     AND la.latest_asof < :freshness_cutoff
                     THEN us.symbol
                 END
             ) AS stale_symbols,
@@ -146,7 +152,7 @@ def render_analytics_freshness_dashboard(db, user):
 
         universe_rows = db.execute(
             text(universe_sql),
-            {"freshness_days": FRESHNESS_DAYS},
+            {"freshness_cutoff": freshness_cutoff},
         ).fetchall()
 
     else:
@@ -174,7 +180,7 @@ def render_analytics_freshness_dashboard(db, user):
 
             COUNT(
                 DISTINCT CASE
-                    WHEN la.latest_asof >= NOW() - (:freshness_days || ' days')::interval
+                    WHEN la.latest_asof >= :freshness_cutoff
                     THEN us.symbol
                 END
             ) AS fresh_symbols,
@@ -189,7 +195,7 @@ def render_analytics_freshness_dashboard(db, user):
             COUNT(
                 DISTINCT CASE
                     WHEN la.symbol IS NOT NULL
-                     AND la.latest_asof < NOW() - (:freshness_days || ' days')::interval
+                     AND la.latest_asof < :freshness_cutoff
                     THEN us.symbol
                 END
             ) AS stale_symbols,
@@ -223,7 +229,7 @@ def render_analytics_freshness_dashboard(db, user):
             text(universe_sql),
             {
                 "tenant_id": tenant_id,
-                "freshness_days": FRESHNESS_DAYS,
+                "freshness_cutoff": freshness_cutoff,
             },
         ).fetchall()
 
@@ -400,13 +406,12 @@ def render_analytics_freshness_dashboard(db, user):
     )
     SELECT
         us.symbol,
-        la.latest_asof,
-        DATE_PART('day', NOW() - la.latest_asof) AS days_old
+        la.latest_asof
     FROM universe_symbols us
     JOIN latest_analytics la
         ON la.symbol = us.symbol
     WHERE us.universe_id = :universe_id
-      AND la.latest_asof < NOW() - (:freshness_days || ' days')::interval
+      AND la.latest_asof < :freshness_cutoff
     ORDER BY la.latest_asof ASC, us.symbol
     """
 
@@ -422,7 +427,7 @@ def render_analytics_freshness_dashboard(db, user):
         us.symbol,
         la.latest_asof,
         CASE
-            WHEN la.latest_asof >= NOW() - (:freshness_days || ' days')::interval
+            WHEN la.latest_asof >= :freshness_cutoff
             THEN 'FRESH'
             ELSE 'STALE'
         END AS analytics_state
@@ -442,7 +447,7 @@ def render_analytics_freshness_dashboard(db, user):
         text(stale_sql),
         {
             "universe_id": selected_universe_id,
-            "freshness_days": FRESHNESS_DAYS,
+            "freshness_cutoff": freshness_cutoff,
         },
     ).fetchall()
 
@@ -450,7 +455,7 @@ def render_analytics_freshness_dashboard(db, user):
         text(present_sql),
         {
             "universe_id": selected_universe_id,
-            "freshness_days": FRESHNESS_DAYS,
+            "freshness_cutoff": freshness_cutoff,
         },
     ).fetchall()
 
@@ -461,8 +466,18 @@ def render_analytics_freshness_dashboard(db, user):
 
     stale_df = _rows_to_df(
         stale_rows,
-        ["symbol", "latest_asof", "days_old"],
-    ).rename(
+        ["symbol", "latest_asof"],
+    )
+
+    if not stale_df.empty:
+        stale_df["days_old"] = (
+            pd.to_datetime(datetime.now(UTC))
+            - pd.to_datetime(stale_df["latest_asof"], utc=True, errors="coerce")
+        ).dt.days
+    else:
+        stale_df["days_old"] = pd.Series(dtype="float64")
+
+    stale_df = stale_df.rename(
         columns={
             "symbol": "Symbol",
             "latest_asof": "Latest Analytics AsOf",

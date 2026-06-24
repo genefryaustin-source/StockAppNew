@@ -26,6 +26,33 @@ def create_watchlist(db, tenant_id, name, created_by_user_id=None):
 
 
 # -----------------------------------------------------
+# DELETE WATCHLIST
+# -----------------------------------------------------
+
+def delete_watchlist(db, tenant_id, watchlist_id):
+    """Deletes a watchlist and all of its items (cascade is configured on
+    the Watchlist.items relationship, so this also removes the child
+    WatchlistItem rows). Returns True if something was actually deleted.
+    """
+    wl = (
+        db.query(Watchlist)
+        .filter(
+            Watchlist.id == watchlist_id,
+            Watchlist.tenant_id == tenant_id,
+        )
+        .first()
+    )
+
+    if wl is None:
+        return False
+
+    db.delete(wl)
+    db.commit()
+
+    return True
+
+
+# -----------------------------------------------------
 # LIST WATCHLISTS
 # -----------------------------------------------------
 

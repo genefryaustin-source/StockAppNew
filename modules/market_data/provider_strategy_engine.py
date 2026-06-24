@@ -24,13 +24,14 @@ DEFAULT_STRATEGIES: Dict[str, List[str]] = {
         "POLYGON",
         "MARKETDATA",
         "ALPHA_VANTAGE",
-        "YAHOO",
     ],
     REQUEST_LATEST_PRICE: [
-        "FINNHUB",
         "POLYGON",
-        "YAHOO",
+        "MARKETDATA",
+        "ALPHA_VANTAGE",
+        "FINNHUB",
     ],
+
     REQUEST_FUNDAMENTALS: [
         "FINNHUB",
         "FMP",
@@ -69,14 +70,10 @@ class ProviderStrategyEngine:
                 "POLYGON",
                 "MARKETDATA",
                 "ALPHA_VANTAGE",
-                "YAHOO",
-                "FINNHUB",
+                        "FINNHUB",
             ],
         )
-        print(
-            "STRATEGY PROVIDERS:",
-            base
-        )
+
         if db is None:
             return base
 

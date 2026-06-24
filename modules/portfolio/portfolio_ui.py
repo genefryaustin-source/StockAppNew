@@ -10,14 +10,16 @@ from modules.portfolio.pnl_dashboard import render_pnl_dashboard
 from modules.portfolio.portfolio_assignment_service import PortfolioAssignmentService
 from modules.portfolio.pdf_reporting_service import PDFReportingService
 from models.trading import PortfolioPosition, TradeOrder
-
+from modules.trading_intelligence.recommendation_command_center_dashboard import (
+    render_recommendation_command_center_dashboard,
+)
 
 def render_portfolio_ui(db_session, user, market_data_service):
     try:
         db_session.rollback()
     except Exception:
         pass
-    print("🔥 NEW PORTFOLIO UI LOADED")
+
 
     role = (user.get("role") or "").lower()
     user_id = user.get("user_id")
@@ -123,29 +125,44 @@ def render_portfolio_ui(db_session, user, market_data_service):
     # =====================================================
     # SERVICES
     # =====================================================
-    nav_service = NavService(db_session, market_data_service)
+    if "nav_service" not in st.session_state:
+        st.session_state.nav_service = NavService(
+            db_session,
+            market_data_service
+        )
+
+    nav_service = st.session_state.nav_service
     accounting = AccountingService(db_session)
     reporting = ReportingService()
 
     # =====================================================
-    # TABS
+    # WORKSPACE NAVIGATION
     # =====================================================
     if role == "client":
-        tab_overview, tab_reports = st.tabs(["📊 Overview", "📄 Reports"])
-        tab_trading = tab_performance = None
+        workspace = st.radio(
+            "Portfolio Workspace",
+            ["📊 Overview", "📄 Reports"],
+            horizontal=True,
+            key=f"portfolio_workspace_{portfolio_id}",
+        )
     else:
-        tab_overview, tab_trading, tab_performance, tab_intelligence, tab_reports = st.tabs([
-            "📊 Overview",
-            "💼 Trading",
-            "📈 Performance",
-            "🧠 Intelligence",
-            "📄 Reports"
-        ])
+        workspace = st.radio(
+            "Portfolio Workspace",
+            [
+                "📊 Overview",
+                "💼 Trading",
+                "📈 Performance",
+                "🧠 Intelligence",
+                "📄 Reports",
+            ],
+            horizontal=True,
+            key=f"portfolio_workspace_{portfolio_id}",
+        )
 
     # =====================================================
     # 📊 OVERVIEW
     # =====================================================
-    with tab_overview:
+    if workspace == "📊 Overview":
 
         st.subheader("Overview")
 
@@ -183,9 +200,6 @@ def render_portfolio_ui(db_session, user, market_data_service):
         except Exception as e:
             st.error(f"NAV error: {e}")
 
-        except Exception as e:
-            st.error(f"NAV error: {e}")
-
         try:
             rows = db_session.execute(text("""
                 SELECT symbol, qty, market_value, unrealized_pnl
@@ -203,20 +217,41 @@ def render_portfolio_ui(db_session, user, market_data_service):
     # =====================================================
     # 💼 TRADING
     # =====================================================
-    if tab_trading:
-        with tab_trading:
-            render_trading_ui(
+    if workspace == "💼 Trading":
+        # -------------------------------------------------
+        # AI STOCK TRADE RECOMMENDATIONS
+        # -------------------------------------------------
+        # This does not replace the existing trading ticket. It scans
+        # analytics_snapshots, creates a recommended paper-trade setup,
+        # and executes through the existing OrderService/trade_orders flow.
+        try:
+            from modules.trading_intelligence.recommendation_ui import (
+                render_trade_recommendation_center,
+            )
+
+            render_trade_recommendation_center(
                 db_session=db_session,
                 market_data_service=market_data_service,
                 portfolio_id=portfolio_id,
-                user_id=user_id
+                tenant_id=tenant_id,
+                user_id=user_id,
             )
+            st.divider()
+        except Exception as e:
+            st.warning(f"AI stock recommendations unavailable: {e}")
+
+        render_trading_ui(
+            db_session=db_session,
+            market_data_service=market_data_service,
+            portfolio_id=portfolio_id,
+            nav_service=nav_service,
+            user_id=user_id
+        )
 
     # =====================================================
     # 📈 PERFORMANCE
     # =====================================================
-    if tab_performance:
-        with tab_performance:
+    if workspace == "📈 Performance":
             render_pnl_dashboard(
                 db_session=db_session,
                 portfolio_id=portfolio_id
@@ -225,7 +260,7 @@ def render_portfolio_ui(db_session, user, market_data_service):
     # =====================================================
     # 📄 REPORTS
     # =====================================================
-    with tab_reports:
+    if workspace == "📄 Reports":
 
         st.subheader("📄 Reports")
 
@@ -287,9 +322,27 @@ def render_portfolio_ui(db_session, user, market_data_service):
     # =====================================================
     # 🧠 PORTFOLIO INTELLIGENCE (SNAPSHOT-BASED)
     # =====================================================
-    with tab_intelligence:
+    if workspace == "🧠 Intelligence":
 
         st.subheader("🧠 Portfolio Intelligence")
+
+        # =====================================================
+        # 🤖 TRADING INTELLIGENCE COMMAND CENTER
+        # =====================================================
+
+       #try:
+
+            #st.markdown("## 🤖 Trading Intelligence")
+
+            #render_recommendation_command_center_dashboard(
+                #db=db_session,
+                #portfolio_id=portfolio_id,
+            #)
+
+            #st.divider()
+
+
+
 
         # ── Daily Portfolio Digest ────────────────────────────
         try:
@@ -440,7 +493,18 @@ def render_portfolio_ui(db_session, user, market_data_service):
 
             if df["weight"].max() > 0.25:
                 st.warning("Single position exceeds 25%")
+            try:
+                db_session.execute(text("SELECT 1"))
+            except Exception as e:
 
+                st.error(
+                    f"Database transaction already failed BEFORE Benchmark section:\n\n{e}"
+                )
+
+                try:
+                    db_session.rollback()
+                except Exception:
+                    pass
             # ---------------------------------
             # 🧠 BENCHMARK INSIGHT (FINAL CLEAN FIX)
             # ---------------------------------
@@ -501,9 +565,6 @@ def render_portfolio_ui(db_session, user, market_data_service):
         st.markdown("### Contribution to Return")
 
         try:
-            # ---------------------------------
-            # LOAD POSITIONS
-            # ---------------------------------
             rows = db_session.execute(
                 text("""
                     SELECT
@@ -526,62 +587,65 @@ def render_portfolio_ui(db_session, user, market_data_service):
 
             symbols = df_pos["symbol"].tolist()
 
-            # ---------------------------------
-            # BUILD PRICE MATRIX
-            # ---------------------------------
-            price_data = {}
-            for sym in symbols:
-                hist = nav_service._safe_get_price_history(sym, period="6mo")
-
-                if hist is not None and not hist.empty:
-                    price_data[sym] = hist.set_index("Date")["Close"]
-
-            if not price_data:
-                st.warning("No price data available for contribution")
-                st.stop()
-
-            price_matrix = pd.concat(price_data, axis=1)
-            price_matrix = price_matrix.sort_index().ffill().dropna()
-
-            # ---------------------------------
-            # RETURNS
-            # ---------------------------------
-            returns = price_matrix.pct_change().fillna(0)
-
-            # ---------------------------------
-            # ALIGN WEIGHTS
-            # ---------------------------------
-            weights = df_pos.set_index("symbol")["weight"]
-
-            # ensure columns match
-            returns = returns[weights.index.intersection(returns.columns)]
-
-            # ---------------------------------
-            # CONTRIBUTION CALC
-            # ---------------------------------
-            contrib = returns.mul(weights, axis=1)
-
-            # cumulative contribution
-            total_contrib = contrib.sum()
-
-            contrib_df = pd.DataFrame({
-                "symbol": total_contrib.index,
-                "contribution": total_contrib.values
-            }).sort_values("contribution", ascending=True)
-
-            # ---------------------------------
-            # DISPLAY
-            # ---------------------------------
-            st.dataframe(contrib_df)
-
-            st.bar_chart(
-                contrib_df.set_index("symbol")["contribution"]
-            )
-
         except Exception as e:
-            st.error(f"Contribution error: {e}")
+            st.error(f"Contribution setup error: {e}")
 
-        # ---------------------------------
+
+
+        # --------------------------------- # ---------------------------------
+        #             # BUILD PRICE MATRIX
+        #             # ---------------------------------
+        #             price_data = {}
+        #             for sym in symbols:
+        #                 hist = nav_service._safe_get_price_history(sym, period="6mo")
+        #
+        #                 if hist is not None and not hist.empty:
+        #                     price_data[sym] = hist.set_index("Date")["Close"]
+        #
+        #             if not price_data:
+        #                 st.warning("No price data available for contribution")
+        #                 st.stop()
+        #
+        #             price_matrix = pd.concat(price_data, axis=1)
+        #             price_matrix = price_matrix.sort_index().ffill().dropna()
+        #
+        #             # ---------------------------------
+        #             # RETURNS
+        #             # ---------------------------------
+        #             returns = price_matrix.pct_change().fillna(0)
+        #
+        #             # ---------------------------------
+        #             # ALIGN WEIGHTS
+        #             # ---------------------------------
+        #             weights = df_pos.set_index("symbol")["weight"]
+        #
+        #             # ensure columns match
+        #             returns = returns[weights.index.intersection(returns.columns)]
+        #
+        #             # ---------------------------------
+        #             # CONTRIBUTION CALC
+        #             # ---------------------------------
+        #             contrib = returns.mul(weights, axis=1)
+        #
+        #             # cumulative contribution
+        #             total_contrib = contrib.sum()
+        #
+        #             contrib_df = pd.DataFrame({
+        #                 "symbol": total_contrib.index,
+        #                 "contribution": total_contrib.values
+        #             }).sort_values("contribution", ascending=True)
+        #
+        #             # ---------------------------------
+        #             # DISPLAY
+        #             # ---------------------------------
+        #             st.dataframe(contrib_df)
+        #
+        #             st.bar_chart(
+        #                 contrib_df.set_index("symbol")["contribution"]
+        #             )
+        #
+        #         except Exception as e:
+        #             st.error(f"Contribution error: {e}")
         # 📊 BENCHMARK-RELATIVE CONTRIBUTION
         # ---------------------------------
         st.markdown("### Benchmark-Relative Contribution")

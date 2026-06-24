@@ -103,8 +103,15 @@ def _safe_price_from_quote(quote) -> float | None:
 # Render
 # -------------------------
 
-def render_trading_ui(db_session, market_data_service, portfolio_id: int, user_id: int | None = None,
-                      risk_report_df=None, alert_service=None):
+def render_trading_ui(
+    db_session,
+    market_data_service,
+    portfolio_id: int,
+    nav_service,
+    user_id: int | None = None,
+    risk_report_df=None,
+    alert_service=None
+):
     # ── Session recovery — clears broken transactions from duplicate price inserts
     try:
         from sqlalchemy import text as _sql_check
@@ -499,18 +506,22 @@ def render_trading_ui(db_session, market_data_service, portfolio_id: int, user_i
     # ---------------------------------
     # 🔥 BENCHMARK LOAD + METRICS
     # ---------------------------------
-    nav_service = NavService(db_session, market_data_service)
+
 
     bench = None
     benchmark_metrics = None
 
     try:
         bench = nav_service.get_benchmark_history(symbol="SPY", days=180)
-        benchmark_metrics = nav_service.compute_benchmark_metrics(
-            portfolio_id=portfolio_id,
-            benchmark_symbol="SPY",
-            days=180,
-        )
+        if "benchmark_metrics" not in st.session_state:
+            st.session_state.benchmark_metrics = (
+                nav_service.compute_benchmark_metrics(
+                    portfolio_id=portfolio_id,
+                    benchmark_symbol="SPY"
+                )
+            )
+
+        benchmark_metrics = st.session_state.benchmark_metrics
     except Exception as e:
         print("Benchmark load error:", e)
 
@@ -1372,7 +1383,10 @@ def render_trading_ui(db_session, market_data_service, portfolio_id: int, user_i
     st.divider()
     st.header("Alpha Engine")
 
-    alpha = AlphaEngine(market_data_service=market_data_service)
+    alpha = AlphaEngine(
+        db=db_session,
+        market_data_service=market_data_service,
+    )
 
     alpha_mode = st.selectbox(
         "Alpha Universe Source",

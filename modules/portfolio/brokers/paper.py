@@ -13,13 +13,20 @@ from modules.portfolio.accounting_service import AccountingService
 class PaperBroker(BrokerBase):
     name = "paper"
 
-    def __init__(self, position_store=None, cash: float = 100000.0):
+    def __init__(
+            self,
+            position_store=None,
+            cash: float = 100000.0,
+            market_data_service=None,
+    ):
         self.position_store = position_store
         self.cash = float(cash)
-        self._orders = {}
 
-        # ✅ NEW: track positions internally (non-breaking)
-        self._positions = {}  # { symbol: { qty, avg_price } }
+        # compatibility with broker factory
+        self.market_data_service = market_data_service
+
+        self._orders = {}
+        self._positions = {}
 
     def _normalize(self, symbol: str) -> str:
         return str(symbol).upper().strip()

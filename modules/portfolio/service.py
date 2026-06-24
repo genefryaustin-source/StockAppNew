@@ -40,7 +40,7 @@ def create_portfolio(db, tenant_id, name):
             "benchmark": "SPY",
             "base_currency": "USD",
             "starting_cash": 100000.0,
-            "is_active": 1,
+            "is_active": True,
             "created_at": datetime.now(UTC),
             "updated_at": datetime.now(UTC),
         },
@@ -68,21 +68,32 @@ def list_portfolios(db, tenant_id):
 
 
 def add_position(db, tenant_id, portfolio_id, symbol, quantity, cost_basis):
-
+    # NOTE: portfolio_positions has no tenant_id/created_at columns and uses
+    # an autoincrement integer `id` -- tenant scoping happens one level up,
+    # via portfolio_id -> portfolios.tenant_id. `tenant_id` is accepted here
+    # only to keep the call signature stable for existing/future callers.
+    #
+    # market_price/market_value/unrealized_pnl/realized_pnl are NOT NULL on
+    # this table with Python-side defaults -- those defaults only apply via
+    # the ORM, not raw text() SQL, so they must be supplied explicitly here.
     db.execute(
         text("""
         INSERT INTO portfolio_positions
-        (id, tenant_id, portfolio_id, symbol, quantity, cost_basis, created_at)
-        VALUES (:id, :tenant_id, :portfolio_id, :symbol, :quantity, :cost_basis, :created_at)
+        (portfolio_id, symbol, qty, avg_cost,
+         market_price, market_value, unrealized_pnl, realized_pnl, updated_at)
+        VALUES (:portfolio_id, :symbol, :qty, :avg_cost,
+                :market_price, :market_value, :unrealized_pnl, :realized_pnl, :updated_at)
         """),
         {
-            "id": str(uuid.uuid4()),
-            "tenant_id": tenant_id,
             "portfolio_id": portfolio_id,
             "symbol": symbol,
-            "quantity": quantity,
-            "cost_basis": cost_basis,
-            "created_at": datetime.now(UTC),
+            "qty": quantity,
+            "avg_cost": cost_basis,
+            "market_price": 0.0,
+            "market_value": 0.0,
+            "unrealized_pnl": 0.0,
+            "realized_pnl": 0.0,
+            "updated_at": datetime.now(UTC),
         },
     )
 
@@ -94,7 +105,7 @@ def list_positions(db, portfolio_id):
 
     rows = db.execute(
         text("""
-        SELECT symbol, quantity, cost_basis
+        SELECT symbol, qty AS quantity, avg_cost AS cost_basis
         FROM portfolio_positions
         WHERE portfolio_id = :portfolio_id
         """),

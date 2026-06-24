@@ -94,6 +94,13 @@ def render_ai_rankings(db, user, price_data):
         else:
             st.warning("No sector column found in snapshots")
 
+    if snapshot_df is None or snapshot_df.empty:
+        st.warning(
+            "No analytics snapshots available yet for this tenant. "
+            "Populate a universe and run analytics before AI Rankings can run."
+        )
+        return
+
     # DEBUG
     st.write("SECTOR MAP SIZE:", len(sector_map))
 

@@ -8,6 +8,7 @@ from modules.portfolio.accounting_service import AccountingService
 from modules.portfolio.pdf_reporting_service import PDFReportingService
 
 def render_reporting_ui(
+    db_session,
     portfolio_id,
     totals,
     health,
@@ -15,18 +16,12 @@ def render_reporting_ui(
     sleeve_df,
     trades_df,
     risk_df,
+    nav_service,
+    accounting_service,
 ):
-
     st.header("Investor Reporting Engine")
 
-    service = ReportingService()
-
-
-    nav_service = NavService(db_session, market_data_service)
-    accounting_service = AccountingService(db_session)
     reporting_service = ReportingService()
-    nav_service = NavService(db_session, market_data_service)
-    accounting_service = AccountingService(db_session)
 
     pdf_service = PDFReportingService(
         db_session,
@@ -35,11 +30,11 @@ def render_reporting_ui(
         reporting_service
     )
 
-    summary = service.build_portfolio_summary(totals, health)
-    positions = service.build_positions_report(df_pos)
-    strategies = service.build_strategy_report(sleeve_df)
-    trades = service.build_trade_blotter(trades_df)
-    risk = service.build_risk_report(risk_df)
+    summary = reporting_service.build_portfolio_summary(totals, health)
+    positions = reporting_service.build_positions_report(df_pos)
+    strategies = reporting_service.build_strategy_report(sleeve_df)
+    trades = reporting_service.build_trade_blotter(trades_df)
+    risk = reporting_service.build_risk_report(risk_df)
 
     # ---------------------------------
     # SUMMARY

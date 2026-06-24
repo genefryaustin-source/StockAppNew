@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 import streamlit as st
+from sqlalchemy import text
 
 try:
     import plotly.graph_objects as go
@@ -39,7 +40,12 @@ from modules.options.options_ai import (
     detect_unusual_contracts,
 )
 from modules.options.options_broker import AlpacaOptionsBroker, OptionsOrderRequest
-from modules.options.options_models import ensure_tables, save_order, get_order_history
+from modules.options.options_models import (
+    ensure_tables,
+    save_order,
+    get_order_history,
+    sync_option_orders,
+)
 from modules.options.options_workstation_ui import render_full_options_workstation
 from modules.options.options_intelligence_dashboard import render_options_intelligence_dashboard
 from modules.options.options_flow_intelligence_dashboard import render_flow_intelligence_dashboard
@@ -178,15 +184,155 @@ from modules.options.options_autonomous_income_management_dashboard import (
 from modules.options.options_institutional_cio_dashboard import (
     render_institutional_options_cio_dashboard,
 )
-
-
-
+from modules.options.options_validation_dashboard import (
+    render_options_validation_dashboard,
+)
+from modules.options.options_greeks_validation_dashboard import (
+    render_options_greeks_validation_dashboard,
+)
+from modules.options.options_pricing_validation_dashboard import (
+    render_options_pricing_validation_dashboard,
+)
+from modules.options.options_volatility_validation_dashboard import (
+    render_options_volatility_validation_dashboard,
+)
+from modules.options.options_liquidity_validation_dashboard import (
+    render_options_liquidity_validation_dashboard
+)
+from modules.options.options_validation_center_dashboard import (
+    render_options_validation_center_dashboard,
+)
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
 CALL_CLR = "#1D9E75"
 PUT_CLR  = "#E24B4A"
 NAVY     = "#1F3864"
 BLUE     = "#2E75B6"
+
+
+# ── Provider-call protection / session cache ──────────────────────────────────
+# The Options page has many subcomponents. Without a session cache, one page
+# render can call the provider router several times (chain viewer, order ticket,
+# IV surface, AI, etc.). These helpers keep each ticker/expiration fetch to one
+# provider call per TTL unless the user explicitly refreshes.
+OPTIONS_CHAIN_CACHE_TTL_SECONDS = 5 * 60
+
+
+def _chain_cache_key(ticker: str, expiration: str | None = None) -> str:
+    base = str(ticker or "").upper().strip()
+    exp = str(expiration or "nearest")[:10]
+    return f"opt_chain_cache::{base}::{exp}"
+
+
+def _clear_chain_cache(ticker: str) -> None:
+    prefix = f"opt_chain_cache::{str(ticker or '').upper().strip()}::"
+    legacy_key = f"opt_chain_{str(ticker or '').upper().strip()}"
+    for key in list(st.session_state.keys()):
+        if str(key).startswith(prefix) or key == legacy_key:
+            del st.session_state[key]
+
+
+def _load_options_chain_cached(
+    ticker: str,
+    expiration: str | None = None,
+    force_refresh: bool = False,
+) -> dict:
+    ticker = str(ticker or "").upper().strip()
+    cache_key = _chain_cache_key(ticker, expiration)
+    now = datetime.now(timezone.utc).timestamp()
+
+    cached = st.session_state.get(cache_key)
+    if (
+        not force_refresh
+        and isinstance(cached, dict)
+        and isinstance(cached.get("data"), dict)
+        and now - float(cached.get("ts", 0)) < OPTIONS_CHAIN_CACHE_TTL_SECONDS
+    ):
+        return cached["data"]
+
+    print("=" * 100)
+    print("OPTIONS UI CALLING get_options_chain")
+    print("TICKER:", ticker)
+    print("EXPIRATION:", expiration)
+    print("=" * 100)
+
+    if expiration:
+        from modules.options.options_provider_router import get_options_chain_from_router
+
+        data = get_options_chain_from_router(
+            ticker=ticker,
+            expiration=str(expiration)[:10],
+            force_refresh=force_refresh,
+        )
+    else:
+        data = get_options_chain(ticker)
+
+    st.session_state[cache_key] = {
+        "ts": now,
+        "data": data,
+    }
+
+    # Backward-compatible key for older functions/modules that still look here.
+    if expiration is None:
+        st.session_state[f"opt_chain_{ticker}"] = data
+
+    return data
+
+
+def _get_chain_data_for_expiry(
+    ticker: str,
+    expiry: str,
+    base_chain_data: dict | None,
+) -> dict:
+    """Return chain data for an expiry while avoiding duplicate provider calls."""
+    expiry = str(expiry or "")[:10]
+    base_chain_data = base_chain_data or {}
+    chain = base_chain_data.get("chain", {}) if isinstance(base_chain_data, dict) else {}
+
+    if expiry and isinstance(chain, dict) and expiry in chain:
+        exp_chain = chain.get(expiry) or {}
+        calls = exp_chain.get("calls", pd.DataFrame())
+        puts = exp_chain.get("puts", pd.DataFrame())
+        if (
+            isinstance(calls, pd.DataFrame)
+            and isinstance(puts, pd.DataFrame)
+            and (not calls.empty or not puts.empty)
+        ):
+            return base_chain_data
+
+    if expiry:
+        return _load_options_chain_cached(ticker, expiration=expiry)
+
+    return base_chain_data
+
+
+def _iv_surface_from_chain_data(chain_data: dict | None) -> pd.DataFrame:
+    if not isinstance(chain_data, dict):
+        return pd.DataFrame()
+
+    df = chain_data.get("all_rows", pd.DataFrame())
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    if "type" not in df.columns or "iv" not in df.columns:
+        return pd.DataFrame()
+
+    calls = df[df["type"].astype(str).str.lower().eq("call")].dropna(
+        subset=["dte", "strike", "iv"]
+    )
+    if calls.empty:
+        return pd.DataFrame()
+
+    try:
+        pivot = calls.pivot_table(
+            index="dte",
+            columns="strike",
+            values="iv",
+            aggfunc="mean",
+        )
+        return pivot.sort_index()
+    except Exception:
+        return pd.DataFrame()
 
 
 def render_options_trading_page(db, user: dict):
@@ -198,19 +344,31 @@ def render_options_trading_page(db, user: dict):
 
     col_sym, col_mode = st.columns([3, 2])
     with col_sym:
-        ticker = st.text_input("Underlying symbol", value="SPY",
-                                key="opt_ticker", placeholder="SPY, AAPL, NVDA…"
-                               ).upper().strip()
+        ticker = st.text_input(
+            "Underlying symbol",
+            value="SPY",
+            key="opt_ticker",
+            placeholder="SPY, AAPL, NVDA…",
+        ).upper().strip()
     with col_mode:
         st.write("")
-        paper = st.toggle("📄 Paper Trading", value=True, key="opt_paper",
-                          help="Paper = Alpaca paper account. Disable for live trading.")
+        paper = st.toggle(
+            "📄 Paper Trading",
+            value=True,
+            key="opt_paper",
+            help="Paper = Alpaca paper account. Disable for live trading.",
+        )
         if not paper:
             st.warning("⚠️ LIVE TRADING MODE — real money orders")
 
     if not ticker:
         st.info("Enter a ticker to begin.")
         return
+
+    # Single base chain load for the full page render. Every downstream panel
+    # receives this object instead of calling the provider router again.
+    with st.spinner(f"Loading options chain for {ticker}..."):
+        chain_data = _load_options_chain_cached(ticker)
 
     # ============================================================================
     # OPTIONS OPERATING SYSTEM NAVIGATION
@@ -223,19 +381,12 @@ def render_options_trading_page(db, user: dict):
             "🧠 Intelligence",
             "🏛 Institutional",
             "⚙️ Execution",
+            "📋 Full Validation",
         ],
         horizontal=True,
         key="options_section",
         label_visibility="collapsed",
     )
-
-    chain_key = f"opt_chain_{ticker}"
-    chain_data = st.session_state.get(chain_key)
-
-    if not chain_data:
-        with st.spinner(f"Loading options chain for {ticker}..."):
-            chain_data = get_options_chain(ticker)
-            st.session_state[chain_key] = chain_data
 
     # ============================================================================
     # TRADING WORKSPACE
@@ -249,15 +400,17 @@ def render_options_trading_page(db, user: dict):
                 "📊 Chain",
                 "🎯 Trade",
                 "📈 Positions",
+                "📋 Orders",
                 "🏗 Builder",
                 "💰 P&L",
+
             ],
             horizontal=True,
             label_visibility="collapsed",
         )
 
         if workspace == "📊 Chain":
-            _render_chain_viewer(ticker)
+            _render_chain_viewer(ticker, chain_data)
 
         elif workspace == "🎯 Trade":
             _render_order_ticket(
@@ -266,6 +419,7 @@ def render_options_trading_page(db, user: dict):
                 tenant_id,
                 user_id,
                 paper,
+                chain_data,
             )
 
         elif workspace == "📈 Positions":
@@ -275,11 +429,20 @@ def render_options_trading_page(db, user: dict):
                 paper,
             )
 
+        elif workspace == "📋 Orders":
+            _render_order_management(
+                db=db,
+                tenant_id=tenant_id,
+                paper=paper,
+                expanded=True,
+            )
+
         elif workspace == "🏗 Builder":
             _render_strategy_builder(ticker)
 
         elif workspace == "💰 P&L":
             _render_pnl_calculator(ticker)
+
 
 
 
@@ -315,103 +478,50 @@ def render_options_trading_page(db, user: dict):
             _render_ai_analysis(
                 ticker,
                 paper,
+                chain_data,
             )
 
         elif workspace == "🧠 Intelligence":
-            render_options_intelligence_dashboard(
-                ticker,
-                chain_data,
-            )
+            render_options_intelligence_dashboard(ticker, chain_data)
 
         elif workspace == "🌊 Flow":
-            render_flow_intelligence_dashboard(
-                ticker,
-                chain_data,
-            )
+            render_flow_intelligence_dashboard(ticker, chain_data)
 
         elif workspace == "🏦 Market Maker":
-            render_market_maker_intelligence_dashboard(
-                ticker,
-                chain_data,
-            )
+            render_market_maker_intelligence_dashboard(ticker, chain_data)
 
         elif workspace == "🏛 Dealer Positioning":
-            render_dealer_positioning_dashboard(
-                ticker=ticker,
-                paper=paper,
-                chain_data=chain_data,
-            )
+            render_dealer_positioning_dashboard(ticker=ticker, paper=paper, chain_data=chain_data)
 
         elif workspace == "⚛ Gamma Exposure":
-            render_gamma_exposure_dashboard(
-                ticker=ticker,
-                paper=paper,
-                chain_data=chain_data,
-            )
+            render_gamma_exposure_dashboard(ticker=ticker, paper=paper, chain_data=chain_data)
 
         elif workspace == "🌊 Dealer Hedging Flow":
-            render_dealer_hedging_flow_dashboard(
-                ticker=ticker,
-                paper=paper,
-                chain_data=chain_data,
-            )
-
-
+            render_dealer_hedging_flow_dashboard(ticker=ticker, paper=paper, chain_data=chain_data)
 
         elif workspace == "🏪 Liquidity Providers":
-            render_liquidity_provider_dashboard(
-                ticker=ticker,
-                paper=paper,
-                chain_data=chain_data,
-            )
+            render_liquidity_provider_dashboard(ticker=ticker, paper=paper, chain_data=chain_data)
 
         elif workspace == "🏦 MM Command":
-            render_market_maker_command_center_dashboard(
-                ticker=ticker,
-                paper=paper,
-                chain_data=chain_data,
-            )
+            render_market_maker_command_center_dashboard(ticker=ticker, paper=paper, chain_data=chain_data)
 
         elif workspace == "🌪 Volatility":
-            render_volatility_intelligence_dashboard(
-                ticker,
-                chain_data,
-            )
+            render_volatility_intelligence_dashboard(ticker, chain_data)
 
         elif workspace == "🌋 Vol Surface":
-            render_volatility_surface_dashboard(
-                ticker=ticker,
-                paper=paper,
-                chain_data=chain_data,
-            )
+            render_volatility_surface_dashboard(ticker=ticker, paper=paper, chain_data=chain_data)
 
         elif workspace == "📡 Vol Regime":
-            render_volatility_regime_dashboard(
-                ticker=ticker,
-                paper=paper,
-                chain_data=chain_data,
-            )
+            render_volatility_regime_dashboard(ticker=ticker, paper=paper, chain_data=chain_data)
+
         elif workspace == "🧱 Term Structure":
-            render_term_structure_dashboard(
-                ticker=ticker,
-                paper=paper,
-                chain_data=chain_data,
-            )
+            render_term_structure_dashboard(ticker=ticker, paper=paper, chain_data=chain_data)
 
         elif workspace == "⚡ Skew":
-            render_skew_dashboard(
-                ticker=ticker,
-                paper=paper,
-                chain_data=chain_data,
-            )
+            render_skew_dashboard(ticker=ticker, paper=paper, chain_data=chain_data)
+
         elif workspace == "🏦 Vol Command":
-            render_volatility_command_center_dashboard(
-                ticker=ticker,
-                paper=paper,
-                chain_data=chain_data,
-            )
-
-
+            render_volatility_command_center_dashboard(ticker=ticker, paper=paper, chain_data=chain_data)
 
     # ============================================================================
     # INSTITUTIONAL WORKSPACE
@@ -455,157 +565,61 @@ def render_options_trading_page(db, user: dict):
         )
 
         if workspace == "🏦 Command Center":
-            render_portfolio_command_center_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
+            render_portfolio_command_center_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🏢 Operations":
-            render_institutional_operations_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_institutional_operations_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🧠 Portfolio Optimization AI":
-            render_portfolio_optimization_ai_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_portfolio_optimization_ai_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🤖 Trade Selection":
-            render_autonomous_trade_selection_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_autonomous_trade_selection_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🧭 Risk Rebalancing":
-            render_autonomous_risk_rebalancing_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_autonomous_risk_rebalancing_dashboard(ticker=ticker, paper=paper)
         elif workspace == "💰 Auto Income":
-            render_autonomous_income_management_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_autonomous_income_management_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🏛 CIO Dashboard":
-            render_institutional_options_cio_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_institutional_options_cio_dashboard(ticker=ticker, paper=paper)
         elif workspace == "💰 Income Command":
-            render_income_command_center_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
+            render_income_command_center_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🛡 Portfolio Risk":
-            render_portfolio_risk_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_portfolio_risk_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🔥 Stress Testing":
-            render_stress_testing_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_stress_testing_dashboard(ticker=ticker, paper=paper)
         elif workspace == "📈 Greeks":
-            render_greeks_exposure_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
+            render_greeks_exposure_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🚦 Guardrails":
-            render_risk_guardrails_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_risk_guardrails_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🏗 Construction":
-            render_portfolio_construction_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
+            render_portfolio_construction_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🔄 Lifecycle":
-            render_position_lifecycle_dashboard(
-                ticker=ticker,
-                paper=paper,
-        )
-
+            render_position_lifecycle_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🔁 Rolling":
-            render_roll_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
+            render_roll_dashboard(ticker=ticker, paper=paper)
         elif workspace == "💵 Income":
-            render_income_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_income_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🛞 Wheel":
-            render_wheel_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_wheel_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🏭 Covered Call Factory":
-            render_covered_call_factory_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_covered_call_factory_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🏦 Cash Secured Put Factory":
-            render_cash_secured_put_factory_dashboard(
-                ticker=ticker,
-                paper=paper,
-                chain_data=chain_data,
-            )
-
+            render_cash_secured_put_factory_dashboard(ticker=ticker, paper=paper, chain_data=chain_data)
         elif workspace == "⏳ Assignment":
-            render_assignment_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_assignment_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🛡 Hedging":
-            render_portfolio_hedging_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
-
-
+            render_portfolio_hedging_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🧭 Dynamic Risk":
-            render_dynamic_risk_adjustment_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_dynamic_risk_adjustment_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🌐 Cross Asset":
             render_cross_asset_exposure_dashboard()
-
         elif workspace == "🤖 Auto Manager":
-            render_autonomous_portfolio_manager_dashboard(
-                ticker=ticker,
-                paper=paper,
-            )
-
+            render_autonomous_portfolio_manager_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🏭 Strategy Factory":
-            render_strategy_factory_dashboard(
-                ticker,
-                chain_data,
-            )
-
+            render_strategy_factory_dashboard(ticker, chain_data)
         elif workspace == "🚀 Workstation":
-            render_full_options_workstation(
-                ticker,
-                paper,
-            )
+            render_full_options_workstation(ticker, paper)
 
-
+    # ============================================================================
+    # EXECUTION
+    # ============================================================================
     elif section == "⚙️ Execution":
 
         workspace = st.radio(
@@ -624,52 +638,76 @@ def render_options_trading_page(db, user: dict):
         )
 
         if workspace == "⚙️ Execution Quality":
-            render_execution_quality_dashboard(
-                db=db,
-                tenant_id=tenant_id,
-            )
-
+            render_execution_quality_dashboard(db=db, tenant_id=tenant_id)
         elif workspace == "💧 Liquidity":
-            render_liquidity_intelligence_dashboard(
-                ticker=ticker,
-                chain_data=chain_data,
-            )
-
+            render_liquidity_intelligence_dashboard(ticker=ticker, chain_data=chain_data)
         elif workspace == "📏 Position Sizing":
             render_position_sizing_dashboard()
-
-
         elif workspace == "💼 Capital Allocation":
             render_capital_allocation_dashboard()
-
         elif workspace == "🎯 Trade Optimization":
             render_trade_optimization_dashboard()
-
         elif workspace == "📋 Trade Planner":
             render_institutional_trade_planner_dashboard()
 
+
+    # ============================================================================
+    # VALIDATION
+    # ============================================================================
+    elif section == "📋 Full Validation":
+
+        workspace = st.radio(
+            "Validation Workspace",
+            [
+                "📋 Full Validation",
+                "📈 Greeks Audit",
+                "💵 Pricing Audit",
+                "🌊 Volatility Validation",
+                "💧 Liquidity Audit",
+            ],
+            horizontal=True,
+            key="options_execution_workspace",
+            label_visibility="collapsed",
+        )
+
+        if workspace == "📋 Full Validation":
+            render_options_validation_center_dashboard()
+
+        elif workspace == "📈 Greeks Audit":
+            render_options_greeks_validation_dashboard()
+
+        elif workspace == "💵 Pricing Audit":
+            render_options_pricing_validation_dashboard()
+
+        elif workspace == "🌊 Volatility Validation":
+            render_options_volatility_validation_dashboard()
+
+        elif workspace == "💧 Liquidity Audit":
+            render_options_liquidity_validation_dashboard()
+
 # ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — CHAIN VIEWER# ══════════════════════════════════════════════════════════════════════════════
 # TAB 1 — CHAIN VIEWER
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _render_chain_viewer(ticker: str):
+def _render_chain_viewer(ticker: str, chain_data: dict | None = None):
     st.subheader(f"📊 Options Chain — {ticker}")
-    st.caption("Live chain from MarketData.app · Greeks · IV · Open Interest")
+    st.caption("Cached provider chain · Greeks · IV · Open Interest")
 
-    cache_key = f"opt_chain_{ticker}"
     col_r, col_f = st.columns([1, 4])
     with col_r:
-        if st.button("↺ Refresh", key="chain_refresh"):
-            if cache_key in st.session_state:
-                del st.session_state[cache_key]
+        if st.button("↺ Refresh", key=f"chain_refresh_{ticker}"):
+            _clear_chain_cache(ticker)
+            chain_data = _load_options_chain_cached(ticker, force_refresh=True)
+            st.rerun()
 
-    if cache_key not in st.session_state:
-        with st.spinner(f"Loading options chain for {ticker}…"):
-            st.session_state[cache_key] = get_options_chain(ticker)
+    data = chain_data or _load_options_chain_cached(ticker)
 
-    data = st.session_state[cache_key]
+    if not isinstance(data, dict):
+        st.error("Options chain provider returned an invalid response.")
+        return
 
-    if "error" in data:
+    if data.get("error") and not data.get("chain"):
         st.error(data["error"])
         return
 
@@ -678,42 +716,46 @@ def _render_chain_viewer(ticker: str):
         st.warning("No expirations found.")
         return
 
-    # ── Expiry selector ───────────────────────────────────────
     with col_f:
         sel_exp = st.selectbox(
             "Expiration",
             expirations,
             format_func=lambda x: f"{x}  ({_dte(x)}d)",
-            key="chain_exp",
+            key=f"chain_exp_{ticker}",
         )
 
-    chain = data["chain"].get(sel_exp, {})
-    calls = chain.get("calls", pd.DataFrame())
-    puts  = chain.get("puts",  pd.DataFrame())
+    selected_data = _get_chain_data_for_expiry(ticker, sel_exp, data)
+    chain = selected_data.get("chain", {}).get(sel_exp, {}) if isinstance(selected_data, dict) else {}
+    calls = chain.get("calls", pd.DataFrame()) if isinstance(chain, dict) else pd.DataFrame()
+    puts  = chain.get("puts",  pd.DataFrame()) if isinstance(chain, dict) else pd.DataFrame()
 
-    # ── Summary metrics ───────────────────────────────────────
-    all_rows = data.get("all_rows", pd.DataFrame())
-    if not all_rows.empty:
-        total_vol = int(all_rows["volume"].fillna(0).sum())
-        total_oi  = int(all_rows["open_interest"].fillna(0).sum())
-        avg_iv    = all_rows["iv"].dropna().mean()
-        pcr = (
-            all_rows[all_rows["type"]=="put"]["volume"].fillna(0).sum() /
-            max(1, all_rows[all_rows["type"]=="call"]["volume"].fillna(0).sum())
-        )
-        c1,c2,c3,c4,c5 = st.columns(5)
-        c1.metric("Expirations",  len(expirations))
+    all_rows = selected_data.get("all_rows", pd.DataFrame()) if isinstance(selected_data, dict) else pd.DataFrame()
+    if all_rows is not None and not all_rows.empty:
+        total_vol = int(all_rows.get("volume", pd.Series(dtype=float)).fillna(0).sum())
+        total_oi  = int(all_rows.get("open_interest", pd.Series(dtype=float)).fillna(0).sum())
+        avg_iv    = all_rows.get("iv", pd.Series(dtype=float)).dropna().mean()
+        call_vol = all_rows[all_rows["type"] == "call"]["volume"].fillna(0).sum() if "type" in all_rows.columns and "volume" in all_rows.columns else 0
+        put_vol = all_rows[all_rows["type"] == "put"]["volume"].fillna(0).sum() if "type" in all_rows.columns and "volume" in all_rows.columns else 0
+        pcr = put_vol / max(1, call_vol)
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Expirations", len(expirations))
         c2.metric("Total Volume", f"{total_vol:,}")
-        c3.metric("Open Interest",f"{total_oi:,}")
-        c4.metric("Avg IV",       f"{avg_iv*100:.1f}%" if avg_iv else "—")
-        c5.metric("Put/Call Vol", f"{pcr:.2f}",
-                  delta="Bearish" if pcr > 1.2 else "Bullish" if pcr < 0.7 else "Neutral",
-                  delta_color="inverse" if pcr > 1.2 else "normal" if pcr < 0.7 else "off")
+        c3.metric("Open Interest", f"{total_oi:,}")
+        c4.metric("Avg IV", f"{avg_iv*100:.1f}%" if pd.notna(avg_iv) else "—")
+        c5.metric(
+            "Put/Call Vol",
+            f"{pcr:.2f}",
+            delta="Bearish" if pcr > 1.2 else "Bullish" if pcr < 0.7 else "Neutral",
+            delta_color="inverse" if pcr > 1.2 else "normal" if pcr < 0.7 else "off",
+        )
 
-    # ── Calls / Puts tabs ─────────────────────────────────────
     tab_c, tab_p, tab_surface = st.tabs(["Calls", "Puts", "IV Surface"])
 
-    display_cols = ["strike","last","bid","ask","volume","open_interest","iv","delta","gamma","theta","vega","option_symbol"]
+    display_cols = [
+        "strike", "last", "bid", "ask", "volume", "open_interest", "iv",
+        "delta", "gamma", "theta", "vega", "option_symbol",
+    ]
 
     with tab_c:
         if not calls.empty:
@@ -728,7 +770,7 @@ def _render_chain_viewer(ticker: str):
             st.info("No put data for this expiry.")
 
     with tab_surface:
-        _render_iv_surface(ticker)
+        _render_iv_surface(ticker, selected_data)
 
 
 def _render_chain_table(df: pd.DataFrame, opt_type: str, cols: list):
@@ -752,16 +794,22 @@ def _render_chain_table(df: pd.DataFrame, opt_type: str, cols: list):
     st.dataframe(styled, use_container_width=True, hide_index=True, height=380)
 
 
-def _render_iv_surface(ticker: str):
+def _render_iv_surface(ticker: str, chain_data: dict | None = None):
     st.markdown("#### IV Surface (Calls)")
     if not PLOTLY:
         st.info("Install plotly for IV surface chart.")
         return
-    with st.spinner("Building IV surface…"):
-        pivot = get_iv_surface(ticker)
+
+    pivot = _iv_surface_from_chain_data(chain_data)
+    if pivot.empty and chain_data is None:
+        # Last-resort legacy fallback. Normal page flow always passes chain_data.
+        with st.spinner("Building IV surface…"):
+            pivot = get_iv_surface(ticker)
+
     if pivot.empty:
         st.info("Not enough data for IV surface.")
         return
+
     try:
         dte_labels    = [str(d) for d in pivot.index.tolist()]
         strike_labels = [str(s) for s in pivot.columns.tolist()]
@@ -783,7 +831,7 @@ def _render_iv_surface(ticker: str):
             ),
             paper_bgcolor="#0F1117",
             height=450,
-            margin=dict(l=0,r=0,t=20,b=0),
+            margin=dict(l=0, r=0, t=20, b=0),
         )
         st.plotly_chart(fig, use_container_width=True)
     except Exception as e:
@@ -791,68 +839,81 @@ def _render_iv_surface(ticker: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — ORDER TICKET# ══════════════════════════════════════════════════════════════════════════════
 # TAB 2 — ORDER TICKET
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _render_order_ticket(db, ticker: str, tenant_id: str, user_id: str, paper: bool):
+def _render_order_ticket(
+    db,
+    ticker: str,
+    tenant_id: str,
+    user_id: str,
+    paper: bool,
+    chain_data: dict | None = None,
+):
     st.subheader(f"🎯 Options Order Ticket — {ticker}")
     mode_str = "📄 Paper" if paper else "⚡ Live"
     st.caption(f"Mode: **{mode_str}** · Alpaca options API · OCC contract format")
 
-    # Load chain for contract selector
-    chain_key = f"opt_chain_{ticker}"
-    if chain_key not in st.session_state:
-        with st.spinner("Loading chain…"):
-            st.session_state[chain_key] = get_options_chain(ticker)
-
-    data = st.session_state.get(chain_key, {})
-    expirations = data.get("expirations", [])
+    data = chain_data or _load_options_chain_cached(ticker)
+    expirations = data.get("expirations", []) if isinstance(data, dict) else []
 
     col1, col2 = st.columns(2)
 
     with col1:
         st.markdown("#### Contract Selection")
-        opt_type = st.radio("Type", ["Call", "Put"], horizontal=True,
-                            key="ot_type")
+        opt_type = st.radio("Type", ["Call", "Put"], horizontal=True, key="ot_type")
 
         if expirations:
-            expiry = st.selectbox("Expiration", expirations,
-                                   format_func=lambda x: f"{x} ({_dte(x)}d)",
-                                   key="ot_exp")
-            chain = data["chain"].get(expiry, {})
-            df    = chain.get("calls" if opt_type=="Call" else "puts", pd.DataFrame())
+            expiry = st.selectbox(
+                "Expiration",
+                expirations,
+                format_func=lambda x: f"{x} ({_dte(x)}d)",
+                key="ot_exp",
+            )
 
-            if not df.empty:
-                strikes = sorted(df["strike"].dropna().unique().tolist())
-                strike  = st.selectbox("Strike", strikes,
-                                        format_func=lambda x: f"${x:,.2f}",
-                                        key="ot_strike")
+            selected_chain = _get_chain_data_for_expiry(ticker, expiry, data)
+            chain = selected_chain.get("chain", {}).get(expiry, {}) if isinstance(selected_chain, dict) else {}
+            df = chain.get("calls" if opt_type == "Call" else "puts", pd.DataFrame()) if isinstance(chain, dict) else pd.DataFrame()
 
-                # Show contract details
-                row = df[df["strike"] == strike]
+            if not df.empty and "strike" in df.columns:
+                strikes = sorted(pd.to_numeric(df["strike"], errors="coerce").dropna().unique().tolist())
+                strike_key = f"ot_strike_{ticker}_{expiry}_{opt_type}"
+
+                strike = st.selectbox(
+                    "Strike",
+                    strikes,
+                    format_func=lambda x: f"${x:,.2f}",
+                    key=strike_key,
+                )
+
+                row = df[pd.to_numeric(df["strike"], errors="coerce") == float(strike)]
                 if not row.empty:
                     r = row.iloc[0]
-                    occ_symbol = str(r.get("option_symbol",""))
-                    bid = r.get("bid"); ask = r.get("ask")
-                    mid = round((bid+ask)/2, 2) if bid and ask else None
-                    iv  = r.get("iv"); delta = r.get("delta")
-                    theta = r.get("theta"); dte_val = r.get("dte")
+                    occ_symbol = str(r.get("option_symbol", ""))
+                    bid = r.get("bid")
+                    ask = r.get("ask")
+                    mid = r.get("mid")
+                    if (mid is None or pd.isna(mid)) and bid is not None and ask is not None and pd.notna(bid) and pd.notna(ask):
+                        mid = round((float(bid) + float(ask)) / 2, 2)
+                    iv = r.get("iv")
+                    delta = r.get("delta")
+                    theta = r.get("theta")
+                    dte_val = r.get("dte")
 
                     ca, cb, cc = st.columns(3)
-                    ca.metric("Bid", f"${bid:.2f}" if bid else "—")
-                    cb.metric("Ask", f"${ask:.2f}" if ask else "—")
-                    cc.metric("Mid", f"${mid:.2f}" if mid else "—")
+                    ca.metric("Bid", f"${float(bid):.2f}" if bid is not None and pd.notna(bid) else "—")
+                    cb.metric("Ask", f"${float(ask):.2f}" if ask is not None and pd.notna(ask) else "—")
+                    cc.metric("Mid", f"${float(mid):.2f}" if mid is not None and pd.notna(mid) else "—")
 
                     cd, ce, cf = st.columns(3)
-                    cd.metric("IV",    f"{iv*100:.1f}%"  if iv    else "—")
-                    ce.metric("Delta", f"{delta:.3f}"    if delta  else "—")
-                    cf.metric("Theta", f"{theta:.4f}"    if theta  else "—")
+                    cd.metric("IV", f"{float(iv)*100:.1f}%" if iv is not None and pd.notna(iv) else "—")
+                    ce.metric("Delta", f"{float(delta):.3f}" if delta is not None and pd.notna(delta) else "—")
+                    cf.metric("Theta", f"{float(theta):.4f}" if theta is not None and pd.notna(theta) else "—")
 
                     st.caption(f"Contract: `{occ_symbol}`  ·  DTE: {dte_val}")
 
-                    # AI Trade Thesis
-                    if st.button("🤖 AI Trade Thesis", key="ai_thesis_btn",
-                                  use_container_width=True):
+                    if st.button("🤖 AI Trade Thesis", key="ai_thesis_btn", use_container_width=True):
                         with st.spinner("Generating trade thesis…"):
                             thesis = generate_trade_thesis(
                                 ticker=ticker,
@@ -860,45 +921,64 @@ def _render_order_ticket(db, ticker: str, tenant_id: str, user_id: str, paper: b
                                 strike=float(strike),
                                 expiry=str(expiry),
                                 dte=int(dte_val or 0),
-                                iv=float(r.get("iv")) if r.get("iv") else None,
-                                delta=float(r.get("delta")) if r.get("delta") else None,
-                                theta=float(r.get("theta")) if r.get("theta") else None,
-                                bid=float(bid) if bid else None,
-                                ask=float(ask) if ask else None,
+                                iv=float(iv) if iv is not None and pd.notna(iv) else None,
+                                delta=float(delta) if delta is not None and pd.notna(delta) else None,
+                                theta=float(theta) if theta is not None and pd.notna(theta) else None,
+                                bid=float(bid) if bid is not None and pd.notna(bid) else None,
+                                ask=float(ask) if ask is not None and pd.notna(ask) else None,
                             )
                         st.session_state["ai_thesis_text"] = thesis
 
                     if st.session_state.get("ai_thesis_text"):
                         st.info(st.session_state["ai_thesis_text"])
+                else:
+                    strike = None
+                    occ_symbol = ""
+                    mid = None
+                    st.info("No contract row found for the selected strike.")
             else:
-                strike = None; occ_symbol = ""; mid = None
+                strike = None
+                occ_symbol = ""
+                mid = None
                 st.info("No contracts for this expiry.")
         else:
-            expiry = None; strike = None; occ_symbol = ""; mid = None
+            expiry = None
+            strike = None
+            occ_symbol = ""
+            mid = None
             st.warning("Chain not loaded — click Refresh on the Chain Viewer tab.")
 
     with col2:
         st.markdown("#### Order Details")
-        side = st.radio("Action", ["Buy to Open", "Sell to Open",
-                                   "Buy to Close", "Sell to Close"],
-                        key="ot_side")
+        side = st.radio(
+            "Action",
+            ["Buy to Open", "Sell to Open", "Buy to Close", "Sell to Close"],
+            key="ot_side",
+        )
         alpaca_side = "buy" if side.startswith("Buy") else "sell"
 
-        qty = st.number_input("Contracts", min_value=1, max_value=100,
-                               value=1, step=1, key="ot_qty",
-                               help="1 contract = 100 shares")
+        qty = st.number_input(
+            "Contracts",
+            min_value=1,
+            max_value=100,
+            value=1,
+            step=1,
+            key="ot_qty",
+            help="1 contract = 100 shares",
+        )
 
-        order_type = st.radio("Order Type", ["Limit", "Market"],
-                               horizontal=True, key="ot_order_type")
+        order_type = st.radio("Order Type", ["Limit", "Market"], horizontal=True, key="ot_order_type")
 
         limit_price = None
         if order_type == "Limit":
-            default_lp = mid or 1.0
+            default_lp = mid if mid is not None and pd.notna(mid) and float(mid) > 0 else 1.0
             limit_price = st.number_input(
                 "Limit Price (per share)",
                 value=float(default_lp),
-                min_value=0.01, step=0.01, format="%.2f",
-                key="ot_limit"
+                min_value=0.01,
+                step=0.01,
+                format="%.2f",
+                key="ot_limit",
             )
             if qty and limit_price:
                 st.caption(
@@ -908,13 +988,13 @@ def _render_order_ticket(db, ticker: str, tenant_id: str, user_id: str, paper: b
 
         tif = st.selectbox("Time in Force", ["day", "gtc"], key="ot_tif")
 
-        # ── Submit ────────────────────────────────────────────
         st.markdown("---")
         col_sub, col_info = st.columns([1, 2])
         with col_sub:
             submit = st.button(
                 f"{'📄' if paper else '⚡'} Submit Order",
-                type="primary", key="ot_submit",
+                type="primary",
+                key="ot_submit",
                 use_container_width=True,
                 disabled=not bool(occ_symbol),
             )
@@ -925,10 +1005,18 @@ def _render_order_ticket(db, ticker: str, tenant_id: str, user_id: str, paper: b
                 st.caption("Select a contract to enable order submission.")
 
         if submit and occ_symbol:
+            position_intent_map = {
+                "Buy to Open": "buy_to_open",
+                "Sell to Open": "sell_to_open",
+                "Buy to Close": "buy_to_close",
+                "Sell to Close": "sell_to_close",
+            }
+
             req = OptionsOrderRequest(
                 option_symbol=occ_symbol,
                 qty=int(qty),
                 side=alpaca_side,
+                position_intent=position_intent_map.get(side, "buy_to_open"),
                 order_type=order_type.lower(),
                 tif=tif,
                 limit_price=limit_price,
@@ -940,27 +1028,24 @@ def _render_order_ticket(db, ticker: str, tenant_id: str, user_id: str, paper: b
             if resp.status == "error":
                 st.error(f"❌ Order failed: {resp.error}")
             else:
-                st.success(
-                    f"✅ Order submitted — ID: `{resp.order_id}` "
-                    f"Status: **{resp.status}**"
-                )
+                st.success(f"✅ Order submitted — ID: `{resp.order_id}` Status: **{resp.status}**")
                 ensure_tables(db)
                 save_order(db, tenant_id, user_id, req, resp)
-                # Clear positions cache
                 for k in list(st.session_state.keys()):
-                    if "opt_pos" in k: del st.session_state[k]
+                    if "opt_pos" in k or k == "opt_positions":
+                        del st.session_state[k]
 
-    # ── Order History ─────────────────────────────────────────
-    with st.expander("📋 Recent Orders", expanded=False):
-        ensure_tables(db)
-        history = get_order_history(db, tenant_id, limit=20)
-        if history:
-            st.dataframe(pd.DataFrame(history), use_container_width=True, hide_index=True)
-        else:
-            st.caption("No orders placed yet.")
+    _render_order_management(
+        db=db,
+        tenant_id=tenant_id,
+        paper=paper,
+        expanded=False,
+        limit=20,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — POSITIONS# ══════════════════════════════════════════════════════════════════════════════
 # TAB 3 — POSITIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1084,6 +1169,187 @@ def _render_positions(db, tenant_id: str, paper: bool):
         st.caption("Click 'AI Risk Scan' to analyze your portfolio risk.")
 
     _render_order_history_compact(db, tenant_id)
+
+
+ACTIVE_ORDER_STATUSES = {
+    "new",
+    "accepted",
+    "pending_new",
+    "partially_filled",
+    "pending_replace",
+    "pending_cancel",
+    "held",
+}
+
+
+def _sync_option_order_statuses(db, tenant_id: str, paper: bool) -> None:
+    """Refresh local option order statuses from Alpaca without breaking the UI."""
+    try:
+        ensure_tables(db)
+        broker = AlpacaOptionsBroker(paper=paper)
+        sync_option_orders(db, broker, tenant_id)
+    except Exception as exc:
+        st.warning(f"Order status sync unavailable: {exc}")
+
+
+def _fetch_option_order_rows(db, tenant_id: str, limit: int = 50) -> list[dict]:
+    """Read local option orders with broker IDs needed for cancel actions."""
+    ensure_tables(db)
+    try:
+        rows = db.execute(text("""
+            SELECT
+                id,
+                broker_order_id,
+                option_symbol,
+                side,
+                qty,
+                order_type,
+                limit_price,
+                status,
+                fill_price,
+                filled_qty,
+                error_msg,
+                created_at,
+                updated_at
+            FROM options_orders
+            WHERE tenant_id = :tid
+            ORDER BY created_at DESC
+            LIMIT :lim
+        """), {"tid": tenant_id, "lim": int(limit)}).fetchall()
+        return [dict(r._mapping) for r in rows]
+    except Exception as exc:
+        st.warning(f"Could not load option orders: {exc}")
+        return []
+
+
+def _mark_local_order_canceled(db, broker_order_id: str) -> None:
+    """Mark an order canceled locally after Alpaca accepts the cancel request."""
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        db.execute(text("""
+            UPDATE options_orders
+            SET
+                status = 'canceled',
+                updated_at = :updated_at
+            WHERE broker_order_id = :broker_order_id
+        """), {
+            "broker_order_id": broker_order_id,
+            "updated_at": now,
+        })
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _render_order_management(
+    db,
+    tenant_id: str,
+    paper: bool,
+    expanded: bool = True,
+    limit: int = 50,
+):
+    """Options order management with refresh and cancel controls."""
+    st.markdown("### 📋 Options Order Management")
+    st.caption("Sync Alpaca order status, review submitted orders, and cancel active working orders.")
+
+    c_refresh, c_info = st.columns([1, 4])
+    with c_refresh:
+        refresh = st.button(
+            "↺ Sync Orders",
+            key=f"options_orders_sync_{tenant_id}_{paper}_{expanded}",
+            use_container_width=True,
+        )
+    with c_info:
+        st.caption("Active statuses eligible for cancel: new, accepted, pending_new, partially_filled, held.")
+
+    if refresh:
+        _sync_option_order_statuses(db, tenant_id, paper)
+        st.success("Order statuses refreshed.")
+
+    # Always sync once before showing active controls so the cancel buttons reflect broker state.
+    _sync_option_order_statuses(db, tenant_id, paper)
+
+    orders = _fetch_option_order_rows(db, tenant_id, limit=limit)
+    if not orders:
+        st.caption("No option orders placed yet.")
+        return
+
+    df = pd.DataFrame(orders)
+    status_filter = st.multiselect(
+        "Status Filter",
+        sorted(df["status"].dropna().astype(str).unique().tolist()),
+        default=sorted(df["status"].dropna().astype(str).unique().tolist()),
+        key=f"options_orders_status_filter_{tenant_id}_{paper}_{expanded}",
+    )
+    if status_filter:
+        df = df[df["status"].astype(str).isin(status_filter)]
+
+    if df.empty:
+        st.info("No orders match the selected status filter.")
+        return
+
+    header = st.columns([2.7, 0.9, 0.7, 0.9, 1.0, 1.0, 1.0, 1.5, 1.0])
+    header[0].markdown("**Contract**")
+    header[1].markdown("**Side**")
+    header[2].markdown("**Qty**")
+    header[3].markdown("**Type**")
+    header[4].markdown("**Limit**")
+    header[5].markdown("**Status**")
+    header[6].markdown("**Filled**")
+    header[7].markdown("**Created**")
+    header[8].markdown("**Action**")
+
+    broker = AlpacaOptionsBroker(paper=paper)
+
+    for row in df.to_dict("records"):
+        broker_order_id = str(row.get("broker_order_id") or "")
+        status = str(row.get("status") or "").lower()
+        cols = st.columns([2.7, 0.9, 0.7, 0.9, 1.0, 1.0, 1.0, 1.5, 1.0])
+
+        cols[0].code(str(row.get("option_symbol") or ""), language=None)
+        cols[1].write(str(row.get("side") or ""))
+        cols[2].write(row.get("qty") if row.get("qty") is not None else "—")
+        cols[3].write(str(row.get("order_type") or ""))
+        lp = row.get("limit_price")
+        cols[4].write(f"${float(lp):.2f}" if lp is not None and pd.notna(lp) else "—")
+        cols[5].write(status or "—")
+        filled_qty = row.get("filled_qty")
+        fill_price = row.get("fill_price")
+        if filled_qty is not None and pd.notna(filled_qty):
+            filled_text = f"{float(filled_qty):g}"
+            if fill_price is not None and pd.notna(fill_price):
+                filled_text += f" @ ${float(fill_price):.2f}"
+            cols[6].write(filled_text)
+        else:
+            cols[6].write("—")
+        cols[7].write(str(row.get("created_at") or "")[:19])
+
+        can_cancel = bool(broker_order_id) and status in ACTIVE_ORDER_STATUSES
+        if can_cancel:
+            if cols[8].button(
+                "Cancel",
+                key=f"cancel_option_order_{broker_order_id}",
+                type="secondary",
+                use_container_width=True,
+            ):
+                ok = broker.cancel_order(broker_order_id)
+                if ok:
+                    _mark_local_order_canceled(db, broker_order_id)
+                    for k in list(st.session_state.keys()):
+                        if "opt_pos" in k or k == "opt_positions":
+                            del st.session_state[k]
+                    st.success(f"Cancel requested for {broker_order_id}.")
+                    st.rerun()
+                else:
+                    st.error(f"Cancel failed for {broker_order_id}. Refresh orders and verify status.")
+        else:
+            cols[8].caption("—")
+
+    with st.expander("Raw Order Records", expanded=False):
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
 
 def _render_order_history_compact(db, tenant_id: str):
@@ -1528,16 +1794,12 @@ def _render_pnl_calculator(ticker: str):
 # TAB 6 — AI ANALYSIS (Q&A + Flow Alerts)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _render_ai_analysis(ticker: str, paper: bool):
+def _render_ai_analysis(ticker: str, paper: bool, chain_data: dict | None = None):
     st.subheader(f"🤖 AI Options Analysis — {ticker}")
     st.caption("Chain Q&A · Unusual flow interpretation · AI-powered options intelligence")
 
-    # Load chain for context
-    chain_key = f"opt_chain_{ticker}"
-    if chain_key not in st.session_state:
-        with st.spinner("Loading chain…"):
-            st.session_state[chain_key] = get_options_chain(ticker)
-    chain_data = st.session_state.get(chain_key, {})
+    # Reuse the page-level chain cache; do not call providers again here.
+    chain_data = chain_data or _load_options_chain_cached(ticker)
 
     tab_qa, tab_flow = st.tabs(["💬 Chain Q&A", "🌊 Flow Alerts"])
 

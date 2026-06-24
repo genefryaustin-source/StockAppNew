@@ -29,6 +29,26 @@ from modules.admin.analytics_freshness_dashboard import (
 from modules.ui.admin.provider_operations_dashboard import (
     render_provider_operations_dashboard,
 )
+from modules.ui.admin.trading_intelligence_validation_center import (
+    render_trading_intelligence_validation_center,
+)
+
+from modules.equities_validation_dashboard import (
+    render_equities_validation_dashboard,
+)
+
+from modules.options.options_validation_center_dashboard import (
+    render_options_validation_center_dashboard,
+)
+from modules.portfolio.portfolio_validation_dashboard import (
+    render_portfolio_validation_dashboard,
+)
+from modules.providers.provider_validation_dashboard import (
+    render_provider_validation_dashboard,
+)
+from modules.platform.platform_validation_dashboard import (
+    render_platform_validation_dashboard,
+)
 
 # ---------------------------------------------------------
 # ACTIVE TENANT
@@ -119,6 +139,8 @@ def render_admin_panel(db, user):
         provider_health_tab,
         provider_operations_tab,
         analytics_freshness_tab,
+        trading_intelligence_validation_center_tab,
+        platform_validation_tab,
 
     ) = st.tabs([
         "👤 Users",
@@ -128,6 +150,8 @@ def render_admin_panel(db, user):
         "🔌 Provider Health",
         "🚀 Provider Operations",
         "📊 Universe Analytics",
+        "🎯 Trading Intelligence Val Center",
+        "✅ PlatformValidation",
     ])
 
     # =========================================================
@@ -460,6 +484,91 @@ def render_admin_panel(db, user):
             db=db,
             user=user,
         )
+
+
+
+    with trading_intelligence_validation_center_tab:
+
+        portfolio_row = db.execute(
+            text("""
+                SELECT id
+                FROM portfolios
+                WHERE is_active = TRUE
+                ORDER BY created_at
+                LIMIT 1
+            """)
+        ).fetchone()
+
+        if portfolio_row:
+
+            render_trading_intelligence_validation_center(
+                db=db,
+                portfolio_id=str(portfolio_row[0]),
+                user=user,
+            )
+
+        else:
+
+            st.warning(
+                "No active portfolio found."
+            )
+
+    # =========================================================
+    # PLATFORM VALIDATION CENTER
+    # =========================================================
+
+    with platform_validation_tab:
+
+        validation_workspace = st.radio(
+            "Validation Workspace",
+            [
+                "📈 Equities",
+                "📊 Options",
+                "₿ Crypto",
+                "💼 Portfolio",
+                "🔌 Providers",
+            ],
+            horizontal=True,
+            key="platform_validation_workspace",
+        )
+        render_platform_validation_dashboard(
+            db=db,
+            tenant_id=tenant_id,
+        )
+        if validation_workspace == "📈 Equities":
+
+            render_equities_validation_dashboard(
+                db=db,
+                tenant_id=tenant_id,
+            )
+
+        elif validation_workspace == "📊 Options":
+
+            render_options_validation_center_dashboard()
+
+        elif validation_workspace == "₿ Crypto":
+
+            st.info("Crypto Validation Center coming next.")
+
+
+        elif validation_workspace == "💼 Portfolio":
+
+            render_portfolio_validation_dashboard(
+
+                db=db,
+
+                tenant_id=tenant_id,
+
+            )
+
+        elif validation_workspace == "🔌 Providers":
+
+            render_provider_validation_dashboard(
+                db=db,
+
+            )
+
+
 
 # ─────────────────────────────────────────────────────────────
 # Plan Management Tab — inline within admin_ui

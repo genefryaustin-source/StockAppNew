@@ -6,6 +6,7 @@ from modules.institutional.watchlists import (
     add_symbol,
     remove_symbol,
     list_symbols,
+    delete_watchlist,
 )
 
 
@@ -44,12 +45,55 @@ def render_watchlists(db, user):
 
     watchlist_map = {w.name: w.id for w in watchlists}
 
-    selected_name = st.selectbox(
-        "Select Watchlist",
-        list(watchlist_map.keys())
-    )
+    col_select, col_delete = st.columns([4, 1])
+
+    with col_select:
+        selected_name = st.selectbox(
+            "Select Watchlist",
+            list(watchlist_map.keys())
+        )
 
     watchlist_id = watchlist_map[selected_name]   # ✅ FIX
+
+    with col_delete:
+        st.write("")  # align with the selectbox
+        if st.button("🗑️ Delete", key="delete_current_watchlist", use_container_width=True):
+            st.session_state["confirm_delete_watchlist"] = watchlist_id
+
+    if st.session_state.get("confirm_delete_watchlist") == watchlist_id:
+        st.warning(f"Delete watchlist **{selected_name}** and all its symbols? This can't be undone.")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Yes, delete it", key="confirm_delete_yes", use_container_width=True):
+                delete_watchlist(db, tenant_id, watchlist_id)
+                st.session_state["confirm_delete_watchlist"] = None
+                st.success(f"Deleted '{selected_name}'.")
+                st.rerun()
+        with c2:
+            if st.button("Cancel", key="confirm_delete_cancel", use_container_width=True):
+                st.session_state["confirm_delete_watchlist"] = None
+                st.rerun()
+
+    # ---------------------------------------------------
+    # BULK CLEANUP (delete several at once)
+    # ---------------------------------------------------
+
+    with st.expander("Manage / clean up watchlists", expanded=False):
+        st.caption("Select one or more watchlists to delete in bulk.")
+
+        to_delete = st.multiselect(
+            "Watchlists to delete",
+            list(watchlist_map.keys()),
+            key="bulk_delete_select",
+        )
+
+        if to_delete and st.button(
+            f"🗑️ Delete {len(to_delete)} selected", key="bulk_delete_confirm"
+        ):
+            for name in to_delete:
+                delete_watchlist(db, tenant_id, watchlist_map[name])
+            st.success(f"Deleted {len(to_delete)} watchlist(s).")
+            st.rerun()
 
     # ---------------------------------------------------
     # ADD SYMBOL

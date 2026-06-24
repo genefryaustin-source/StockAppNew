@@ -371,18 +371,14 @@ def enhance_rankings_with_ai(
 
     for row in rows:
 
-        ai_score = compute_ai_adjusted_score(row)
-
         symbol = getattr(row, "symbol", "")
+        ai_score = compute_ai_adjusted_score(row)
+        rationale = build_ai_rationale(row, ai_score)
 
         # -----------------------------------
         # NEWS SENTIMENT OVERLAY
         # -----------------------------------
-
-        if (
-                ai_score is not None
-                and sentiment_overlay
-        ):
+        if ai_score is not None and sentiment_overlay:
             sent_adj = sentiment_overlay.get(
                 symbol,
                 0.0,
@@ -394,85 +390,33 @@ def enhance_rankings_with_ai(
                 ),
                 4,
             )
-        ai_confidence = compute_ai_confidence(row)
 
-        output.append(
-            AIRankedRow(
-                symbol=getattr(row, "symbol", ""),
-                sector=getattr(row, "sector", "Unknown"),
-                base_composite=_safe_float(getattr(row, "composite", None)),
-                base_confidence=_safe_float(getattr(row, "confidence", None)),
-                ai_score=ai_score,
-                ai_confidence=ai_confidence,
-                rating=getattr(row, "rating", None),
+            if abs(sent_adj) > 0.05:
+                direction = (
+                    "positive"
+                    if sent_adj > 0
+                    else "negative"
+                )
 
-                factor_summary=build_factor_summary(row),
-                bull_thesis=build_bull_thesis(row),
-                bear_thesis=build_bear_thesis(row),
-                risk_notes=build_risk_notes(row),
-                ai_rationale=build_ai_rationale(
-                    row,
-                    ai_score,
-                ),
+                rationale += (
+                    f" News sentiment overlay provided "
+                    f"a {direction} adjustment."
+                )
 
-                quality=_safe_float(getattr(row, "quality", None)),
-                growth=_safe_float(getattr(row, "growth", None)),
-                value=_safe_float(getattr(row, "value", None)),
-                momentum=_safe_float(getattr(row, "momentum", None)),
-                risk=_safe_float(getattr(row, "risk", None)),
-            )
-        )
-    if sentiment_overlay:
-
-        sent_adj = sentiment_overlay.get(
-            symbol,
-            0.0,
-        )
-
-        if abs(sent_adj) > 0.05:
-            direction = (
-                "positive"
-                if sent_adj > 0
-                else "negative"
-            )
-
-            output[-1].ai_rationale += (
-                f" News sentiment overlay "
-                f"provided a {direction} "
-                f"adjustment."
-            )
-    output.sort(
-        key=lambda r: (
-            r.ai_score if r.ai_score is not None else -9999,
-            r.ai_confidence if r.ai_confidence is not None else -9999,
-        ),
-        reverse=True,
-    )
-    # -----------------------------------
-    # EARNINGS NLP OVERLAY
-    # -----------------------------------
-
-    if (
-            ai_score is not None
-            and earnings_overlay
-    ):
-        earn_adj = earnings_overlay.get(
-            symbol,
-            0.0,
-        )
-
-        ai_score = round(
-            _clamp(
-                ai_score + (earn_adj * 10.0)
-            ),
-            4,
-        )
-
-        if earnings_overlay:
-
+        # -----------------------------------
+        # EARNINGS NLP OVERLAY
+        # -----------------------------------
+        if ai_score is not None and earnings_overlay:
             earn_adj = earnings_overlay.get(
                 symbol,
                 0.0,
+            )
+
+            ai_score = round(
+                _clamp(
+                    ai_score + (earn_adj * 10.0)
+                ),
+                4,
             )
 
             if abs(earn_adj) > 0.05:
@@ -482,132 +426,97 @@ def enhance_rankings_with_ai(
                     else "negative"
                 )
 
-                output[-1].ai_rationale += (
+                rationale += (
                     f" Earnings NLP provided a "
                     f"{direction} executive-language "
                     f"adjustment."
                 )
+
         # -----------------------------------
         # ADAPTIVE FACTOR INTELLIGENCE
         # -----------------------------------
-
-        if (
-                ai_score is not None
-                and adaptive_weights is not None
-        ):
+        if ai_score is not None and adaptive_weights is not None:
             ai_score = adaptive_score_adjustment(
-
                 base_ai_score=ai_score,
-
                 factor_values={
-
-                    "quality":
-                        getattr(
-                            row,
-                            "quality",
-                            None,
-                        ),
-
-                    "growth":
-                        getattr(
-                            row,
-                            "growth",
-                            None,
-                        ),
-
-                    "value":
-                        getattr(
-                            row,
-                            "value",
-                            None,
-                        ),
-
-                    "momentum":
-                        getattr(
-                            row,
-                            "momentum",
-                            None,
-                        ),
-
-                    "risk":
-                        getattr(
-                            row,
-                            "risk",
-                            None,
-                        ),
-
-                    "sentiment":
-                        sentiment_overlay.get(
-                            symbol,
-                            0.0,
-                        ) if sentiment_overlay else 0.0,
-
-                    "earnings_nlp":
-                        earnings_overlay.get(
-                            symbol,
-                            0.0,
-                        ) if earnings_overlay else 0.0,
-
-                    "confidence":
-                        getattr(
-                            row,
-                            "confidence",
-                            None,
-                        ),
+                    "quality": getattr(row, "quality", None),
+                    "growth": getattr(row, "growth", None),
+                    "value": getattr(row, "value", None),
+                    "momentum": getattr(row, "momentum", None),
+                    "risk": getattr(row, "risk", None),
+                    "sentiment": sentiment_overlay.get(
+                        symbol,
+                        0.0,
+                    ) if sentiment_overlay else 0.0,
+                    "earnings_nlp": earnings_overlay.get(
+                        symbol,
+                        0.0,
+                    ) if earnings_overlay else 0.0,
+                    "confidence": getattr(row, "confidence", None),
                 },
-
                 weights=adaptive_weights,
             )
 
-        if adaptive_weights is not None:
-            output[-1].ai_rationale += (
+            rationale += (
                 f" Adaptive intelligence adjusted "
                 f"weights for the "
                 f"{adaptive_weights.regime} "
                 f"market regime."
             )
+
         # -----------------------------------
         # MULTI-AGENT CONSENSUS
         # -----------------------------------
-
-        if (
-                ai_score is not None
-                and consensus_overlay
-        ):
-            consensus_adj = (
-                consensus_overlay.get(
-                    symbol,
-                    0.0,
-                )
+        if ai_score is not None and consensus_overlay:
+            consensus_adj = consensus_overlay.get(
+                symbol,
+                0.0,
             )
 
             ai_score = round(
-
                 _clamp(
-                    ai_score + (
-                            consensus_adj * 15.0
-                    )
+                    ai_score + (consensus_adj * 15.0)
                 ),
-
                 4,
             )
 
-        if consensus_overlay:
-
-            consensus_adj = (
-                consensus_overlay.get(
-                    symbol,
-                    0.0,
-                )
-            )
-
             if abs(consensus_adj) > 0.05:
-                output[-1].ai_rationale += (
-                    f" Multi-agent research "
-                    f"consensus influenced the "
-                    f"final AI ranking."
+                rationale += (
+                    f" Multi-agent research consensus "
+                    f"influenced the final AI ranking."
                 )
 
+        ai_confidence = compute_ai_confidence(row)
+
+        output.append(
+            AIRankedRow(
+                symbol=symbol,
+                sector=getattr(row, "sector", "Unknown"),
+                base_composite=_safe_float(getattr(row, "composite", None)),
+                base_confidence=_safe_float(getattr(row, "confidence", None)),
+                ai_score=ai_score,
+                ai_confidence=ai_confidence,
+                rating=getattr(row, "rating", None),
+                factor_summary=build_factor_summary(row),
+                bull_thesis=build_bull_thesis(row),
+                bear_thesis=build_bear_thesis(row),
+                risk_notes=build_risk_notes(row),
+                ai_rationale=rationale,
+                quality=_safe_float(getattr(row, "quality", None)),
+                growth=_safe_float(getattr(row, "growth", None)),
+                value=_safe_float(getattr(row, "value", None)),
+                momentum=_safe_float(getattr(row, "momentum", None)),
+                risk=_safe_float(getattr(row, "risk", None)),
+            )
+        )
+
+    output.sort(
+        key=lambda r: (
+            r.ai_score if r.ai_score is not None else -9999,
+            r.ai_confidence if r.ai_confidence is not None else -9999,
+        ),
+        reverse=True,
+    )
 
     return output
 

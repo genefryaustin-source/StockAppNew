@@ -18,11 +18,14 @@ import streamlit as st
 @dataclass
 class OptionsOrderRequest:
     option_symbol: str    # OCC format: AAPL240119C00150000
-    qty:           int
-    side:          str    # buy | sell
-    order_type:    str = "limit"   # limit | market
-    tif:           str = "day"
-    limit_price:   Optional[float] = None
+    qty: int
+    side: str             # buy | sell
+
+    position_intent: str = "buy_to_open"
+
+    order_type: str = "limit"
+    tif: str = "day"
+    limit_price: Optional[float] = None
 
 
 @dataclass
@@ -39,17 +42,25 @@ class OptionsOrderResponse:
 
 @dataclass
 class OptionsPosition:
-    option_symbol:  str
-    underlying:     str
-    qty:            float
-    avg_cost:       float
-    market_value:   float
+    option_symbol: str
+    underlying: str
+    qty: float
+    avg_cost: float
+    market_value: float
     unrealized_pnl: float
-    expiry:         str = ""
-    strike:         float = 0.0
-    option_type:    str = ""  # call | put
-    dte:            int = 0
-    delta:          Optional[float] = None
+
+    expiry: str = ""
+    strike: float = 0.0
+    option_type: str = ""
+    dte: int = 0
+
+    delta: float = 0.0
+    gamma: float = 0.0
+    theta: float = 0.0
+    vega: float = 0.0
+    rho: float = 0.0
+
+    mark_price: float = 0.0
 
 
 class AlpacaOptionsBroker:
@@ -122,18 +133,140 @@ class AlpacaOptionsBroker:
     # ── Order submission ──────────────────────────────────────
     def submit_order(self, req: OptionsOrderRequest) -> OptionsOrderResponse:
         payload = {
-            "symbol":          req.option_symbol,
-            "qty":             str(req.qty),
-            "side":            req.side,
-            "type":            req.order_type,
-            "time_in_force":   req.tif,
-            "order_class":     "simple",
+            "symbol": req.option_symbol,
+            "qty": str(req.qty),
+            "side": req.side,
+            "type": req.order_type,
+            "time_in_force": req.tif,
+            "position_intent": req.position_intent,
         }
         if req.limit_price is not None:
             payload["limit_price"] = str(round(req.limit_price, 2))
 
+        # ==========================================================
+        # ALPACA ACCOUNT DEBUG
+        # ==========================================================
+
+        print("=" * 80)
+        print("ALPACA ENVIRONMENT")
+        print("=" * 80)
+        print("BASE URL:", self.base)
+        print("PAPER:", self.paper)
+        print("=" * 80)
+
+        acc = self.get_account()
+
+        print("=" * 80)
+        print("ALPACA ACCOUNT")
+        print("=" * 80)
+
+        for k in [
+            "status",
+            "trading_blocked",
+            "account_blocked",
+            "options_approved_level",
+            "options_trading_level",
+            "options_buying_power",
+        ]:
+            print(k, "=", acc.get(k))
+
+        print("=" * 80)
+
         try:
+            pos_resp = requests.get(
+                f"{self.base}/v2/positions",
+                headers=self.headers,
+                timeout=15,
+            )
+
+            print("=" * 80)
+            print("ALPACA POSITIONS RAW")
+            print("STATUS:", pos_resp.status_code)
+            print("=" * 80)
+
+            positions = pos_resp.json()
+
+            for p in positions:
+                print(
+                    "SYMBOL =", repr(p.get("symbol")),
+                    "QTY =", repr(p.get("qty")),
+                    "SIDE =", repr(p.get("side")),
+                    "ASSET_CLASS =", repr(p.get("asset_class"))
+                )
+
+        except Exception as e:
+            print("POSITION CHECK FAILED:", e)
+
+        print("=" * 80)
+        print("REQUEST SYMBOL")
+        print("=" * 80)
+        print(repr(req.option_symbol))
+        print("=" * 80)
+
+        try:
+            print("=" * 80)
+            print("ALPACA OPEN POSITIONS")
+            print("=" * 80)
+
+            try:
+                pos_resp = requests.get(
+                    f"{self.base}/v2/positions",
+                    headers=self.headers,
+                    timeout=15,
+                )
+
+                print("STATUS:", pos_resp.status_code)
+
+                if pos_resp.status_code == 200:
+                    positions = pos_resp.json()
+
+                    for p in positions:
+                        if p.get("asset_class") == "us_option":
+                            print(
+                                p.get("symbol"),
+                                p.get("qty"),
+                                p.get("side")
+                            )
+                else:
+                    print(pos_resp.text)
+
+            except Exception as e:
+                print("POSITION CHECK FAILED:", e)
+
+            print("=" * 80)
+
+            print(payload)
+            print("=" * 80)
+            print("BROKER POSITIONS")
+            print("=" * 80)
+
+            positions = self.list_options_positions()
+
+            for p in positions:
+                print(
+                    p.option_symbol,
+                    p.qty,
+                    p.option_type,
+                    p.expiry,
+                    p.strike,
+                )
+
+            print("=" * 80)
+
+            print("=" * 80)
+            print("ALPACA OPTIONS ORDER")
+            print(payload)
+            print("=" * 80)
+
             r = self._post("/v2/orders", payload)
+
+            print("=" * 80)
+            print("ALPACA ORDER RESPONSE")
+            print("STATUS:", r.status_code)
+            print("BODY:")
+            print(r.text)
+            print("=" * 80)
+
             data = r.json()
             if r.status_code in (200, 201):
                 return OptionsOrderResponse(
@@ -211,4 +344,16 @@ class AlpacaOptionsBroker:
         except Exception as e:
             print(f"[options broker] positions error: {e}")
             return []
+
+    def get_order(self, order_id: str) -> dict:
+        try:
+            r = self._get(f"/v2/orders/{order_id}")
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
+
+        return {}
+
+
 

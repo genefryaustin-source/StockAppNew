@@ -150,7 +150,7 @@ def set_user_active(db, target_user_id: str, is_active: bool):
         SET is_active = :is_active
         WHERE id = :user_id
     """), {
-        "is_active": 1 if is_active else 0,
+        "is_active": bool(is_active),
         "user_id": target_user_id,
     })
     db.commit()

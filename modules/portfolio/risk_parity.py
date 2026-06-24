@@ -1,31 +1,35 @@
 import numpy as np
 import pandas as pd
 
-from modules import db
-
 
 def risk_parity_weights(price_cache, symbols):
-
+    # NOTE: this used to ignore price_cache entirely and fetch fresh via
+    # get_price_history(db, ...) -- but it imported `db` as `from modules
+    # import db` (the package itself, not a session), which crashed with
+    # AttributeError on every call. black_litterman_weights() already reads
+    # price_cache correctly; do the same here for consistency, and so both
+    # models share one (page-level) price-loading path.
     vols = []
+    used_symbols = []
 
     for s in symbols:
-
-        from modules.market_data.service import get_price_history
-
-        df = get_price_history(
-            db,
-            s,
-            period="1y"
-        )
+        df = price_cache.get(s)
 
         if df is None or df.empty:
             continue
 
         r = df["Close"].pct_change().dropna()
 
+        if r.empty:
+            continue
+
         vol = r.std()
 
+        if vol is None or vol == 0 or pd.isna(vol):
+            continue
+
         vols.append(vol)
+        used_symbols.append(s)
 
     if not vols:
         return None
@@ -35,6 +39,6 @@ def risk_parity_weights(price_cache, symbols):
     weights = inv_vol / inv_vol.sum()
 
     return pd.DataFrame({
-        "symbol": symbols[:len(weights)],
+        "symbol": used_symbols,
         "weight": weights
     })

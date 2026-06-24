@@ -581,14 +581,14 @@ def render_tenant_admin_panel(db, user):
                     WITH analytics_latest AS (
                         SELECT
                             symbol,
-                            MAX(asof)::date AS analytics_asof
+                            DATE(MAX(asof)) AS analytics_asof
                         FROM analytics_snapshots
                         GROUP BY symbol
                     ),
                     fundamentals_latest AS (
                         SELECT
                             symbol,
-                            MAX(asof)::date AS fundamentals_asof
+                            DATE(MAX(asof)) AS fundamentals_asof
                         FROM fundamental_snapshots
                         GROUP BY symbol
                     )

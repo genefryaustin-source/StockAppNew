@@ -204,8 +204,15 @@ class AutonomousMarketDataOrchestrator:
         db,
         symbol: str,
     ) -> Dict[str, Any]:
+        """
+        Latest-price routing must execute through the same strategy/decision/failover
+        stack as history. The ProviderRouter only stores ProviderStatus objects; it
+        does not own concrete provider clients. Therefore this method calls the
+        service-layer provider executor with provider_override for each provider in
+        the selected failover chain.
+        """
         from modules.market_data.service import (
-            get_latest_price,
+            get_latest_price_internal,
         )
 
         request_type = REQUEST_LATEST_PRICE
@@ -221,62 +228,125 @@ class AutonomousMarketDataOrchestrator:
             allowed_providers=allowed,
         )
 
-        start = time.time()
+        failover_chain = list(decision.failover_chain or allowed or [])
 
-        try:
-            price = get_latest_price(
-                symbol,
-            )
+        print("=" * 80)
+        print("ORCHESTRATOR ROUTER FETCH")
+        print("SYMBOL:", symbol)
+        print("FAILOVER_CHAIN:", failover_chain)
+        print("ALLOWED:", allowed)
+        print("DB:", db)
+        print("DB TYPE:", type(db))
+        print("=" * 80)
 
-            latency_ms = (
-                time.time() - start
-            ) * 1000
+        last_error = None
 
-            success = price is not None
+        for provider_name in failover_chain:
+            provider_name = str(provider_name).upper().strip()
 
-            if decision.selected_provider:
-                self.learning.record_outcome(
-                    db=db,
-                    provider=decision.selected_provider,
-                    request_type=request_type,
-                    symbol=symbol,
-                    success=success,
-                    latency_ms=latency_ms,
-                    error=None if success else "NO_PRICE",
+            if not provider_name:
+                continue
+
+            if not self.router.is_available(provider_name):
+                print(f"SKIP UNAVAILABLE PROVIDER: {provider_name} {symbol}")
+                continue
+
+            start = time.time()
+
+            try:
+                self.router.wait_for_provider(provider_name)
+
+                price = get_latest_price_internal(
+                    symbol,
+                    provider_override=provider_name,
                 )
 
-            return {
-                "symbol": symbol,
-                "request_type": request_type,
-                "provider_decision": self.decision_engine.as_dict(decision),
-                "success": success,
-                "price": price,
-            }
+                if isinstance(price, dict):
+                    price = price.get("price")
 
-        except Exception as e:
-            latency_ms = (
-                time.time() - start
-            ) * 1000
+                if price is not None:
+                    price = float(price)
+                    if price <= 0:
+                        price = None
 
-            if decision.selected_provider:
-                self.learning.record_outcome(
-                    db=db,
-                    provider=decision.selected_provider,
-                    request_type=request_type,
-                    symbol=symbol,
-                    success=False,
-                    latency_ms=latency_ms,
-                    error=str(e),
+                latency_ms = (time.time() - start) * 1000
+
+                if price is not None:
+                    self.router.mark_success(
+                        provider_name,
+                        latency_ms=latency_ms,
+                    )
+
+                    if db is not None:
+                        self.learning.record_outcome(
+                            db=db,
+                            provider=provider_name,
+                            request_type=request_type,
+                            symbol=symbol,
+                            success=True,
+                            latency_ms=latency_ms,
+                            error=None,
+                        )
+
+                    return {
+                        "symbol": symbol,
+                        "request_type": request_type,
+                        "provider": provider_name,
+                        "provider_decision": self.decision_engine.as_dict(decision),
+                        "success": True,
+                        "price": price,
+                    }
+
+                self.router.mark_failure(provider_name)
+                last_error = "NO_PRICE"
+
+                if db is not None:
+                    self.learning.record_outcome(
+                        db=db,
+                        provider=provider_name,
+                        request_type=request_type,
+                        symbol=symbol,
+                        success=False,
+                        latency_ms=latency_ms,
+                        error="NO_PRICE",
+                    )
+
+            except Exception as e:
+                last_error = str(e)
+                latency_ms = (time.time() - start) * 1000
+
+                if is_rate_limit_error(e):
+                    self.router.mark_rate_limited(
+                        provider_name,
+                        cooldown_minutes=15,
+                    )
+                else:
+                    self.router.mark_failure(provider_name)
+
+                if db is not None:
+                    self.learning.record_outcome(
+                        db=db,
+                        provider=provider_name,
+                        request_type=request_type,
+                        symbol=symbol,
+                        success=False,
+                        latency_ms=latency_ms,
+                        error=last_error,
+                    )
+
+                print(
+                    f"LATEST PRICE PROVIDER FAILED: "
+                    f"{provider_name} {symbol} {last_error}"
                 )
 
-            return {
-                "symbol": symbol,
-                "request_type": request_type,
-                "provider_decision": self.decision_engine.as_dict(decision),
-                "success": False,
-                "price": None,
-                "error": str(e),
-            }
+        return {
+            "symbol": symbol,
+            "request_type": request_type,
+            "provider_decision": self.decision_engine.as_dict(decision),
+            "success": False,
+            "price": None,
+            "error": last_error or "NO_AVAILABLE_PRICE_PROVIDER",
+        }
 
 
 _orchestrator: Optional[

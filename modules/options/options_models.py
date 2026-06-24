@@ -6,6 +6,7 @@ Auto-created on first load — no migration needed.
 from __future__ import annotations
 from sqlalchemy import text
 import uuid
+from datetime import datetime, timezone
 
 def ensure_tables(db):
     db.execute(text("""
@@ -89,4 +90,99 @@ def get_order_history(db, tenant_id: str, limit: int = 50) -> list[dict]:
         """), {"tid": tenant_id, "lim": limit}).fetchall()
         return [dict(r._mapping) for r in rows]
     except: return []
+
+
+def sync_option_orders(db, broker, tenant_id):
+
+    print("=" * 80)
+    print("SYNC OPTION ORDERS STARTED")
+    print("TENANT:", tenant_id)
+    print("=" * 80)
+
+    rows = db.execute(text("""
+        SELECT broker_order_id
+        FROM options_orders
+        WHERE tenant_id = :tid
+    """), {"tid": tenant_id}).fetchall()
+
+    for row in rows:
+        oid = row[0]
+
+        if not oid:
+            continue
+
+        print("CHECKING ORDER:", oid)
+
+        order = broker.get_order(oid)
+
+        print("BROKER RESPONSE:")
+        print(order)
+
+        if not order:
+            continue
+
+        update_order_status(
+            db=db,
+            broker_order_id=oid,
+            status=order.get("status", "unknown"),
+            fill_price=float(order["filled_avg_price"])
+            if order.get("filled_avg_price")
+            else None,
+            filled_qty=float(order["filled_qty"])
+            if order.get("filled_qty")
+            else None,
+        )
+
+
+def update_order_status(
+    db,
+    broker_order_id: str,
+    status: str,
+    fill_price: float | None = None,
+    filled_qty: float | None = None,
+):
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    print("=" * 80)
+    print("UPDATE ORDER STATUS")
+    print("BROKER ORDER ID:", broker_order_id)
+    print("STATUS:", status)
+    print("FILL PRICE:", fill_price)
+    print("FILLED QTY:", filled_qty)
+    check = db.execute(text("""
+        SELECT COUNT(*)
+        FROM options_orders
+        WHERE broker_order_id = :oid
+    """), {
+        "oid": broker_order_id
+    }).scalar()
+
+    print("MATCHING ROWS:", check)
+    result = db.execute(text("""
+        UPDATE options_orders
+        SET
+            status = :status,
+            fill_price = COALESCE(:fill_price, fill_price),
+            filled_qty = COALESCE(:filled_qty, filled_qty),
+            updated_at = :updated_at
+        WHERE broker_order_id = :broker_order_id
+    """), {
+        "status": status,
+        "fill_price": fill_price,
+        "filled_qty": filled_qty,
+        "updated_at": now,
+        "broker_order_id": broker_order_id,
+    })
+
+    print("ROWS UPDATED:", result.rowcount)
+
+    try:
+        db.commit()
+        print("COMMIT SUCCESS")
+    except Exception as e:
+        print("COMMIT FAILED:", e)
+
+
 

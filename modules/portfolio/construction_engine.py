@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import streamlit as st
+from datetime import datetime
 
 
 def _safe_num(series):
@@ -146,7 +147,7 @@ def _compute_portfolio_risk_stats(
     }
 
 
-def render_portfolio_construction(rows):
+def render_portfolio_construction(rows, db=None, user=None):
     st.subheader("Portfolio Construction")
     st.session_state.setdefault("constructed_portfolio", None)
     if rows is None or len(rows) == 0:
@@ -173,6 +174,15 @@ def render_portfolio_construction(rows):
             df["weight"] = _safe_num(df["Alpha Score"])
         elif "alpha_score" in df.columns:
             df["weight"] = _safe_num(df["alpha_score"])
+        elif "composite_pct" in df.columns:
+            # Output of rank_symbols() / RankedRow (the standard Rankings
+            # pipeline feeding st.session_state["rank_rows"]) — 0-100
+            # percentile of the composite score. This is the column this
+            # page actually receives in normal use.
+            df["weight"] = _safe_num(df["composite_pct"])
+        elif "composite" in df.columns:
+            # Raw composite score fallback if percentiles weren't computed.
+            df["weight"] = _safe_num(df["composite"])
         else:
             st.warning("No usable weight source found in rankings.")
             return
@@ -296,5 +306,61 @@ def render_portfolio_construction(rows):
     # store clean version
     st.session_state["constructed_portfolio"] = portfolio_out
 
-    # debug (temporary)
-    st.write("✅ PORTFOLIO READY FOR DEPLOYMENT:", portfolio_out.shape)
+    # -----------------------------------
+    # SAVE OPTIONS
+    # -----------------------------------
+    st.markdown("### Save This Portfolio")
+    st.caption(
+        "Save these names to a watchlist to track them, or create a portfolio "
+        "you can select from the Portfolio Deployment page to act on these weights."
+    )
+
+    if db is None or user is None:
+        st.info("Save options require a database session.")
+    else:
+        tenant_id = user.get("tenant_id")
+        user_id = user.get("user_id")
+        default_label = f"Portfolio Construction {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+        col_wl, col_pf = st.columns(2)
+
+        with col_wl:
+            wl_name = st.text_input(
+                "Watchlist name", value=default_label, key="pc_watchlist_name"
+            )
+            if st.button(
+                "📋 Save to Watchlist", key="pc_save_watchlist", use_container_width=True
+            ):
+                from modules.institutional.watchlists import create_watchlist, add_symbol
+
+                try:
+                    wl = create_watchlist(
+                        db, tenant_id, wl_name, created_by_user_id=user_id
+                    )
+                    for tkr in portfolio_out["ticker"]:
+                        add_symbol(db, tenant_id, wl.id, tkr)
+                    st.success(
+                        f"Saved {len(portfolio_out)} tickers to watchlist '{wl_name}'."
+                    )
+                except Exception as e:
+                    db.rollback()
+                    st.error(f"Could not save watchlist: {e}")
+
+        with col_pf:
+            pf_name = st.text_input(
+                "Portfolio name", value=default_label, key="pc_portfolio_name"
+            )
+            if st.button(
+                "💾 Save as Portfolio", key="pc_save_portfolio", use_container_width=True
+            ):
+                from modules.portfolio.service import create_portfolio
+
+                try:
+                    create_portfolio(db, tenant_id, pf_name)
+                    st.success(
+                        f"Created portfolio '{pf_name}'. Go to Portfolio Deployment, "
+                        f"select it, and these target weights will be ready to deploy."
+                    )
+                except Exception as e:
+                    db.rollback()
+                    st.error(f"Could not create portfolio: {e}")
