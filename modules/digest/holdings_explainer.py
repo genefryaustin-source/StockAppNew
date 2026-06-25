@@ -23,6 +23,23 @@ from __future__ import annotations
 
 import json
 import os
+
+
+def _is_dead_connection_error(e: Exception) -> bool:
+    """True if `e` looks like a dropped/expired database connection (the
+    classic Neon-serverless-Postgres symptom) rather than a genuine data
+    error a retry wouldn't fix. Same check used in modules/analytics/runner.py
+    and modules/agent/agent_engine.py."""
+    msg = str(e).lower()
+    return any(s in msg for s in (
+        "ssl connection has been closed",
+        "server closed the connection unexpectedly",
+        "connection already closed",
+        "could not connect to server",
+        "connection reset by peer",
+        "terminating connection",
+    ))
+
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -36,10 +53,8 @@ import streamlit as st
 
 def _get_client():
     import anthropic
-    key = (
-        os.getenv("ANTHROPIC_API_KEY")
-        or st.secrets.get("ANTHROPIC_API_KEY", "")
-    )
+    from modules.admin.tenant_api_keys import get_provider_key
+    key = get_provider_key("ANTHROPIC_API_KEY")
     if not key:
         raise EnvironmentError("ANTHROPIC_API_KEY not set.")
     return anthropic.Anthropic(api_key=key)
@@ -47,10 +62,8 @@ def _get_client():
 
 def _anthropic_available() -> bool:
     try:
-        return bool(
-            os.getenv("ANTHROPIC_API_KEY")
-            or st.secrets.get("ANTHROPIC_API_KEY", "")
-        )
+        from modules.admin.tenant_api_keys import get_provider_key
+        return bool(get_provider_key("ANTHROPIC_API_KEY"))
     except Exception:
         return False
 
@@ -179,11 +192,30 @@ def _load_price_changes(db, symbols: list[str]) -> dict:
     result = {}
     for sym in symbols:
         try:
-            db.rollback()
-        except Exception:
-            pass
-        try:
             df = get_price_history(db, sym, period="5d", interval="1d")
+        except Exception as e:
+            if not _is_dead_connection_error(e):
+                continue
+            # A plain rollback() doesn't help if the connection is truly
+            # dead -- it just raises the same error again, and every
+            # symbol after this one would silently fail too. Replace it
+            # with a fresh session and retry this symbol once.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            try:
+                db.close()
+            except Exception:
+                pass
+            from modules.db.core import SessionLocal
+            db = SessionLocal()
+            try:
+                df = get_price_history(db, sym, period="5d", interval="1d")
+            except Exception:
+                continue
+
+        try:
             if df is None or df.empty or "Close" not in df.columns:
                 continue
             df = df.dropna(subset=["Close"])

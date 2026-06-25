@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+import os
+import gc
+import time
+import uuid
+import math
+import tracemalloc
+from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Callable
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+def _safe_import(path: str, name: str):
+    try:
+        module = __import__(path, fromlist=[name])
+        return getattr(module, name)
+    except Exception:
+        return None
+
+def _default_pairs() -> List[str]:
+    return ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD", "EUR/GBP"]
+
+def _result(name: str, status: str, started: float, **extra: Any) -> Dict[str, Any]:
+    elapsed = max(0.0, time.perf_counter() - started)
+    payload = {
+        "test": name,
+        "status": status,
+        "duration_ms": round(elapsed * 1000, 3),
+        "timestamp": _utc_now(),
+    }
+    payload.update(extra)
+    return payload
+
+def _snapshot() -> Dict[str, Any]:
+    cls = _safe_import("modules.forex.forex_operations_center", "ForexOperationsCenter")
+    if cls is None:
+        return {"summary": {}, "jobs": [], "events": [], "status": "operations_center_unavailable"}
+    try:
+        return cls().snapshot()
+    except Exception as exc:
+        return {"summary": {}, "jobs": [], "events": [], "status": "snapshot_failed", "error": str(exc)}
+
+def _schedule_jobs(job_count: int = 100, pairs: Optional[List[str]] = None) -> Dict[str, Any]:
+    cls = _safe_import("modules.forex.forex_scheduler", "ForexScheduler")
+    if cls is None:
+        return {"status": "unavailable", "created": []}
+    pairs = pairs or _default_pairs()
+    try:
+        scheduler = cls()
+        if hasattr(scheduler, "schedule_cycle"):
+            created: List[Dict[str, Any]] = []
+            remaining = int(job_count)
+            while remaining > 0:
+                subset = pairs[: max(1, min(len(pairs), remaining))]
+                batch = scheduler.schedule_cycle(pairs=subset, enqueue=True) or []
+                created.extend(batch if isinstance(batch, list) else [batch])
+                if len(created) >= job_count or not batch:
+                    break
+                remaining = job_count - len(created)
+            return {"status": "ok", "created": created[:job_count], "created_count": min(len(created), job_count)}
+    except Exception as exc:
+        return {"status": "failed", "created": [], "error": str(exc)}
+    return {"status": "unsupported", "created": []}
+
+def _tick(max_jobs: int = 100) -> Dict[str, Any]:
+    cls = _safe_import("modules.forex.forex_runtime_controller", "ForexRuntimeController")
+    if cls is None:
+        return {"status": "unavailable", "executed": 0}
+    try:
+        result = cls().tick(max_jobs=max_jobs)
+        if isinstance(result, dict):
+            return result
+        return {"status": "ok", "result": result}
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc), "executed": 0}
+
+
+class ForexScalabilityTester:
+    """Runs increasing workload tiers and summarizes scaling behavior."""
+
+    def test_scalability(self, tiers: Optional[List[int]] = None, batch_size: int = 250) -> Dict[str, Any]:
+        started = time.perf_counter()
+        tiers = tiers or [100, 500, 1000, 2500]
+        stress_cls = _safe_import("modules.forex.forex_stress_framework", "ForexStressFramework")
+        if stress_cls is None:
+            return _result("scalability_test", "fail", started, error="ForexStressFramework unavailable")
+        results: List[Dict[str, Any]] = []
+        for tier in tiers:
+            tier_started = time.perf_counter()
+            result = stress_cls().stress(job_count=int(tier), batch_size=min(batch_size, max(1, int(tier))), drain=True)
+            elapsed = max(time.perf_counter() - tier_started, 0.001)
+            results.append({
+                "tier": tier,
+                "status": result.get("status"),
+                "duration_ms": round(elapsed * 1000, 3),
+                "throughput_jobs_per_second": round(int(tier) / elapsed, 3),
+                "result": result,
+            })
+        pass_count = sum(1 for r in results if r.get("status") == "pass")
+        return _result("scalability_test", "pass" if pass_count == len(results) else "warn", started, tiers=tiers, passed=pass_count, total=len(results), results=results)
+
+    def quick_scalability_check(self) -> Dict[str, Any]:
+        return self.test_scalability(tiers=[100, 250, 500], batch_size=100)

@@ -28,6 +28,21 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+
+def _is_dead_connection_error(e: Exception) -> bool:
+    """True if `e` looks like a dropped/expired database connection (the
+    classic Neon-serverless-Postgres symptom) rather than a genuine data
+    error a retry wouldn't fix. Same check used in modules/analytics/runner.py."""
+    msg = str(e).lower()
+    return any(s in msg for s in (
+        "ssl connection has been closed",
+        "server closed the connection unexpectedly",
+        "connection already closed",
+        "could not connect to server",
+        "connection reset by peer",
+        "terminating connection",
+    ))
+
 import pandas as pd
 import streamlit as st
 
@@ -41,10 +56,8 @@ from modules.db.core import Base
 
 def _get_client():
     import anthropic
-    key = (
-        os.getenv("ANTHROPIC_API_KEY")
-        or st.secrets.get("ANTHROPIC_API_KEY", "")
-    )
+    from modules.admin.tenant_api_keys import get_provider_key
+    key = get_provider_key("ANTHROPIC_API_KEY")
     if not key:
         raise EnvironmentError("ANTHROPIC_API_KEY not set.")
     return anthropic.Anthropic(api_key=key)
@@ -242,15 +255,36 @@ class AgentEngine:
         from modules.market_data.service import get_price_history
         for sym in symbols[:20]:   # cap to avoid rate limits
             try:
-                self.db.rollback()
-            except Exception:
-                pass
-            try:
                 df = get_price_history(self.db, sym, period="5d", interval="1d")
                 if df is not None and not df.empty and "Close" in df.columns:
                     prices[sym] = float(df["Close"].iloc[-1])
-            except Exception:
-                pass
+            except Exception as e:
+                if _is_dead_connection_error(e):
+                    # A plain rollback() doesn't help here -- if the
+                    # underlying connection is actually dead, rollback()
+                    # itself just raises the same error again, and every
+                    # remaining symbol in this loop would silently fail
+                    # too since they'd keep reusing the same broken
+                    # session. Replace it with a fresh one and retry this
+                    # symbol once.
+                    self._log("WARN", f"DB connection dropped while pricing {sym} -- reconnecting", success=True)
+                    try:
+                        self.db.rollback()
+                    except Exception:
+                        pass
+                    try:
+                        self.db.close()
+                    except Exception:
+                        pass
+                    from modules.db.core import SessionLocal
+                    self.db = SessionLocal()
+                    try:
+                        df = get_price_history(self.db, sym, period="5d", interval="1d")
+                        if df is not None and not df.empty and "Close" in df.columns:
+                            prices[sym] = float(df["Close"].iloc[-1])
+                    except Exception:
+                        pass
+                # else: genuine data/provider error for this symbol -- skip it, move on
         return prices
 
     def _build_context(

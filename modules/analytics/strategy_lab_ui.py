@@ -38,6 +38,21 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+
+def _is_dead_connection_error(e: Exception) -> bool:
+    """True if `e` looks like a dropped/expired database connection (the
+    classic Neon-serverless-Postgres symptom) rather than a genuine data
+    error a retry wouldn't fix."""
+    msg = str(e).lower()
+    return any(s in msg for s in (
+        "ssl connection has been closed",
+        "server closed the connection unexpectedly",
+        "connection already closed",
+        "could not connect to server",
+        "connection reset by peer",
+        "terminating connection",
+    ))
+
 from modules.analytics.backtest_engine import (
     BacktestConfig,
     BacktestResult,
@@ -109,19 +124,43 @@ def _compute_factor_scores_from_price(db, symbols: list[str]) -> pd.DataFrame:
     rows = []
     for sym in symbols:
         try:
-            db.rollback()
-        except Exception:
-            pass
-        try:
-            df = load_price_history(db, sym)
-            if df is None or df.empty:
-                from modules.market_data.service import get_price_history_internal
-                df = get_price_history_internal(db, sym, period="1y", interval="1d",
-                                                force_refresh=True)
+            try:
+                df = load_price_history(db, sym)
                 if df is None or df.empty:
-                    continue
-                if isinstance(df.index, pd.DatetimeIndex):
-                    df = df.reset_index()
+                    from modules.market_data.service import get_price_history_internal
+                    df = get_price_history_internal(db, sym, period="1y", interval="1d",
+                                                    force_refresh=True)
+                    if df is None or df.empty:
+                        continue
+                    if isinstance(df.index, pd.DatetimeIndex):
+                        df = df.reset_index()
+            except Exception as e:
+                if not _is_dead_connection_error(e):
+                    raise
+                # A plain rollback() doesn't help if the connection is
+                # truly dead -- every symbol after this one would
+                # silently fail too. Replace it with a fresh session and
+                # retry this symbol once.
+                print(f"[strategy_lab] DB connection dropped at {sym} -- reconnecting: {e}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                try:
+                    db.close()
+                except Exception:
+                    pass
+                from modules.db.core import SessionLocal
+                db = SessionLocal()
+                df = load_price_history(db, sym)
+                if df is None or df.empty:
+                    from modules.market_data.service import get_price_history_internal
+                    df = get_price_history_internal(db, sym, period="1y", interval="1d",
+                                                    force_refresh=True)
+                    if df is None or df.empty:
+                        continue
+                    if isinstance(df.index, pd.DatetimeIndex):
+                        df = df.reset_index()
 
             close_col = next((c for c in df.columns if c.lower() == "close"), None)
             if close_col is None:

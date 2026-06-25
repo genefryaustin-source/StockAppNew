@@ -261,6 +261,10 @@ try:
 except Exception as e:
     st.error(f"Bootstrap failed: {e}")
     st.exception(e)
+
+from modules.forex.forex_bootstrap import bootstrap_forex_runtime
+bootstrap_forex_runtime()
+
 # ============================================================
 # PRE-LOGIN DB DEBUG
 # ============================================================
@@ -566,7 +570,7 @@ else:
         ("📈 Trading & Portfolio", [
             "Portfolio","Portfolio Construction","Portfolio Deployment",
             "Portfolio Construction & Capital Allocation",
-            "Options Flow","Options Trading", "Crypto","Alerts",
+            "Options Flow","Options Trading", "Crypto","Forex","Alerts",
         ]),
         ("🧠 Strategy", [
             "Strategy Lab","Strategy Discovery","Strategy Library",
@@ -1121,6 +1125,26 @@ elif page == "Crypto":
     except Exception as e:
         safe_rollback(db)
         st.error(f"Crypto module failed: {e}")
+        st.exception(e)
+
+elif page == "Forex":
+    if not check_page(user, "Forex", db):
+        require_page(user, "Forex", db)
+        st.stop()
+
+    try:
+        from modules.forex.forex_master_workspace import render_forex_master_workspace
+
+        run_page(
+            "Forex",
+            render_forex_master_workspace,
+            db,
+            user,
+        )
+
+    except Exception as e:
+        safe_rollback(db)
+        st.error(f"Forex module failed: {e}")
         st.exception(e)
 
 elif page == "Investment Committee":

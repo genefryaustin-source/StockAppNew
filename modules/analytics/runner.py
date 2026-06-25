@@ -9,6 +9,27 @@ import streamlit as st
 from modules.analytics.models import AnalyticsSnapshot
 from modules.utils.config import get_secret
 
+
+def _is_dead_connection_error(e: Exception) -> bool:
+    """True if `e` looks like a dropped/expired database connection
+    (the classic Neon-serverless-Postgres symptom: SSL connection closed,
+    server closed the connection unexpectedly, connection already closed)
+    rather than a genuine data/query error that a retry wouldn't fix."""
+    msg = str(e).lower()
+    return any(s in msg for s in (
+        "ssl connection has been closed",
+        "server closed the connection unexpectedly",
+        "connection already closed",
+        "could not connect to server",
+        "connection reset by peer",
+        "terminating connection",
+    ))
+
+
+def _get_fresh_session():
+    from modules.db.core import SessionLocal
+    return SessionLocal()
+
 try:
     from modules.market_data.service import (
         get_latest_price_map,
@@ -1490,12 +1511,35 @@ def run_analytics(db, tenant_id, symbols):
             st.write(f"Processing {i}/{len(clean_symbols)}")
 
         try:
-            snap = run_analytics_for_symbol(
-                db=db,
-                tenant_id=tenant_id,
-                symbol=sym,
-                price_df=history_map.get(sym),
-            )
+            try:
+                snap = run_analytics_for_symbol(
+                    db=db,
+                    tenant_id=tenant_id,
+                    symbol=sym,
+                    price_df=history_map.get(sym),
+                )
+            except Exception as e:
+                if not _is_dead_connection_error(e):
+                    raise
+                # Same recovery as run_vectorized_price_analytics -- see
+                # the comment there for why this matters: without it,
+                # every symbol after this one would silently fail too.
+                print(f"⚠️ DB CONNECTION DROPPED mid-loop at {sym} -- reconnecting:", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                try:
+                    db.close()
+                except Exception:
+                    pass
+                db = _get_fresh_session()
+                snap = run_analytics_for_symbol(
+                    db=db,
+                    tenant_id=tenant_id,
+                    symbol=sym,
+                    price_df=history_map.get(sym),
+                )
 
             if snap:
                 results.append(snap)
@@ -1629,12 +1673,43 @@ def run_vectorized_price_analytics(
                 f"rows={len(cached_df)}",
             )
 
-            snap = run_analytics_for_symbol(
-                db=db,
-                tenant_id=tenant_id,
-                symbol=sym,
-                price_df=cached_df,
-            )
+            try:
+                snap = run_analytics_for_symbol(
+                    db=db,
+                    tenant_id=tenant_id,
+                    symbol=sym,
+                    price_df=cached_df,
+                )
+            except Exception as e:
+                if not _is_dead_connection_error(e):
+                    raise
+
+                # The connection died mid-loop (the classic Neon symptom:
+                # this session has been checked out across many symbols'
+                # worth of external API calls, and the server-side idle
+                # timeout killed it during one of the gaps). Without this,
+                # every symbol after this one in the loop would silently
+                # fail too, since they'd all keep reusing the same dead
+                # session. Roll it back, get a fresh one, and retry just
+                # this symbol.
+                print(f"⚠️ DB CONNECTION DROPPED mid-loop at {sym} -- reconnecting:", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
+                db = _get_fresh_session()
+
+                snap = run_analytics_for_symbol(
+                    db=db,
+                    tenant_id=tenant_id,
+                    symbol=sym,
+                    price_df=cached_df,
+                )
 
             if snap:
                 results.append(snap)

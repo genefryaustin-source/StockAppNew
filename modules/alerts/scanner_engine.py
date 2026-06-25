@@ -18,6 +18,21 @@ from __future__ import annotations
 
 import json
 import os
+
+
+def _is_dead_connection_error(e: Exception) -> bool:
+    """True if `e` looks like a dropped/expired database connection (the
+    classic Neon-serverless-Postgres symptom) rather than a genuine data
+    error a retry wouldn't fix."""
+    msg = str(e).lower()
+    return any(s in msg for s in (
+        "ssl connection has been closed",
+        "server closed the connection unexpectedly",
+        "connection already closed",
+        "could not connect to server",
+        "connection reset by peer",
+        "terminating connection",
+    ))
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -199,10 +214,8 @@ def translate_rule(rule_text: str) -> ScanCondition:
     """Translate plain-English rule into a ScanCondition via Claude."""
     try:
         import anthropic
-        key = (
-            os.getenv("ANTHROPIC_API_KEY")
-            or st.secrets.get("ANTHROPIC_API_KEY", "")
-        )
+        from modules.admin.tenant_api_keys import get_provider_key
+        key = get_provider_key("ANTHROPIC_API_KEY")
         client = anthropic.Anthropic(api_key=key)
     except Exception as e:
         c = ScanCondition()
@@ -492,12 +505,38 @@ def run_scanner_rule(
 
     for sym in symbols:
         try:
-            db.rollback()  # Ensure clean session state
-        except Exception:
-            pass
+            matched, reason = evaluate_condition(sym, condition, db)
+        except Exception as e:
+            if not _is_dead_connection_error(e):
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                print(f"[scanner] error on {sym}: {e}")
+                continue
+
+            # A plain rollback() doesn't help if the connection is truly
+            # dead -- it just raises the same error again, and every
+            # symbol after this one would silently fail too. Replace it
+            # with a fresh session and retry this symbol once.
+            print(f"[scanner] DB connection dropped at {sym} -- reconnecting: {e}")
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            try:
+                db.close()
+            except Exception:
+                pass
+            from modules.db.core import SessionLocal
+            db = SessionLocal()
+            try:
+                matched, reason = evaluate_condition(sym, condition, db)
+            except Exception as e2:
+                print(f"[scanner] error on {sym} after reconnect: {e2}")
+                continue
 
         try:
-            matched, reason = evaluate_condition(sym, condition, db)
             if not matched:
                 continue
 
