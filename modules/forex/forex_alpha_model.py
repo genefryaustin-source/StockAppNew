@@ -1,1097 +1,777 @@
-# modules/forex/forex_alpha_model.py
+"""
+modules/forex/forex_alpha_model.py
+
+Institutional Forex Alpha Model
+
+This module is the Forex decision layer. It consumes the centralized Forex
+provider infrastructure through ForexPriceService and CurrencyStrengthEngine,
+then produces ranked BUY / SELL / WATCH opportunities for the Forex Command
+Center, recommendation engine, portfolio optimizer, and autonomous trader.
+"""
 
 from __future__ import annotations
 
 import math
-import uuid
+import statistics
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 try:
-    from modules.forex.forex_service import (
-        MAJOR_PAIRS,
-        CROSS_PAIRS,
-        ForexService,
-        get_forex_service,
-    )
-
-    from modules.forex.forex_institutional_scanner import (
-        ForexInstitutionalScanner,
-        get_forex_institutional_scanner,
-    )
-
-    from modules.forex.forex_recommendation_engine import (
-        ForexRecommendationEngine,
-        get_forex_recommendation_engine,
-    )
-
-    from modules.forex.forex_regime_detection_engine import (
-        ForexRegimeDetectionEngine,
-        get_forex_regime_detection_engine,
-    )
-
-    from modules.forex.forex_macro_regime_engine import (
-        ForexMacroRegimeEngine,
-        get_forex_macro_regime_engine,
-    )
-
-    from modules.forex.forex_liquidity_engine import (
-        ForexLiquidityEngine,
-        get_forex_liquidity_engine,
-    )
-
+    from sqlalchemy import text
 except Exception:
+    text = None
 
-    from forex_service import (
-        MAJOR_PAIRS,
-        CROSS_PAIRS,
-        ForexService,
-        get_forex_service,
+try:
+    from modules.forex.forex_price_service import get_forex_price_service
+except Exception:
+    get_forex_price_service = None
+
+try:
+    from modules.forex.forex_currency_strength_engine import (
+        get_forex_currency_strength_engine,
+        MAJOR_AND_CROSS_PAIRS,
     )
-
-    from forex_institutional_scanner import (
-        ForexInstitutionalScanner,
-        get_forex_institutional_scanner,
-    )
-
-    from forex_recommendation_engine import (
-        ForexRecommendationEngine,
-        get_forex_recommendation_engine,
-    )
-
-    from forex_regime_detection_engine import (
-        ForexRegimeDetectionEngine,
-        get_forex_regime_detection_engine,
-    )
-
-    from forex_macro_regime_engine import (
-        ForexMacroRegimeEngine,
-        get_forex_macro_regime_engine,
-    )
-
-    from forex_liquidity_engine import (
-        ForexLiquidityEngine,
-        get_forex_liquidity_engine,
-    )
+except Exception:
+    get_forex_currency_strength_engine = None
+    MAJOR_AND_CROSS_PAIRS = [
+        "EUR/USD", "GBP/USD", "AUD/USD", "NZD/USD",
+        "USD/JPY", "USD/CHF", "USD/CAD",
+        "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY",
+    ]
 
 
-DEFAULT_PAIRS = MAJOR_PAIRS + CROSS_PAIRS
+DEFAULT_PAIRS = list(MAJOR_AND_CROSS_PAIRS)
+
+DEFAULT_ACCOUNT_SIZE = 100000.0
+DEFAULT_RISK_PER_TRADE_PCT = 0.005
+DEFAULT_ATR_PROXY_BPS = 65.0
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        out = float(value)
+        if math.isnan(out) or math.isinf(out):
+            return default
+        return out
+    except Exception:
+        return default
+
+
+def clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
+    return max(low, min(high, float(value)))
+
+
+def normalize_pair(pair: str) -> str:
+    text = str(pair or "").upper().replace("-", "/").replace("_", "/").replace(" ", "")
+    if "/" in text:
+        left, right = text.split("/", 1)
+        return f"{left[:3]}/{right[:3]}"
+    if len(text) >= 6:
+        return f"{text[:3]}/{text[3:6]}"
+    return text
+
+
+def split_pair(pair: str) -> Tuple[str, str]:
+    pair = normalize_pair(pair)
+    if "/" in pair:
+        left, right = pair.split("/", 1)
+        return left[:3], right[:3]
+    if len(pair) >= 6:
+        return pair[:3], pair[3:6]
+    return pair[:3], ""
 
 
 @dataclass
 class ForexAlphaSignal:
-    signal_id: str
-
-    tenant_id: Optional[str]
-    user_id: Optional[str]
-    portfolio_id: Optional[str]
-
     pair: str
-
+    base: str
+    quote: str
+    direction: str
+    recommendation: str
+    signal: str
     alpha_score: float
-    expected_return_score: float
-    risk_adjusted_score: float
-
-    institutional_score: float
-    recommendation_score: float
-    regime_score: float
-    macro_regime_score: float
-    liquidity_score: float
-
-    volatility_penalty: float
-    drawdown_penalty: float
-    crowding_penalty: float
-
+    composite_score: float
     confidence_score: float
-    conviction_score: float
-
-    alpha_direction: str
-    alpha_signal: str
-    alpha_grade: str
-
+    strength_score: float
+    momentum_score: float
+    macro_score: float
+    carry_score: float
+    institutional_score: float
+    sentiment_score: float
+    risk_score: float
+    entry_price: float
+    stop_price: float
+    target_price: float
+    risk_reward: float
+    suggested_notional: float
+    estimated_risk_dollars: float
     position_bias: str
-    suggested_weight: float
-    max_risk_weight: float
-
+    provider: Optional[str]
     rationale: str
     warnings: str
-
-    created_at: datetime
-
-    def to_dict(self) -> Dict[str, Any]:
-        data = asdict(self)
-        data["created_at"] = self.created_at.isoformat()
-        return data
-
-
-@dataclass
-class ForexAlphaRun:
-    run_id: str
-
-    tenant_id: Optional[str]
-    user_id: Optional[str]
-    portfolio_id: Optional[str]
-
-    pair_count: int
-
-    long_count: int
-    short_count: int
-    watch_count: int
-    avoid_count: int
-
-    average_alpha_score: float
-    average_confidence: float
-
-    top_pair: Optional[str]
-    top_signal: Optional[str]
-
-    signals: List[Dict[str, Any]]
-
-    created_at: datetime
+    generated_at: str
 
     def to_dict(self) -> Dict[str, Any]:
-        data = asdict(self)
-        data["created_at"] = self.created_at.isoformat()
-        return data
+        return asdict(self)
 
 
 class ForexAlphaModel:
     """
-    Forex Alpha Model
+    Institutional alpha model for Forex.
 
-    Combines institutional scanner output, recommendation conviction,
-    market regime, macro regime, and liquidity into a normalized alpha
-    score suitable for portfolio construction and autonomous trading.
+    Scoring layers:
+    - Currency strength differential
+    - Quote availability / live provider quality
+    - Macro proxy
+    - Carry proxy
+    - Institutional proxy
+    - Sentiment proxy
+    - Risk penalty / reward symmetry
 
-    Architecture rules:
-    - Explicit state passing
-    - Tenant-safe
-    - Neon Postgres compatible
-    - Streamlit-safe
-    - No global runtime state
+    The proxies are intentionally modular. If the dedicated engines exist,
+    their values can be blended in later without changing the public output.
     """
 
     def __init__(
         self,
-        *,
-        tenant_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        portfolio_id: Optional[str] = None,
-        db: Any = None,
-        forex_service: Optional[ForexService] = None,
-        institutional_scanner: Optional[ForexInstitutionalScanner] = None,
-        recommendation_engine: Optional[ForexRecommendationEngine] = None,
-        regime_engine: Optional[ForexRegimeDetectionEngine] = None,
-        macro_regime_engine: Optional[ForexMacroRegimeEngine] = None,
-        liquidity_engine: Optional[ForexLiquidityEngine] = None,
-    ) -> None:
-        self.tenant_id = tenant_id
-        self.user_id = user_id
-        self.portfolio_id = portfolio_id
-        self.db = db
-
-        self.forex_service = (
-            forex_service
-            or get_forex_service(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                db=db,
-            )
+        pairs: Optional[List[str]] = None,
+        account_size: float = DEFAULT_ACCOUNT_SIZE,
+        risk_per_trade_pct: float = DEFAULT_RISK_PER_TRADE_PCT,
+    ):
+        self.pairs = [normalize_pair(p) for p in (pairs or DEFAULT_PAIRS)]
+        self.account_size = float(account_size or DEFAULT_ACCOUNT_SIZE)
+        self.risk_per_trade_pct = float(risk_per_trade_pct or DEFAULT_RISK_PER_TRADE_PCT)
+        self.price_service = get_forex_price_service() if get_forex_price_service else None
+        self.strength_engine = (
+            get_forex_currency_strength_engine()
+            if get_forex_currency_strength_engine
+            else None
         )
 
-        self.institutional_scanner = (
-            institutional_scanner
-            or get_forex_institutional_scanner(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                portfolio_id=portfolio_id,
-                db=db,
-            )
-        )
-
-        self.recommendation_engine = (
-            recommendation_engine
-            or get_forex_recommendation_engine(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                portfolio_id=portfolio_id,
-                db=db,
-            )
-        )
-
-        self.regime_engine = (
-            regime_engine
-            or get_forex_regime_detection_engine(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                portfolio_id=portfolio_id,
-                db=db,
-            )
-        )
-
-        self.macro_regime_engine = (
-            macro_regime_engine
-            or get_forex_macro_regime_engine(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                portfolio_id=portfolio_id,
-                db=db,
-            )
-        )
-
-        self.liquidity_engine = (
-            liquidity_engine
-            or get_forex_liquidity_engine(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                portfolio_id=portfolio_id,
-                db=db,
-            )
-        )
-
-    # =====================================================
-    # Database
-    # =====================================================
-
-    def ensure_tables(self) -> None:
-        if self.db is None:
-            return
-
-        self.db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS forex_alpha_signals (
-                signal_id VARCHAR(64) PRIMARY KEY,
-
-                tenant_id VARCHAR(100),
-                user_id VARCHAR(100),
-                portfolio_id VARCHAR(100),
-
-                pair VARCHAR(20),
-
-                alpha_score DOUBLE PRECISION,
-                expected_return_score DOUBLE PRECISION,
-                risk_adjusted_score DOUBLE PRECISION,
-
-                institutional_score DOUBLE PRECISION,
-                recommendation_score DOUBLE PRECISION,
-                regime_score DOUBLE PRECISION,
-                macro_regime_score DOUBLE PRECISION,
-                liquidity_score DOUBLE PRECISION,
-
-                volatility_penalty DOUBLE PRECISION,
-                drawdown_penalty DOUBLE PRECISION,
-                crowding_penalty DOUBLE PRECISION,
-
-                confidence_score DOUBLE PRECISION,
-                conviction_score DOUBLE PRECISION,
-
-                alpha_direction VARCHAR(40),
-                alpha_signal VARCHAR(80),
-                alpha_grade VARCHAR(10),
-
-                position_bias VARCHAR(40),
-                suggested_weight DOUBLE PRECISION,
-                max_risk_weight DOUBLE PRECISION,
-
-                rationale TEXT,
-                warnings TEXT,
-
-                created_at TIMESTAMP
-            )
-            """
-        )
-
-        self.db.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_forex_alpha_signals_tenant_pair
-            ON forex_alpha_signals(tenant_id, pair, created_at DESC)
-            """
-        )
-
-        self.db.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_forex_alpha_signals_signal
-            ON forex_alpha_signals(alpha_signal, created_at DESC)
-            """
-        )
-
-        if hasattr(self.db, "commit"):
-            self.db.commit()
-
-    # =====================================================
-    # Helpers
-    # =====================================================
-
-    def _safe_float(
-        self,
-        value: Any,
-        default: float = 50.0,
-    ) -> float:
-        try:
-            if value is None:
-                return default
-
-            result = float(value)
-
-            if math.isnan(result) or math.isinf(result):
-                return default
-
-            return result
-
-        except Exception:
-            return default
-
-    def _clip(
-        self,
-        value: float,
-        low: float = 0.0,
-        high: float = 100.0,
-    ) -> float:
-        return max(low, min(high, float(value)))
-
-    def _recommendation_score(
-        self,
-        pair: str,
-    ) -> float:
-        try:
-            scan = self.recommendation_engine.run_scan(
-                pairs=[pair],
-                save=False,
-            )
-
-            rows = getattr(
-                scan,
-                "recommendations",
-                [],
-            )
-
-            if not rows:
-                return 50.0
-
-            row = rows[0]
-
-            if isinstance(row, dict):
-                return self._safe_float(
-                    row.get("conviction_score")
-                    or row.get("confidence_score")
-                    or row.get("score"),
-                    50.0,
-                )
-
-            return self._safe_float(
-                getattr(row, "conviction_score", None)
-                or getattr(row, "confidence_score", None)
-                or getattr(row, "score", None),
-                50.0,
-            )
-
-        except Exception:
-            return 50.0
-
-    def _grade(
-        self,
-        score: float,
-    ) -> str:
-        if score >= 92:
-            return "A+"
-        if score >= 84:
-            return "A"
-        if score >= 76:
-            return "B"
-        if score >= 66:
-            return "C"
-        return "D"
-
-    def _direction(
-        self,
-        *,
-        institutional_direction: str,
-        regime_score: float,
-        macro_regime_score: float,
-        recommendation_score: float,
-    ) -> str:
-        direction = str(
-            institutional_direction
-            or ""
-        ).upper()
-
-        if direction in {
-            "BULLISH",
-            "BEARISH",
-        }:
-            return direction
-
-        bullish = 0
-        bearish = 0
-
-        for score in [
-            regime_score,
-            macro_regime_score,
-            recommendation_score,
-        ]:
-            if score >= 58:
-                bullish += 1
-            elif score <= 42:
-                bearish += 1
-
-        if bullish > bearish:
-            return "BULLISH"
-
-        if bearish > bullish:
-            return "BEARISH"
-
-        return "NEUTRAL"
-
-    def _signal(
-        self,
-        *,
-        alpha_score: float,
-        confidence_score: float,
-        conviction_score: float,
-        direction: str,
-        liquidity_score: float,
-    ) -> str:
-        if (
-            alpha_score >= 85
-            and confidence_score >= 75
-            and conviction_score >= 70
-            and liquidity_score >= 55
-            and direction == "BULLISH"
-        ):
-            return "ALPHA_LONG"
-
-        if (
-            alpha_score >= 85
-            and confidence_score >= 75
-            and conviction_score >= 70
-            and liquidity_score >= 55
-            and direction == "BEARISH"
-        ):
-            return "ALPHA_SHORT"
-
-        if (
-            alpha_score >= 75
-            and direction == "BULLISH"
-        ):
-            return "LONG_WATCH"
-
-        if (
-            alpha_score >= 75
-            and direction == "BEARISH"
-        ):
-            return "SHORT_WATCH"
-
-        if alpha_score >= 65:
-            return "ALPHA_MONITOR"
-
-        return "AVOID"
-
-    def _position_bias(
-        self,
-        signal: str,
-        direction: str,
-    ) -> str:
-        if signal in {
-            "ALPHA_LONG",
-            "LONG_WATCH",
-        } or direction == "BULLISH":
-            return "LONG"
-
-        if signal in {
-            "ALPHA_SHORT",
-            "SHORT_WATCH",
-        } or direction == "BEARISH":
-            return "SHORT"
-
-        return "FLAT"
-
-    def _suggested_weight(
-        self,
-        *,
-        alpha_score: float,
-        confidence_score: float,
-        liquidity_score: float,
-    ) -> float:
-        raw = (
-            alpha_score * 0.45
-            + confidence_score * 0.35
-            + liquidity_score * 0.20
-        )
-
-        if raw >= 90:
-            return 6.0
-
-        if raw >= 82:
-            return 4.5
-
-        if raw >= 74:
-            return 3.0
-
-        if raw >= 65:
-            return 1.5
-
-        return 0.0
-
-    def _warnings(
-        self,
-        *,
-        liquidity_score: float,
-        volatility_penalty: float,
-        drawdown_penalty: float,
-        crowding_penalty: float,
-    ) -> str:
-        warnings: List[str] = []
-
-        if liquidity_score < 45:
-            warnings.append(
-                "Liquidity below preferred threshold."
-            )
-
-        if volatility_penalty > 35:
-            warnings.append(
-                "Elevated volatility penalty."
-            )
-
-        if drawdown_penalty > 30:
-            warnings.append(
-                "Drawdown risk is elevated."
-            )
-
-        if crowding_penalty > 35:
-            warnings.append(
-                "Crowding risk is elevated."
-            )
-
-        return " ".join(warnings)
-
-    # =====================================================
-    # Analysis
-    # =====================================================
-
-    def analyze_pair(
-        self,
-        pair: str,
-        *,
-        save: bool = True,
-    ) -> ForexAlphaSignal:
-        institutional = self.institutional_scanner.analyze_pair(
-            pair,
-            save=False,
-        )
-
-        regime = self.regime_engine.analyze_pair(
-            pair,
-            save=False,
-        )
-
-        macro_regime = self.macro_regime_engine.analyze_pair(
-            pair,
-            save=False,
-        )
-
-        liquidity = self.liquidity_engine.analyze_pair(
-            pair,
-            save=False,
-        )
-
-        institutional_score = self._safe_float(
-            getattr(
-                institutional,
-                "institutional_score",
-                None,
-            ),
-            50.0,
-        )
-
-        recommendation_score = self._recommendation_score(
-            pair,
-        )
-
-        regime_score = self._safe_float(
-            getattr(
-                regime,
-                "composite_regime_score",
-                None,
-            ),
-            50.0,
-        )
-
-        macro_regime_score = self._safe_float(
-            getattr(
-                macro_regime,
-                "composite_macro_regime_score",
-                None,
-            ),
-            50.0,
-        )
-
-        liquidity_score = self._safe_float(
-            getattr(
-                liquidity,
-                "liquidity_score",
-                None,
-            ),
-            50.0,
-        )
-
-        volatility_penalty = self._clip(
-            100.0
-            - self._safe_float(
-                getattr(
-                    regime,
-                    "volatility_regime_score",
-                    None,
-                ),
-                50.0,
-            )
-        )
-
-        drawdown_penalty = self._clip(
-            max(
-                0.0,
-                60.0
-                - liquidity_score,
-            )
-        )
-
-        crowding_penalty = self._clip(
-            abs(
-                institutional_score
-                - 50.0
-            )
-            * 0.35
-        )
-
-        expected_return_score = self._clip(
-            institutional_score * 0.35
-            + recommendation_score * 0.25
-            + regime_score * 0.20
-            + macro_regime_score * 0.20
-        )
-
-        risk_adjusted_score = self._clip(
-            expected_return_score
-            - volatility_penalty * 0.15
-            - drawdown_penalty * 0.20
-            - crowding_penalty * 0.10
-            + liquidity_score * 0.15
-        )
-
-        alpha_score = self._clip(
-            risk_adjusted_score * 0.60
-            + institutional_score * 0.20
-            + recommendation_score * 0.20
-        )
-
-        conviction_score = self._clip(
-            abs(
-                alpha_score
-                - 50.0
-            )
-            * 1.25
-            + (
-                institutional_score
-                + recommendation_score
-                + macro_regime_score
-            )
-            / 12.0
-        )
-
-        confidence_score = self._clip(
-            alpha_score * 0.45
-            + conviction_score * 0.25
-            + liquidity_score * 0.30
-        )
-
-        direction = self._direction(
-            institutional_direction=getattr(
-                institutional,
-                "institutional_direction",
-                "NEUTRAL",
-            ),
-            regime_score=regime_score,
-            macro_regime_score=macro_regime_score,
-            recommendation_score=recommendation_score,
-        )
-
-        signal = self._signal(
-            alpha_score=alpha_score,
-            confidence_score=confidence_score,
-            conviction_score=conviction_score,
-            direction=direction,
-            liquidity_score=liquidity_score,
-        )
-
-        bias = self._position_bias(
-            signal,
-            direction,
-        )
-
-        suggested_weight = self._suggested_weight(
-            alpha_score=alpha_score,
-            confidence_score=confidence_score,
-            liquidity_score=liquidity_score,
-        )
-
-        max_risk_weight = min(
-            suggested_weight,
-            5.0
-            if liquidity_score >= 65
-            else 2.5,
-        )
-
-        warnings = self._warnings(
-            liquidity_score=liquidity_score,
-            volatility_penalty=volatility_penalty,
-            drawdown_penalty=drawdown_penalty,
-            crowding_penalty=crowding_penalty,
-        )
-
-        rationale = (
-            f"Alpha score {round(alpha_score, 2)} derived from "
-            f"institutional score {round(institutional_score, 2)}, "
-            f"recommendation score {round(recommendation_score, 2)}, "
-            f"regime score {round(regime_score, 2)}, "
-            f"macro regime score {round(macro_regime_score, 2)}, "
-            f"and liquidity score {round(liquidity_score, 2)}."
-        )
-
-        alpha = ForexAlphaSignal(
-            signal_id=str(uuid.uuid4()),
-
-            tenant_id=self.tenant_id,
-            user_id=self.user_id,
-            portfolio_id=self.portfolio_id,
-
-            pair=pair,
-
-            alpha_score=round(alpha_score, 2),
-            expected_return_score=round(expected_return_score, 2),
-            risk_adjusted_score=round(risk_adjusted_score, 2),
-
-            institutional_score=round(institutional_score, 2),
-            recommendation_score=round(recommendation_score, 2),
-            regime_score=round(regime_score, 2),
-            macro_regime_score=round(macro_regime_score, 2),
-            liquidity_score=round(liquidity_score, 2),
-
-            volatility_penalty=round(volatility_penalty, 2),
-            drawdown_penalty=round(drawdown_penalty, 2),
-            crowding_penalty=round(crowding_penalty, 2),
-
-            confidence_score=round(confidence_score, 2),
-            conviction_score=round(conviction_score, 2),
-
-            alpha_direction=direction,
-            alpha_signal=signal,
-            alpha_grade=self._grade(alpha_score),
-
-            position_bias=bias,
-            suggested_weight=round(suggested_weight, 2),
-            max_risk_weight=round(max_risk_weight, 2),
-
-            rationale=rationale,
-            warnings=warnings,
-
-            created_at=datetime.now(timezone.utc),
-        )
-
-        if save:
-            self.save_signal(alpha)
-
-        return alpha
-
-    # =====================================================
-    # Run
-    # =====================================================
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def run_alpha_model(
         self,
         pairs: Optional[List[str]] = None,
-        *,
-        save: bool = True,
-    ) -> ForexAlphaRun:
-        pairs = pairs or DEFAULT_PAIRS
+        force_refresh: bool = False,
+        save: bool = False,
+        db=None,
+        account_size: Optional[float] = None,
+        risk_per_trade_pct: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        pairs = [normalize_pair(p) for p in (pairs or self.pairs)]
+        account_size = float(account_size or self.account_size)
+        risk_per_trade_pct = float(risk_per_trade_pct or self.risk_per_trade_pct)
 
-        signals: List[ForexAlphaSignal] = []
+        quotes = self._load_quotes(pairs, force_refresh=force_refresh)
+        strength_scan = self._load_strength_scan(pairs, force_refresh=force_refresh)
 
+        rows = []
         for pair in pairs:
-            try:
-                signals.append(
-                    self.analyze_pair(
-                        pair,
-                        save=save,
-                    )
+            rows.append(
+                self._score_pair(
+                    pair=pair,
+                    quote=quotes.get(pair, {}),
+                    strength_scan=strength_scan,
+                    account_size=account_size,
+                    risk_per_trade_pct=risk_per_trade_pct,
                 )
-            except Exception:
-                continue
+            )
 
-        signals = sorted(
-            signals,
-            key=lambda item: (
-                item.alpha_score,
-                item.confidence_score,
-                item.conviction_score,
+        rows.sort(
+            key=lambda r: (
+                safe_float(r["alpha_score"]),
+                safe_float(r["confidence_score"]),
+                safe_float(r["risk_reward"]),
             ),
             reverse=True,
         )
 
-        long_count = len(
-            [
-                signal
-                for signal in signals
-                if signal.alpha_signal == "ALPHA_LONG"
-            ]
+        payload = self._build_payload(
+            pairs=pairs,
+            rows=rows,
+            quotes=quotes,
+            strength_scan=strength_scan,
         )
 
-        short_count = len(
-            [
-                signal
-                for signal in signals
-                if signal.alpha_signal == "ALPHA_SHORT"
-            ]
-        )
+        if save and db is not None:
+            self.save_alpha_signals(db, payload)
 
-        watch_count = len(
-            [
-                signal
-                for signal in signals
-                if signal.alpha_signal
-                in {
-                    "LONG_WATCH",
-                    "SHORT_WATCH",
-                    "ALPHA_MONITOR",
-                }
-            ]
-        )
+        return payload
 
-        avoid_count = len(
-            [
-                signal
-                for signal in signals
-                if signal.alpha_signal == "AVOID"
-            ]
-        )
-
-        average_alpha = (
-            sum(
-                signal.alpha_score
-                for signal in signals
-            )
-            / len(signals)
-            if signals
-            else 0.0
-        )
-
-        average_confidence = (
-            sum(
-                signal.confidence_score
-                for signal in signals
-            )
-            / len(signals)
-            if signals
-            else 0.0
-        )
-
-        return ForexAlphaRun(
-            run_id=str(uuid.uuid4()),
-
-            tenant_id=self.tenant_id,
-            user_id=self.user_id,
-            portfolio_id=self.portfolio_id,
-
-            pair_count=len(signals),
-
-            long_count=long_count,
-            short_count=short_count,
-            watch_count=watch_count,
-            avoid_count=avoid_count,
-
-            average_alpha_score=round(average_alpha, 2),
-            average_confidence=round(average_confidence, 2),
-
-            top_pair=signals[0].pair if signals else None,
-            top_signal=signals[0].alpha_signal if signals else None,
-
-            signals=[
-                signal.to_dict()
-                for signal in signals
-            ],
-
-            created_at=datetime.now(timezone.utc),
-        )
-
-    # =====================================================
-    # Persistence
-    # =====================================================
-
-    def save_signal(
+    def get_top_opportunities(
         self,
-        signal: ForexAlphaSignal,
-    ) -> None:
-        if self.db is None:
-            return
-
-        self.ensure_tables()
-
-        self.db.execute(
-            """
-            INSERT INTO forex_alpha_signals (
-                signal_id,
-
-                tenant_id,
-                user_id,
-                portfolio_id,
-
-                pair,
-
-                alpha_score,
-                expected_return_score,
-                risk_adjusted_score,
-
-                institutional_score,
-                recommendation_score,
-                regime_score,
-                macro_regime_score,
-                liquidity_score,
-
-                volatility_penalty,
-                drawdown_penalty,
-                crowding_penalty,
-
-                confidence_score,
-                conviction_score,
-
-                alpha_direction,
-                alpha_signal,
-                alpha_grade,
-
-                position_bias,
-                suggested_weight,
-                max_risk_weight,
-
-                rationale,
-                warnings,
-
-                created_at
-            )
-            VALUES (
-                :signal_id,
-
-                :tenant_id,
-                :user_id,
-                :portfolio_id,
-
-                :pair,
-
-                :alpha_score,
-                :expected_return_score,
-                :risk_adjusted_score,
-
-                :institutional_score,
-                :recommendation_score,
-                :regime_score,
-                :macro_regime_score,
-                :liquidity_score,
-
-                :volatility_penalty,
-                :drawdown_penalty,
-                :crowding_penalty,
-
-                :confidence_score,
-                :conviction_score,
-
-                :alpha_direction,
-                :alpha_signal,
-                :alpha_grade,
-
-                :position_bias,
-                :suggested_weight,
-                :max_risk_weight,
-
-                :rationale,
-                :warnings,
-
-                :created_at
-            )
-            """,
-            signal.to_dict(),
-        )
-
-        if hasattr(self.db, "commit"):
-            self.db.commit()
-
-    # =====================================================
-    # History
-    # =====================================================
-
-    def load_signals(
-        self,
-        *,
-        pair: Optional[str] = None,
-        signal: str = "ALL",
-        limit: int = 1000,
+        pairs: Optional[List[str]] = None,
+        limit: int = 10,
+        min_alpha_score: float = 65.0,
+        force_refresh: bool = False,
     ) -> List[Dict[str, Any]]:
-        if self.db is None:
-            return []
+        scan = self.run_alpha_model(
+            pairs=pairs,
+            force_refresh=force_refresh,
+        )
+        rows = [
+            r for r in scan.get("signals", [])
+            if safe_float(r.get("alpha_score")) >= float(min_alpha_score)
+        ]
+        return rows[: int(limit)]
 
-        self.ensure_tables()
-
-        sql = """
-        SELECT *
-        FROM forex_alpha_signals
-        WHERE tenant_id = :tenant_id
-        """
-
-        params: Dict[str, Any] = {
-            "tenant_id": self.tenant_id,
+    def command_center_payload(
+        self,
+        pairs: Optional[List[str]] = None,
+        force_refresh: bool = False,
+    ) -> Dict[str, Any]:
+        scan = self.run_alpha_model(
+            pairs=pairs,
+            force_refresh=force_refresh,
+        )
+        top = scan.get("top_signal")
+        return {
+            "status": scan.get("status"),
+            "generated_at": scan.get("generated_at"),
+            "best_trade": top,
+            "top_opportunities": scan.get("signals", [])[:8],
+            "summary": scan.get("summary", {}),
+            "warnings": scan.get("warnings", []),
         }
 
-        if pair:
-            sql += """
-            AND pair = :pair
-            """
-            params["pair"] = pair
+    # ------------------------------------------------------------------
+    # Data loading
+    # ------------------------------------------------------------------
 
-        if signal and signal.upper() != "ALL":
-            sql += """
-            AND alpha_signal = :signal
-            """
-            params["signal"] = signal.upper()
+    def _load_quotes(self, pairs: List[str], force_refresh: bool = False) -> Dict[str, Dict[str, Any]]:
+        quotes: Dict[str, Dict[str, Any]] = {}
 
-        sql += """
-        ORDER BY created_at DESC
-        LIMIT :limit
-        """
+        if self.price_service is None:
+            for pair in pairs:
+                quotes[pair] = {
+                    "pair": pair,
+                    "error": "ForexPriceService unavailable.",
+                }
+            return quotes
 
-        params["limit"] = int(limit)
-
-        rows = (
-            self.db.execute(
-                sql,
-                params,
+        try:
+            loaded = self.price_service.get_quotes(
+                pairs,
+                force_refresh=force_refresh,
             )
-            .mappings()
-            .all()
+            if isinstance(loaded, dict):
+                for k, v in loaded.items():
+                    quotes[normalize_pair(k)] = v
+        except Exception as exc:
+            for pair in pairs:
+                quotes[pair] = {
+                    "pair": pair,
+                    "error": str(exc),
+                }
+
+        for pair in pairs:
+            quotes.setdefault(pair, {"pair": pair, "error": "No quote returned."})
+
+        return quotes
+
+    def _load_strength_scan(self, pairs: List[str], force_refresh: bool = False) -> Dict[str, Any]:
+        if self.strength_engine is None:
+            return {
+                "status": "unavailable",
+                "pair_strength": [],
+                "currency_strength": [],
+                "warnings": ["ForexCurrencyStrengthEngine unavailable."],
+            }
+
+        try:
+            return self.strength_engine.scan_currencies(
+                pairs=pairs,
+                force_refresh=force_refresh,
+            )
+        except Exception as exc:
+            return {
+                "status": "error",
+                "pair_strength": [],
+                "currency_strength": [],
+                "warnings": [str(exc)],
+            }
+
+    # ------------------------------------------------------------------
+    # Alpha scoring
+    # ------------------------------------------------------------------
+
+    def _score_pair(
+        self,
+        pair: str,
+        quote: Dict[str, Any],
+        strength_scan: Dict[str, Any],
+        account_size: float,
+        risk_per_trade_pct: float,
+    ) -> Dict[str, Any]:
+        base, quote_ccy = split_pair(pair)
+        mid = safe_float(quote.get("mid") or quote.get("last"), 0.0)
+
+        pair_strength = self._pair_strength_row(pair, strength_scan)
+        differential = safe_float(pair_strength.get("differential"), 0.0)
+
+        strength_score = self._score_strength(differential)
+        momentum_score = self._score_momentum(pair, differential, quote)
+        macro_score = self._score_macro_proxy(base, quote_ccy, strength_scan)
+        carry_score = self._score_carry_proxy(base, quote_ccy)
+        institutional_score = self._score_institutional_proxy(differential, quote)
+        sentiment_score = self._score_sentiment_proxy(base, quote_ccy, differential)
+        risk_score = self._score_risk(mid, quote)
+
+        composite = (
+            strength_score * 0.34
+            + momentum_score * 0.16
+            + macro_score * 0.12
+            + carry_score * 0.10
+            + institutional_score * 0.12
+            + sentiment_score * 0.08
+            + risk_score * 0.08
         )
 
-        return [
-            dict(row)
-            for row in rows
+        direction = self._direction_from_differential(differential, composite)
+        confidence = self._confidence_score(
+            composite=composite,
+            differential=differential,
+            quote=quote,
+            strength_confidence=safe_float(pair_strength.get("confidence_score"), 50.0),
+        )
+
+        entry, stop, target, rr, risk_dollars, notional = self._risk_plan(
+            direction=direction,
+            mid=mid,
+            confidence=confidence,
+            account_size=account_size,
+            risk_per_trade_pct=risk_per_trade_pct,
+        )
+
+        recommendation = self._recommendation(direction, composite, confidence, rr)
+        signal = self._signal_label(direction, composite)
+        warnings = self._warnings(pair, quote, mid, composite, confidence)
+        rationale = self._rationale(
+            pair=pair,
+            direction=direction,
+            composite=composite,
+            confidence=confidence,
+            differential=differential,
+            strength_score=strength_score,
+            macro_score=macro_score,
+            carry_score=carry_score,
+            institutional_score=institutional_score,
+            sentiment_score=sentiment_score,
+            risk_score=risk_score,
+        )
+
+        row = ForexAlphaSignal(
+            pair=pair,
+            base=base,
+            quote=quote_ccy,
+            direction=direction,
+            recommendation=recommendation,
+            signal=signal,
+            alpha_score=round(clamp(composite), 2),
+            composite_score=round(clamp(composite), 2),
+            confidence_score=round(clamp(confidence), 2),
+            strength_score=round(clamp(strength_score), 2),
+            momentum_score=round(clamp(momentum_score), 2),
+            macro_score=round(clamp(macro_score), 2),
+            carry_score=round(clamp(carry_score), 2),
+            institutional_score=round(clamp(institutional_score), 2),
+            sentiment_score=round(clamp(sentiment_score), 2),
+            risk_score=round(clamp(risk_score), 2),
+            entry_price=round(entry, 6),
+            stop_price=round(stop, 6),
+            target_price=round(target, 6),
+            risk_reward=round(rr, 2),
+            suggested_notional=round(notional, 2),
+            estimated_risk_dollars=round(risk_dollars, 2),
+            position_bias=self._position_bias(direction),
+            provider=quote.get("provider"),
+            rationale=rationale,
+            warnings=warnings,
+            generated_at=utc_now_iso(),
+        ).to_dict()
+
+        return row
+
+    def _pair_strength_row(self, pair: str, scan: Dict[str, Any]) -> Dict[str, Any]:
+        for row in scan.get("pair_strength", []) or []:
+            if normalize_pair(row.get("pair")) == pair:
+                return row
+        return {
+            "pair": pair,
+            "differential": 0.0,
+            "confidence_score": 40.0,
+            "signal": "WATCH",
+        }
+
+    def _score_strength(self, differential: float) -> float:
+        return clamp(50.0 + abs(differential) * 0.75)
+
+    def _score_momentum(self, pair: str, differential: float, quote: Dict[str, Any]) -> float:
+        provider_bonus = 5.0 if quote.get("provider") else 0.0
+        return clamp(50.0 + abs(differential) * 0.35 + provider_bonus)
+
+    def _score_macro_proxy(self, base: str, quote: str, scan: Dict[str, Any]) -> float:
+        market_bias = "NEUTRAL"
+        try:
+            if self.strength_engine is not None:
+                market_bias = self.strength_engine._market_bias(scan)
+        except Exception:
+            market_bias = "NEUTRAL"
+
+        risk_on = {"AUD", "NZD", "CAD", "GBP"}
+        defensive = {"USD", "JPY", "CHF"}
+
+        score = 50.0
+        if market_bias == "RISK_ON":
+            if base in risk_on:
+                score += 12
+            if quote in risk_on:
+                score -= 6
+            if base in defensive:
+                score -= 6
+        elif market_bias == "RISK_OFF":
+            if base in defensive:
+                score += 12
+            if quote in defensive:
+                score -= 6
+            if base in risk_on:
+                score -= 6
+
+        return clamp(score)
+
+    def _score_carry_proxy(self, base: str, quote: str) -> float:
+        # Approximate current policy-rate ranking proxy until the dedicated
+        # carry/central-bank engine is blended in.
+        rate_rank = {
+            "NZD": 5.5,
+            "USD": 5.25,
+            "GBP": 5.0,
+            "CAD": 4.75,
+            "AUD": 4.35,
+            "EUR": 3.75,
+            "CHF": 1.5,
+            "JPY": 0.25,
+        }
+        diff = rate_rank.get(base, 3.0) - rate_rank.get(quote, 3.0)
+        return clamp(50.0 + diff * 6.0)
+
+    def _score_institutional_proxy(self, differential: float, quote: Dict[str, Any]) -> float:
+        base = 50.0 + abs(differential) * 0.35
+        if quote.get("provider") in ("polygon_fx", "twelvedata_fx", "finnhub_fx"):
+            base += 5.0
+        return clamp(base)
+
+    def _score_sentiment_proxy(self, base: str, quote: str, differential: float) -> float:
+        directional = 50.0 + abs(differential) * 0.20
+        if base in {"USD", "JPY", "CHF"} and differential > 0:
+            directional += 3.0
+        return clamp(directional)
+
+    def _score_risk(self, mid: float, quote: Dict[str, Any]) -> float:
+        if mid <= 0:
+            return 15.0
+        spread = safe_float(quote.get("spread"), 0.0)
+        if spread <= 0:
+            return 70.0
+        bps = (spread / mid) * 10000.0
+        return clamp(85.0 - bps * 2.0)
+
+    def _direction_from_differential(self, differential: float, composite: float) -> str:
+        if composite < 55 or abs(differential) < 8:
+            return "WATCH"
+        if differential > 0:
+            return "BUY"
+        return "SELL"
+
+    def _confidence_score(
+        self,
+        composite: float,
+        differential: float,
+        quote: Dict[str, Any],
+        strength_confidence: float,
+    ) -> float:
+        score = (
+            composite * 0.45
+            + min(100.0, abs(differential) * 1.2) * 0.25
+            + strength_confidence * 0.25
+        )
+        if quote.get("error"):
+            score -= 25.0
+        if quote.get("provider"):
+            score += 5.0
+        return clamp(score)
+
+    def _risk_plan(
+        self,
+        direction: str,
+        mid: float,
+        confidence: float,
+        account_size: float,
+        risk_per_trade_pct: float,
+    ) -> Tuple[float, float, float, float, float, float]:
+        if mid <= 0 or direction == "WATCH":
+            return mid, 0.0, 0.0, 0.0, 0.0, 0.0
+
+        volatility_pct = DEFAULT_ATR_PROXY_BPS / 10000.0
+        stop_distance = mid * volatility_pct
+        reward_multiple = 2.0 + max(0.0, confidence - 60.0) / 40.0
+        target_distance = stop_distance * reward_multiple
+
+        if direction == "BUY":
+            stop = mid - stop_distance
+            target = mid + target_distance
+        else:
+            stop = mid + stop_distance
+            target = mid - target_distance
+
+        risk_dollars = account_size * risk_per_trade_pct
+        notional = risk_dollars / max(volatility_pct, 0.0001)
+
+        return mid, stop, target, reward_multiple, risk_dollars, notional
+
+    def _recommendation(self, direction: str, composite: float, confidence: float, rr: float) -> str:
+        if direction == "WATCH":
+            return "WATCH"
+        if composite >= 82 and confidence >= 72 and rr >= 2.0:
+            return f"STRONG_{direction}"
+        if composite >= 68 and confidence >= 60 and rr >= 1.5:
+            return direction
+        return "WATCH"
+
+    def _signal_label(self, direction: str, composite: float) -> str:
+        if direction == "WATCH":
+            return "NO_TRADE"
+        if composite >= 82:
+            return f"HIGH_CONVICTION_{direction}"
+        if composite >= 68:
+            return f"TACTICAL_{direction}"
+        return "WATCH"
+
+    def _position_bias(self, direction: str) -> str:
+        if direction == "BUY":
+            return "LONG_BASE_SHORT_QUOTE"
+        if direction == "SELL":
+            return "SHORT_BASE_LONG_QUOTE"
+        return "NEUTRAL"
+
+    def _warnings(self, pair: str, quote: Dict[str, Any], mid: float, composite: float, confidence: float) -> str:
+        warnings = []
+        if quote.get("error"):
+            warnings.append(str(quote.get("error")))
+        if mid <= 0:
+            warnings.append("No valid current price.")
+        if confidence < 55:
+            warnings.append("Low confidence signal.")
+        if composite < 60:
+            warnings.append("Composite alpha below preferred threshold.")
+        return " | ".join(warnings)
+
+    def _rationale(
+        self,
+        pair: str,
+        direction: str,
+        composite: float,
+        confidence: float,
+        differential: float,
+        strength_score: float,
+        macro_score: float,
+        carry_score: float,
+        institutional_score: float,
+        sentiment_score: float,
+        risk_score: float,
+    ) -> str:
+        if direction == "WATCH":
+            lead = f"{pair} is currently a WATCH setup."
+        else:
+            lead = f"{pair} has a {direction} bias from currency-strength divergence."
+
+        return (
+            f"{lead} Alpha {composite:.1f}, confidence {confidence:.1f}. "
+            f"Strength differential {differential:.1f}; strength score {strength_score:.1f}, "
+            f"macro {macro_score:.1f}, carry {carry_score:.1f}, institutional {institutional_score:.1f}, "
+            f"sentiment {sentiment_score:.1f}, risk {risk_score:.1f}."
+        )
+
+    # ------------------------------------------------------------------
+    # Payload / persistence
+    # ------------------------------------------------------------------
+
+    def _build_payload(
+        self,
+        pairs: List[str],
+        rows: List[Dict[str, Any]],
+        quotes: Dict[str, Dict[str, Any]],
+        strength_scan: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        tradable = [r for r in rows if r.get("recommendation") not in ("WATCH", "NO_TRADE")]
+        buys = [r for r in rows if "BUY" in str(r.get("recommendation"))]
+        sells = [r for r in rows if "SELL" in str(r.get("recommendation"))]
+
+        failed_quotes = [
+            pair for pair, quote in quotes.items()
+            if quote.get("error")
         ]
 
+        top = rows[0] if rows else None
 
-def get_forex_alpha_model(
-    *,
-    tenant_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    portfolio_id: Optional[str] = None,
-    db: Any = None,
-) -> ForexAlphaModel:
-    return ForexAlphaModel(
-        tenant_id=tenant_id,
-        user_id=user_id,
-        portfolio_id=portfolio_id,
+        return {
+            "status": "success" if rows else "no_data",
+            "generated_at": utc_now_iso(),
+            "summary": {
+                "pairs_scanned": len(pairs),
+                "signals": len(rows),
+                "tradable": len(tradable),
+                "buy_signals": len(buys),
+                "sell_signals": len(sells),
+                "failed_quotes": len(failed_quotes),
+                "average_alpha": round(statistics.mean([safe_float(r.get("alpha_score")) for r in rows]), 2) if rows else 0.0,
+                "average_confidence": round(statistics.mean([safe_float(r.get("confidence_score")) for r in rows]), 2) if rows else 0.0,
+            },
+            "top_signal": top,
+            "signals": rows,
+            "failed_quotes": failed_quotes,
+            "strength_snapshot": {
+                "strongest_currency": strength_scan.get("strongest_currency"),
+                "weakest_currency": strength_scan.get("weakest_currency"),
+                "quote_health": strength_scan.get("quote_health"),
+            },
+            "warnings": self._collect_warnings(rows, quotes, strength_scan),
+        }
+
+    def _collect_warnings(
+        self,
+        rows: List[Dict[str, Any]],
+        quotes: Dict[str, Dict[str, Any]],
+        strength_scan: Dict[str, Any],
+    ) -> List[str]:
+        warnings = []
+        for pair, quote in quotes.items():
+            if quote.get("error"):
+                warnings.append(f"{pair}: {quote.get('error')}")
+        warnings.extend(str(w) for w in strength_scan.get("warnings", []) or [])
+        for row in rows:
+            if row.get("warnings"):
+                warnings.append(f"{row.get('pair')}: {row.get('warnings')}")
+        return warnings[:50]
+
+    def save_alpha_signals(self, db, payload: Dict[str, Any]) -> None:
+        if text is None:
+            return
+
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS forex_alpha_signals (
+                id SERIAL PRIMARY KEY,
+                pair VARCHAR(20),
+                direction VARCHAR(20),
+                recommendation VARCHAR(40),
+                alpha_score DOUBLE PRECISION,
+                confidence_score DOUBLE PRECISION,
+                entry_price DOUBLE PRECISION,
+                stop_price DOUBLE PRECISION,
+                target_price DOUBLE PRECISION,
+                risk_reward DOUBLE PRECISION,
+                suggested_notional DOUBLE PRECISION,
+                rationale TEXT,
+                warnings TEXT,
+                generated_at TIMESTAMP
+            )
+        """))
+
+        generated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        for row in payload.get("signals", []):
+            db.execute(text("""
+                INSERT INTO forex_alpha_signals (
+                    pair,
+                    direction,
+                    recommendation,
+                    alpha_score,
+                    confidence_score,
+                    entry_price,
+                    stop_price,
+                    target_price,
+                    risk_reward,
+                    suggested_notional,
+                    rationale,
+                    warnings,
+                    generated_at
+                )
+                VALUES (
+                    :pair,
+                    :direction,
+                    :recommendation,
+                    :alpha_score,
+                    :confidence_score,
+                    :entry_price,
+                    :stop_price,
+                    :target_price,
+                    :risk_reward,
+                    :suggested_notional,
+                    :rationale,
+                    :warnings,
+                    :generated_at
+                )
+            """), {
+                "pair": row.get("pair"),
+                "direction": row.get("direction"),
+                "recommendation": row.get("recommendation"),
+                "alpha_score": row.get("alpha_score"),
+                "confidence_score": row.get("confidence_score"),
+                "entry_price": row.get("entry_price"),
+                "stop_price": row.get("stop_price"),
+                "target_price": row.get("target_price"),
+                "risk_reward": row.get("risk_reward"),
+                "suggested_notional": row.get("suggested_notional"),
+                "rationale": row.get("rationale"),
+                "warnings": row.get("warnings"),
+                "generated_at": generated_at,
+            })
+
+        db.commit()
+
+
+_ALPHA_MODEL: Optional[ForexAlphaModel] = None
+
+
+def get_forex_alpha_model() -> ForexAlphaModel:
+    global _ALPHA_MODEL
+    if _ALPHA_MODEL is None:
+        _ALPHA_MODEL = ForexAlphaModel()
+    return _ALPHA_MODEL
+
+
+def run_forex_alpha_model(
+    pairs: Optional[List[str]] = None,
+    force_refresh: bool = False,
+    save: bool = False,
+    db=None,
+) -> Dict[str, Any]:
+    return get_forex_alpha_model().run_alpha_model(
+        pairs=pairs,
+        force_refresh=force_refresh,
+        save=save,
         db=db,
+    )
+
+
+def get_top_forex_alpha_opportunities(
+    pairs: Optional[List[str]] = None,
+    limit: int = 10,
+    min_alpha_score: float = 65.0,
+    force_refresh: bool = False,
+) -> List[Dict[str, Any]]:
+    return get_forex_alpha_model().get_top_opportunities(
+        pairs=pairs,
+        limit=limit,
+        min_alpha_score=min_alpha_score,
+        force_refresh=force_refresh,
     )

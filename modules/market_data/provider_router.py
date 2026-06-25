@@ -22,11 +22,24 @@ class ProviderStatus:
     success_count: int = 0
     failure_count: int = 0
     rate_limit_count: int = 0
+    consecutive_failures: int = 0
     last_success: Optional[datetime] = None
     last_failure: Optional[datetime] = None
     cooldown_until: Optional[datetime] = None
     avg_latency_ms: float = 0.0
     requests_today: int = 0
+
+
+# A handful of consecutive failures (522s, 500s, timeouts, DNS errors --
+# anything that isn't an explicit rate-limit response) is a much stronger
+# signal of "this provider is actually down right now" than a single
+# blip. Without this, mark_failure() only nudged a health_score that
+# is_available() never even checked, so a sustained outage at any
+# provider meant every symbol in a batch kept retrying it and eating its
+# full request timeout before failing over -- for as long as the outage
+# lasted.
+CONSECUTIVE_FAILURE_COOLDOWN_THRESHOLD = 3
+CONSECUTIVE_FAILURE_COOLDOWN_MINUTES = 2
 
 
 class ProviderRouter:
@@ -115,6 +128,7 @@ class ProviderRouter:
             provider.success_count += 1
             provider.last_success = datetime.now(UTC)
             provider.requests_today += 1
+            provider.consecutive_failures = 0
 
             if latency_ms > 0:
                 if provider.avg_latency_ms <= 0:
@@ -140,12 +154,23 @@ class ProviderRouter:
                 return
 
             provider.failure_count += 1
+            provider.consecutive_failures += 1
             provider.last_failure = datetime.now(UTC)
 
             provider.health_score = max(
                 0.0,
                 provider.health_score - 5.0,
             )
+
+            if provider.consecutive_failures >= CONSECUTIVE_FAILURE_COOLDOWN_THRESHOLD:
+                provider.cooldown_until = datetime.now(UTC) + timedelta(
+                    minutes=CONSECUTIVE_FAILURE_COOLDOWN_MINUTES
+                )
+                print(
+                    f"⛔ {provider.provider}: {provider.consecutive_failures} consecutive "
+                    f"failures -- cooling down for {CONSECUTIVE_FAILURE_COOLDOWN_MINUTES}min "
+                    "instead of retrying it for every remaining symbol."
+                )
 
             self.rate_manager.mark_failure(provider.provider)
 
