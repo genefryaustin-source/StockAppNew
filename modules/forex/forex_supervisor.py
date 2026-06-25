@@ -1,29 +1,30 @@
-from __future__ import annotations
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone
 
-try:
-    from .forex_control_plane import ForexControlPlane
-    from .forex_runtime_controller import ForexRuntimeController
-    from .forex_self_diagnostic_engine import ForexSelfDiagnosticEngine
-except Exception:
-    from forex_control_plane import ForexControlPlane
-    from forex_runtime_controller import ForexRuntimeController
-    from forex_self_diagnostic_engine import ForexSelfDiagnosticEngine
-
+from modules.forex.forex_operations_center import get_forex_operations_center
+from modules.forex.forex_runtime_manager import get_forex_runtime_manager
 
 class ForexSupervisor:
-    """Supervises scheduled ticks, diagnostics, and self-healing."""
+    def __init__(self, db=None):
+        self.ops=get_forex_operations_center(db=db)
+        self.runtime=get_forex_runtime_manager()
 
-    def __init__(self) -> None:
-        self.control = ForexControlPlane()
-        self.runtime = ForexRuntimeController()
-        self.diagnostics = ForexSelfDiagnosticEngine()
+    def supervise(self):
+        return {
+            "generated_at":datetime.now(timezone.utc).isoformat(),
+            "runtime":self.runtime.status(),
+            "operations":self.ops.dashboard(),
+        }
 
-    def supervise_tick(self, max_jobs: int = 10, heal_on_degraded: bool = True) -> Dict[str, Any]:
-        diagnostic = self.diagnostics.run_diagnostics()
-        healing = None
-        if heal_on_degraded and diagnostic["health_score"] < 80:
-            healing = self.control.command("heal")
-        runtime = self.runtime.tick(max_jobs=max_jobs)
-        optimize = self.control.command("optimize")
-        return {"diagnostic": diagnostic, "healing": healing, "runtime": runtime, "optimization": optimize}
+    def heartbeat(self):
+        return self.runtime.status()
+
+    def refresh(self):
+        return self.ops.refresh()
+
+_SUPERVISOR=None
+
+def get_forex_supervisor(db=None):
+    global _SUPERVISOR
+    if _SUPERVISOR is None:
+        _SUPERVISOR=ForexSupervisor(db=db)
+    return _SUPERVISOR

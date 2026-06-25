@@ -1,75 +1,114 @@
 """
 modules/forex/forex_service.py
+
+Cycle-safe service facade for the Forex subsystem.
+
+This file must not import forex_application at module import time.
+It provides service-level operations used by APIs, command processors, and UI.
 """
 
 from __future__ import annotations
 
-from modules.forex.forex_application import get_forex_application
-from modules.forex.forex_platform_controller import get_forex_platform_controller
-from modules.forex.forex_command_center_engine import get_forex_command_center_engine
-from modules.forex.forex_currency_strength_engine import get_forex_currency_strength_engine
-from modules.forex.forex_alpha_model import get_forex_alpha_model
-from modules.forex.forex_carry_trade_engine import get_forex_carry_trade_engine
-from modules.forex.forex_macro_regime_engine import get_forex_macro_regime_engine
-from modules.forex.forex_central_bank_engine import get_forex_central_bank_engine
-from modules.forex.forex_sentiment_engine import get_forex_sentiment_engine
-from modules.forex.forex_institutional_scanner import get_forex_institutional_scanner
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 
 class ForexService:
-    """Single public API for the Forex subsystem."""
+    def __init__(self, db: Optional[Any] = None):
+        self.db = db
 
-    def __init__(self):
-        self.application = get_forex_application()
-        self.controller = get_forex_platform_controller()
+    def initialize(self) -> Dict[str, Any]:
+        return {"status": "READY", "component": "ForexService"}
 
-    def initialize(self):
-        return self.application.startup()
+    def shutdown(self) -> Dict[str, Any]:
+        return {"status": "STOPPED", "component": "ForexService"}
 
-    def shutdown(self):
-        return self.application.shutdown()
-
-    def refresh_market_data(self):
-        return self.application.refresh()
-
-    def diagnostics(self):
-        return self.application.diagnostics()
-
-    def get_command_center(self):
-        return get_forex_command_center_engine().build()
-
-    def get_currency_strength(self):
-        return get_forex_currency_strength_engine().command_center_payload()
-
-    def get_alpha_recommendations(self):
-        return get_forex_alpha_model().run_alpha_model()
-
-    def get_carry_trades(self):
-        return get_forex_carry_trade_engine().analyze()
-
-    def get_macro_regime(self):
-        return get_forex_macro_regime_engine().analyze()
-
-    def get_central_bank_analysis(self):
-        return get_forex_central_bank_engine().analyze()
-
-    def get_sentiment(self):
-        return get_forex_sentiment_engine().analyze()
-
-    def get_institutional_flow(self):
-        return get_forex_institutional_scanner().scan()
+    def diagnostics(self) -> Dict[str, Any]:
+        return {
+            "status": "READY",
+            "component": "ForexService",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
 
     def render(self):
-        self.application.render()
+        try:
+            from modules.forex.forex_workspace import render_forex_workspace
+            return render_forex_workspace(db=self.db)
+        except Exception as exc:
+            return {"status": "ERROR", "error": str(exc)}
+
+    def refresh_market_data(self) -> Dict[str, Any]:
+        try:
+            from modules.forex.forex_refresh_engine import get_forex_refresh_engine
+            engine = get_forex_refresh_engine()
+            if hasattr(engine, "refresh"):
+                return engine.refresh()
+            if hasattr(engine, "run"):
+                return engine.run()
+            return {"status": "READY", "message": "Refresh engine loaded."}
+        except Exception as exc:
+            return {"status": "WARNING", "message": "Refresh engine unavailable.", "error": str(exc)}
+
+    def get_command_center(self) -> Dict[str, Any]:
+        try:
+            from modules.forex.forex_command_center_engine import get_forex_command_center_engine
+            engine = get_forex_command_center_engine()
+            if hasattr(engine, "build"):
+                return engine.build(force_refresh=False)
+            return {"status": "READY", "component": type(engine).__name__}
+        except Exception as exc:
+            return {"status": "ERROR", "error": str(exc)}
+
+    def get_alpha_recommendations(self) -> Dict[str, Any]:
+        try:
+            from modules.forex.forex_alpha_model import get_forex_alpha_model
+            engine = get_forex_alpha_model()
+            if hasattr(engine, "command_center_payload"):
+                return engine.command_center_payload(force_refresh=False)
+            if hasattr(engine, "run_alpha_model"):
+                return engine.run_alpha_model(force_refresh=False)
+            return {"status": "READY", "component": type(engine).__name__}
+        except Exception as exc:
+            return {"status": "ERROR", "error": str(exc)}
+
+    def get_currency_strength(self) -> Dict[str, Any]:
+        try:
+            from modules.forex.forex_currency_strength_engine import get_forex_currency_strength_engine
+            engine = get_forex_currency_strength_engine()
+            if hasattr(engine, "command_center_payload"):
+                return engine.command_center_payload(force_refresh=False)
+            if hasattr(engine, "analyze"):
+                return engine.analyze(force_refresh=False)
+            return {"status": "READY", "component": type(engine).__name__}
+        except Exception as exc:
+            return {"status": "ERROR", "error": str(exc)}
+
+    def get_macro_regime(self) -> Dict[str, Any]:
+        try:
+            from modules.forex.forex_macro_regime_engine import get_forex_macro_regime_engine
+            engine = get_forex_macro_regime_engine()
+            if hasattr(engine, "analyze"):
+                return engine.analyze(force_refresh=False)
+            return {"status": "READY", "component": type(engine).__name__}
+        except Exception as exc:
+            return {"status": "ERROR", "error": str(exc)}
+
+    def get_sentiment(self) -> Dict[str, Any]:
+        try:
+            from modules.forex.forex_sentiment_engine import get_forex_sentiment_engine
+            engine = get_forex_sentiment_engine()
+            if hasattr(engine, "analyze"):
+                return engine.analyze(force_refresh=False)
+            return {"status": "READY", "component": type(engine).__name__}
+        except Exception as exc:
+            return {"status": "ERROR", "error": str(exc)}
 
 
-_SERVICE=None
+_SERVICE = None
 
-def get_forex_service():
+
+def get_forex_service(db: Optional[Any] = None) -> ForexService:
     global _SERVICE
-    if _SERVICE is None:
-        _SERVICE=ForexService()
+    if _SERVICE is None or (db is not None and _SERVICE.db is None):
+        _SERVICE = ForexService(db=db)
     return _SERVICE
-
-def render_forex():
-    get_forex_service().render()

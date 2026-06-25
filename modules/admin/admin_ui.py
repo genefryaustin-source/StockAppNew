@@ -16,6 +16,10 @@ from modules.admin.tenant_admin_ui import (
     render_tenant_admin_panel,
 )
 
+from modules.admin.api_keys_ui import (
+    render_api_keys_tab,
+)
+
 from modules.universe.universe_cleanup_ui import (
     render_universe_cleanup_ui,
 )
@@ -135,6 +139,7 @@ def render_admin_panel(db, user):
         tab_users,
         tab_plan,
         tab_tenants,
+        api_keys_tab,
         tab_cleanup,
         provider_health_tab,
         provider_operations_tab,
@@ -146,6 +151,7 @@ def render_admin_panel(db, user):
         "👤 Users",
         "💳 Plan Management",
         "🏢 Tenants",
+        "🔑 API Keys",
         "🧹 Universe Cleanup",
         "🔌 Provider Health",
         "🚀 Provider Operations",
@@ -446,6 +452,13 @@ def render_admin_panel(db, user):
                 db,
                 {**user, "tenant_id": tenant_id},
             )
+
+    # =========================================================
+    # API KEYS TAB
+    # =========================================================
+    with api_keys_tab:
+
+        render_api_keys_tab(db, user)
 
     # =========================================================
     # UNIVERSE CLEANUP TAB
@@ -873,4 +886,3 @@ def _render_plan_management_tab(db, user, tenant_id):
 
         except Exception as e:
             st.error(f"Failed to load plan overview: {e}")
-

@@ -40,5 +40,14 @@ def get_forex_master_workspace():
         _WORKSPACE=ForexMasterWorkspace()
     return _WORKSPACE
 
-def render_forex_master_workspace():
+def render_forex_master_workspace(*args, **kwargs):
+    db = kwargs.get("db")
+
+    if db is None and len(args) > 0:
+        db = args[0]
+
+    user = kwargs.get("user")
+
+    if user is None and len(args) > 1:
+        user = args[1]
     get_forex_master_workspace().render()

@@ -1,74 +1,51 @@
 """
 modules/forex/forex_client.py
 
-Client facade used by external application components.
+High-level client wrapper for applications consuming the Forex API.
 """
 
 from __future__ import annotations
+from typing import Any
 
-from typing import Any, Dict
-
-from modules.forex.forex_sdk import get_forex_sdk
+from modules.forex.forex_api import get_forex_api
 
 
 class ForexClient:
+    def __init__(self, db=None):
+        self.db=db
+        self.api=get_forex_api(db=db)
 
-    def __init__(self):
-        self.sdk = get_forex_sdk()
+    def call(self, action:str, **kwargs)->Any:
+        return self.api.execute(action, **kwargs)
 
-    def connect(self) -> Dict[str, Any]:
-        return self.sdk.initialize()
+    def initialize(self):
+        return self.call("initialize")
 
-    def disconnect(self) -> Dict[str, Any]:
-        return self.sdk.shutdown()
+    def health(self):
+        return self.call("health")
 
-    def heartbeat(self) -> Dict[str, Any]:
-        return {
-            "status": "online",
-            "dashboard": self.sdk.dashboard(),
-        }
+    def status(self):
+        return self.call("status")
 
-    def refresh(self):
-        return self.sdk.refresh()
+    def quote(self, pair:str):
+        return self.call("quotes", pairs=pair)
 
-    def dashboard(self):
-        return self.sdk.dashboard()
+    def submit_order(self, **kwargs):
+        return self.call("submit_order", **kwargs)
 
-    def command_center(self):
-        return self.sdk.command_center()
+    def portfolio(self, **kwargs):
+        return self.call("portfolio_summary", **kwargs)
 
-    def opportunities(self):
-        return self.sdk.opportunities()
+    def validate(self):
+        return self.call("validate")
 
-    def currency_strength(self):
-        return self.sdk.strength()
-
-    def macro_regime(self):
-        return self.sdk.macro()
-
-    def carry_trades(self):
-        return self.sdk.carry()
-
-    def institutional_flow(self):
-        return self.sdk.institutional()
-
-    def central_banks(self):
-        return self.sdk.central_banks()
-
-    def sentiment(self):
-        return self.sdk.sentiment()
-
-    def portfolio(self):
-        return self.sdk.portfolio()
-
-    def render(self):
-        self.sdk.render()
-
+    def enterprise_snapshot(self):
+        return self.call("enterprise_snapshot")
 
 _CLIENT=None
 
-def get_forex_client():
+def get_forex_client(db=None)->ForexClient:
     global _CLIENT
-    if _CLIENT is None:
-        _CLIENT=ForexClient()
+    if _CLIENT is None or (db is not None and _CLIENT.db is None):
+        _CLIENT=ForexClient(db=db)
     return _CLIENT

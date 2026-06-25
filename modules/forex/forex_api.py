@@ -1,78 +1,37 @@
 """
 modules/forex/forex_api.py
+
+Unified API facade exposing the Forex SDK to the rest of StockApp.
 """
 
 from __future__ import annotations
+from typing import Any, Dict
 
-from modules.forex.forex_service import get_forex_service
+from modules.forex.forex_sdk import get_forex_sdk
+
 
 class ForexAPI:
-    """Unified API facade for the Forex subsystem."""
+    def __init__(self, db=None):
+        self.db=db
+        self.sdk=get_forex_sdk(db=db)
 
-    def __init__(self):
-        self.service=get_forex_service()
+    def execute(self, action:str, **kwargs)->Any:
+        if not hasattr(self.sdk, action):
+            return {"status":"ERROR","message":f"Unknown action: {action}"}
+        return getattr(self.sdk, action)(**kwargs)
 
-    def initialize(self):
-        return self.service.initialize()
-
-    def shutdown(self):
-        return self.service.shutdown()
-
-    def refresh(self):
-        return self.service.refresh_market_data()
-
-    def get_dashboard_data(self):
+    def info(self)->Dict[str,Any]:
         return {
-            "command_center": self.service.get_command_center(),
-            "macro_regime": self.service.get_macro_regime(),
-            "currency_strength": self.service.get_currency_strength(),
-            "top_opportunities": self.service.get_alpha_recommendations(),
-            "institutional_flow": self.service.get_institutional_flow(),
-            "carry_trades": self.service.get_carry_trades(),
-            "central_banks": self.service.get_central_bank_analysis(),
-            "sentiment": self.service.get_sentiment(),
+            "name":"ForexAPI",
+            "version":"1.0.0",
+            "sdk":"ForexSDK",
+            "status":"READY",
         }
-
-    def get_command_center(self):
-        return self.service.get_command_center()
-
-    def get_market_regime(self):
-        return self.service.get_macro_regime()
-
-    def get_currency_strength(self):
-        return self.service.get_currency_strength()
-
-    def get_top_opportunities(self):
-        return self.service.get_alpha_recommendations()
-
-    def get_institutional_flow(self):
-        return self.service.get_institutional_flow()
-
-    def get_carry_trades(self):
-        return self.service.get_carry_trades()
-
-    def get_central_banks(self):
-        return self.service.get_central_bank_analysis()
-
-    def get_sentiment(self):
-        return self.service.get_sentiment()
-
-    def get_portfolio_summary(self):
-        return {
-            "status":"ready",
-            "message":"Connect to existing portfolio/paper trading infrastructure."
-        }
-
-    def render(self):
-        self.service.render()
 
 _API=None
 
-def get_forex_api():
+def get_forex_api(db=None)->ForexAPI:
     global _API
-    if _API is None:
-        _API=ForexAPI()
+    if _API is None or (db is not None and _API.db is None):
+        _API=ForexAPI(db=db)
     return _API
-
-def render_forex():
-    get_forex_api().render()

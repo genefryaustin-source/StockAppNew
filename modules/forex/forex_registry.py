@@ -15,7 +15,7 @@ from modules.forex.forex_sentiment_engine import get_forex_sentiment_engine
 from modules.forex.forex_macro_regime_engine import get_forex_macro_regime_engine
 from modules.forex.forex_institutional_scanner import get_forex_institutional_scanner
 from modules.forex.forex_price_service import get_forex_price_service
-from modules.forex.forex_provider_router import get_forex_provider_router
+from modules.forex.providers.forex_provider_router import get_forex_provider_router
 
 
 class ForexRegistry:

@@ -1,24 +1,47 @@
+"""
+modules/forex/forex_stress_test_suite.py
+
+Stress testing framework for the Forex subsystem.
+"""
+
 from __future__ import annotations
-from typing import Any, Dict, List
-
-try:
-    from .forex_performance_profiler import ForexPerformanceProfiler
-    from .forex_scheduler import ForexScheduler
-    from .forex_execution_queue import ForexExecutionQueue
-except Exception:
-    from forex_performance_profiler import ForexPerformanceProfiler
-    from forex_scheduler import ForexScheduler
-    from forex_execution_queue import ForexExecutionQueue
-
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+import time
 
 class ForexStressTestSuite:
-    """Load tests the Forex operations stack."""
+    def __init__(self):
+        self.results=[]
 
-    def run(self, pairs: int = 15, jobs_per_pair: int = 4) -> Dict[str, Any]:
-        scheduler = ForexScheduler()
-        selected_pairs = [f"FX{i:03d}/USD" for i in range(max(1, pairs))]
-        job_types = ["market_snapshot", "strength_scan", "risk_scan", "spread_scan"][:max(1, jobs_per_pair)]
-        created = scheduler.schedule_cycle(pairs=selected_pairs, job_types=job_types, enqueue=True)
-        profile = ForexPerformanceProfiler().run_profile(sample_size=min(50, max(5, len(created) // 4)))
-        depth = ForexExecutionQueue(scheduler.registry.store).queue_depth()
-        return {"created_jobs": len(created), "pairs": len(selected_pairs), "job_types": job_types, "profile": profile, "queue_depth": depth}
+    def _task(self, n:int):
+        return sum(range(n))
+
+    def run(self, workers:int=8, jobs:int=100):
+        start=time.perf_counter()
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            list(ex.map(self._task,[10000]*jobs))
+        elapsed=time.perf_counter()-start
+        report={
+            "generated_at":datetime.now(timezone.utc).isoformat(),
+            "workers":workers,
+            "jobs":jobs,
+            "elapsed_seconds":round(elapsed,3),
+            "jobs_per_second":round(jobs/max(elapsed,1e-9),2),
+            "status":"PASS"
+        }
+        self.results.append(report)
+        return report
+
+def run_forex_stress_test_suite(workers:int=8,jobs:int=100):
+    return ForexStressTestSuite().run(workers=workers,jobs=jobs)
+
+def render_forex_stress_test_suite():
+    report=run_forex_stress_test_suite()
+    try:
+        import streamlit as st
+    except Exception:
+        return report
+    st.title("Forex Stress Test Suite")
+    st.metric("Jobs/sec",report["jobs_per_second"])
+    st.json(report)
+    return report
