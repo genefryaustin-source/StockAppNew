@@ -1,105 +1,74 @@
 """
 modules/forex/forex_institutional_terminal.py
 
-Cycle-safe Institutional Forex terminal facade.
+Institutional Forex terminal facade.
 """
 
 from __future__ import annotations
-
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+
+from modules.forex.forex_terminal_dashboard import get_forex_terminal_dashboard
+from modules.forex.forex_trading_desk import get_forex_trading_desk
+from modules.forex.forex_portfolio_manager import get_forex_portfolio_manager
+from modules.forex.forex_ai_assistant import get_forex_ai_assistant
 
 
 class ForexInstitutionalTerminal:
     VERSION = "1.0.0"
 
-    def __init__(self, db: Optional[Any] = None):
+    def __init__(self, db=None):
         self.db = db
+        self.dashboard = get_forex_terminal_dashboard(db=db)
+        self.trading_desk = get_forex_trading_desk(db=db)
+        self.portfolio = get_forex_portfolio_manager(db=db)
+        self.ai = get_forex_ai_assistant(db=db)
 
-    def snapshot(self, **kwargs) -> Dict[str, Any]:
+    def dashboard_view(self):
+        return self.dashboard.render() if hasattr(self.dashboard, "render") else self.dashboard
+
+    def snapshot(self):
         return {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "terminal": "Forex Institutional Terminal",
-            "version": self.VERSION,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "terminal": "Institutional",
             "status": "READY",
-            "market_overview": self.market_overview(),
-            "portfolio": self._safe_portfolio_summary(**kwargs),
-            "provider_health": self._safe_provider_health(),
+            "portfolio": self.portfolio.portfolio_summary() if hasattr(self.portfolio, "portfolio_summary") else {},
         }
 
-    def render(self, *args: Any, **kwargs: Any):
-        try:
-            from modules.forex.forex_institutional_command_center import render_forex_institutional_command_center
-            kwargs.setdefault("db", self.db)
-            return render_forex_institutional_command_center(*args, **kwargs)
-        except Exception as exc:
-            try:
-                import streamlit as st
-                st.error(f"Institutional terminal failed: {exc}")
-            except Exception:
-                pass
-            return {"status": "ERROR", "error": str(exc)}
-
-    def dashboard(self):
-        try:
-            from modules.forex.forex_terminal_dashboard import get_forex_terminal_dashboard
-            return get_forex_terminal_dashboard(db=self.db)
-        except Exception as exc:
-            return {"status": "ERROR", "error": str(exc)}
-
-    def market_overview(self) -> Dict[str, Any]:
-        try:
-            from modules.forex.forex_service import get_forex_service
-            service = get_forex_service(db=self.db)
-            return service.get_command_center()
-        except Exception as exc:
-            return {"status": "WARNING", "error": str(exc)}
+    def market_overview(self):
+        return {
+            "status": "READY",
+            "workspace": "Market Overview",
+        }
 
     def trading_workspace(self):
-        from modules.forex.forex_trading_desk import get_forex_trading_desk
-        return get_forex_trading_desk(db=self.db)
+        return self.trading_desk
 
     def portfolio_workspace(self):
-        from modules.forex.forex_portfolio_manager import get_forex_portfolio_manager
-        return get_forex_portfolio_manager(db=self.db)
+        return self.portfolio
 
-    def institutional_workspace(self) -> Dict[str, Any]:
+    def institutional_workspace(self):
         return {
-            "terminal": self.snapshot(),
-            "trading_workspace": "ForexTradingDesk",
-            "portfolio_workspace": "ForexPortfolioManager",
+            "terminal": "Institutional",
+            "dashboard": self.dashboard,
+            "trading": self.trading_desk,
+            "portfolio": self.portfolio,
         }
 
     def ai_workspace(self):
-        from modules.forex.forex_ai_assistant import get_forex_ai_assistant
-        return get_forex_ai_assistant(db=self.db)
+        return self.ai
 
-    def status(self) -> Dict[str, Any]:
+    def status(self):
         return {
             "terminal": "Forex Institutional Terminal",
             "version": self.VERSION,
             "status": "READY",
         }
-
-    def _safe_portfolio_summary(self, **kwargs):
-        try:
-            from modules.forex.forex_portfolio_manager import get_forex_portfolio_manager
-            return get_forex_portfolio_manager(db=self.db).portfolio_summary(**kwargs)
-        except Exception as exc:
-            return {"status": "WARNING", "error": str(exc)}
-
-    def _safe_provider_health(self):
-        try:
-            from modules.forex.forex_provider_health import get_forex_provider_health
-            return get_forex_provider_health().summary()
-        except Exception as exc:
-            return {"status": "WARNING", "error": str(exc)}
 
 
 _INSTANCE = None
 
 
-def get_forex_institutional_terminal(db: Optional[Any] = None) -> ForexInstitutionalTerminal:
+def get_forex_institutional_terminal(db=None):
     global _INSTANCE
     if _INSTANCE is None or (db is not None and _INSTANCE.db is None):
         _INSTANCE = ForexInstitutionalTerminal(db=db)
