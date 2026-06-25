@@ -32,7 +32,8 @@ def get_history(
         interval,
         "D",
     )
-    key = st.secrets.get("FINNHUB_API_KEY")
+    from modules.admin.tenant_api_keys import get_provider_key
+    key = get_provider_key("FINNHUB_API_KEY")
 
     if not key:
         print("FINNHUB API KEY MISSING")

@@ -61,10 +61,8 @@ import streamlit as st
 
 def _get_client():
     import anthropic
-    key = (
-        os.getenv("ANTHROPIC_API_KEY")
-        or st.secrets.get("ANTHROPIC_API_KEY", "")
-    )
+    from modules.admin.tenant_api_keys import get_provider_key
+    key = get_provider_key("ANTHROPIC_API_KEY")
     if not key:
         raise EnvironmentError("ANTHROPIC_API_KEY not set.")
     return anthropic.Anthropic(api_key=key)
@@ -72,10 +70,8 @@ def _get_client():
 
 def _anthropic_available() -> bool:
     try:
-        return bool(
-            os.getenv("ANTHROPIC_API_KEY")
-            or st.secrets.get("ANTHROPIC_API_KEY", "")
-        )
+        from modules.admin.tenant_api_keys import get_provider_key
+        return bool(get_provider_key("ANTHROPIC_API_KEY"))
     except Exception:
         return False
 

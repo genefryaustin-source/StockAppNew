@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, UTC
 import streamlit as st
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, text, inspect
 from sqlalchemy.orm import sessionmaker
 from models.base import Base
 from sqlalchemy.pool import StaticPool
@@ -157,16 +157,31 @@ def init_database():
 
 
 
-    # PostgreSQL tenant migration
+    # Tenant table migrations -- portable across Postgres and SQLite.
+    # "ALTER TABLE ... ADD COLUMN IF NOT EXISTS" is Postgres-only syntax;
+    # SQLite doesn't support the IF NOT EXISTS modifier on ADD COLUMN at
+    # all, so that version silently failed (and was silently swallowed)
+    # on SQLite. Checking column existence via inspect() first and using
+    # plain ADD COLUMN works identically on both.
     try:
-        with engine.begin() as conn:
-            conn.execute(text("""
-                ALTER TABLE tenants
-                ADD COLUMN IF NOT EXISTS is_active INTEGER DEFAULT 1
-            """))
-        print("TENANT is_active migration complete")
+        inspector = inspect(engine)
+        existing_cols = {c["name"] for c in inspector.get_columns("tenants")}
+
+        tenant_column_migrations = [
+            ("is_active", "INTEGER DEFAULT 1"),
+            ("api_grace_unlimited", "INTEGER DEFAULT 0"),
+            ("api_grace_days_override", "INTEGER"),
+        ]
+
+        for col_name, col_ddl in tenant_column_migrations:
+            if col_name not in existing_cols:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE tenants ADD COLUMN {col_name} {col_ddl}"))
+                print(f"TENANT migration: added column '{col_name}'")
+
+        print("TENANT column migrations complete")
     except Exception as e:
-        print("TENANT is_active migration skipped:", e)
+        print("TENANT column migrations skipped:", e)
 
     # Safe migrations
     #migrations = [
@@ -195,6 +210,3 @@ def init_database():
                 #conn.commit()
             #except Exception:
                 #pass
-
-
-

@@ -10,7 +10,8 @@ BASE_URL = "https://financialmodelingprep.com/api/v3"
 # --------------------------------------------------
 
 def _get_key():
-    key = os.getenv("FMP_API_KEY")
+    from modules.admin.tenant_api_keys import get_provider_key
+    key = get_provider_key("FMP_API_KEY")
     if not key:
         raise Exception("Missing FMP_API_KEY")
     return key

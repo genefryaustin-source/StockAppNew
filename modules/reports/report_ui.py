@@ -249,13 +249,10 @@ def _generate_thesis(ticker: str, rdata: dict) -> str:
     Uses existing Anthropic key already in the app.
     """
     try:
-        import anthropic, os, streamlit as st
+        import anthropic
+        from modules.admin.tenant_api_keys import get_provider_key
 
-        api_key = None
-        try:
-            api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
-        except Exception:
-            api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        api_key = get_provider_key("ANTHROPIC_API_KEY")
 
         if not api_key:
             return _fallback_thesis(ticker, rdata)

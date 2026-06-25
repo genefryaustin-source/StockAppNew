@@ -238,10 +238,8 @@ def translate_indicator(query: str) -> IndicatorFormula:
     """Translate plain-English indicator description into IndicatorFormula."""
     try:
         import anthropic
-        key = (
-            os.getenv("ANTHROPIC_API_KEY")
-            or st.secrets.get("ANTHROPIC_API_KEY", "")
-        )
+        from modules.admin.tenant_api_keys import get_provider_key
+        key = get_provider_key("ANTHROPIC_API_KEY")
         client = anthropic.Anthropic(api_key=key)
     except Exception as e:
         f = IndicatorFormula()

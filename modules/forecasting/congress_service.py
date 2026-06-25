@@ -65,7 +65,8 @@ def get_congress_trades(
 # ─────────────────────────────────────────────────────────────
 
 def _fetch_quiver(symbol: str, days_back: int) -> Optional[list[dict]]:
-    api_key = os.getenv("QUIVER_API_KEY") or os.getenv("QUIVERQUANT_API_KEY")
+    from modules.admin.tenant_api_keys import get_provider_key
+    api_key = get_provider_key("QUIVER_API_KEY") or get_provider_key("QUIVERQUANT_API_KEY")
     if not api_key:
         return None
 

@@ -183,10 +183,8 @@ def translate_query(
 
     try:
         import anthropic
-        key = (
-            os.getenv("ANTHROPIC_API_KEY")
-            or st.secrets.get("ANTHROPIC_API_KEY", "")
-        )
+        from modules.admin.tenant_api_keys import get_provider_key
+        key = get_provider_key("ANTHROPIC_API_KEY")
         if not key:
             raise EnvironmentError("ANTHROPIC_API_KEY not set.")
         client = anthropic.Anthropic(api_key=key)

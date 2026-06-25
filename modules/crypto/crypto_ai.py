@@ -26,12 +26,8 @@ DEFAULT_CLAUDE_MODEL = os.getenv(
 
 
 def _get_anthropic_key() -> str:
-    try:
-        key = st.secrets.get("ANTHROPIC_API_KEY", "")
-    except Exception:
-        key = os.getenv("ANTHROPIC_API_KEY", "")
-
-    return str(key or "").strip()
+    from modules.admin.tenant_api_keys import get_provider_key
+    return str(get_provider_key("ANTHROPIC_API_KEY") or "").strip()
 
 
 def _claude(prompt: str, system: str = "", max_tokens: int = 500) -> str:

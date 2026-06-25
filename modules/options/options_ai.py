@@ -30,11 +30,8 @@ import streamlit as st
 
 def _claude(prompt: str, system: str = "", max_tokens: int = 500) -> str:
     """Call Claude Haiku for fast, cheap options analysis."""
-    key = None
-    try:
-        key = st.secrets.get("ANTHROPIC_API_KEY", "")
-    except Exception:
-        key = os.getenv("ANTHROPIC_API_KEY", "")
+    from modules.admin.tenant_api_keys import get_provider_key
+    key = get_provider_key("ANTHROPIC_API_KEY")
 
     if not key:
         return "⚠️ ANTHROPIC_API_KEY not found in secrets."
@@ -318,10 +315,8 @@ reference the actual data. Maximum 3-4 sentences per answer."""
     messages.append({"role": "user", "content": question})
 
     key = None
-    try:
-        key = st.secrets.get("ANTHROPIC_API_KEY", "")
-    except Exception:
-        key = os.getenv("ANTHROPIC_API_KEY", "")
+    from modules.admin.tenant_api_keys import get_provider_key
+    key = get_provider_key("ANTHROPIC_API_KEY")
 
     if not key:
         return "⚠️ ANTHROPIC_API_KEY not found in secrets."

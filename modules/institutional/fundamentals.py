@@ -1,80 +1,235 @@
 # ============================================================
-# fundamentals.py
-# Massive Fundamentals Ingestion
+# FUNDAMENTALS ENGINE
+# Massive (Polygon) fundamentals + sector ingestion
 # ============================================================
 
-import requests
-import os
-import streamlit as st
+from __future__ import annotations
 
-from datetime import datetime, timedelta, UTC
+import os
+import requests
+from datetime import datetime, UTC, timedelta
 from sqlalchemy.orm import Session
 
 from modules.institutional.models import FundamentalSnapshot
 
 
-BASE_URL = "https://api.massive.com"
+# ============================================================
+# CONFIG
+# ============================================================
+
+def _get_massive_api_key() -> str:
+    """Resolved fresh on every call -- this can't be a module-level
+    constant, since the right value depends on which tenant is making
+    the current request, not whatever happened to be active when this
+    module was first imported."""
+    from modules.admin.tenant_api_keys import get_provider_key
+    return get_provider_key("MASSIVE_API_KEY") or get_provider_key("POLYGON_API_KEY")
+
+
+BASE_URL = "https://api.polygon.io"
 
 
 # ============================================================
-# API KEY
+# SIC → SECTOR MAP
 # ============================================================
 
-from modules.utils.config import get_secret
+SIC_SECTOR_MAP = {
+    "Electronic Computers": "Technology",
+    "Computer Programming Services": "Technology",
+    "Prepackaged Software": "Technology",
+    "Semiconductors": "Technology",
 
-def get_massive_api_key():
+    "Crude Petroleum and Natural Gas": "Energy",
+    "Petroleum Refining": "Energy",
 
-    key = get_secret("MASSIVE_API_KEY")
+    "State Commercial Banks": "Financial Services",
+    "National Commercial Banks": "Financial Services",
+    "Insurance Carriers": "Financial Services",
 
-    print("🔥 FUNDAMENTALS KEY (runtime):", key)
+    "Biological Products": "Healthcare",
+    "Pharmaceutical Preparations": "Healthcare",
 
-    if not key:
-        raise Exception("Massive API key not found")
-
-    return key
-
-
-# ============================================================
-# SECTOR MAPPING
-# ============================================================
-
-SECTOR_MAP = {
-
-    "ELECTRONIC COMPUTERS": "Technology",
-    "COMPUTER HARDWARE": "Technology",
-    "COMPUTER SOFTWARE": "Technology",
-    "SEMICONDUCTORS": "Technology",
-
-    "NATIONAL COMMERCIAL BANKS": "Financials",
-
-    "PHARMACEUTICAL PREPARATIONS": "Healthcare",
-    "BIOLOGICAL PRODUCTS": "Healthcare",
-
-    "CRUDE PETROLEUM": "Energy",
+    "Aircraft": "Industrials",
+    "Industrial Machinery": "Industrials",
 }
 
 
-def map_sector(raw):
+# ============================================================
+# SAFE FLOAT
+# ============================================================
 
-    if not raw:
+def _safe_float(value):
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
         return None
 
-    raw = raw.upper()
 
-    return SECTOR_MAP.get(raw, raw)
+# ============================================================
+# FETCH SECTOR FROM MASSIVE
+# ============================================================
+
+def fetch_sector(symbol: str):
+    try:
+        sym = symbol.upper()
+
+        url = f"{BASE_URL}/v3/reference/tickers/{sym}"
+        params = {"apiKey": _get_massive_api_key()}
+
+        r = requests.get(url, params=params, timeout=20)
+
+        if r.status_code != 200:
+            print("Ticker lookup failed:", r.text)
+            return None
+
+        data = r.json()
+        print("Ticker API response:", data)
+
+        results = data.get("results")
+        if not results:
+            print("No results returned for ticker lookup")
+            return None
+
+        raw_sector = results.get("sic_description")
+        if raw_sector:
+            mapped = SIC_SECTOR_MAP.get(raw_sector, raw_sector)
+            print("Sector detected:", raw_sector, "-> mapped:", mapped)
+            return mapped
+
+        print("SIC description missing")
+        return None
+
+    except Exception as e:
+        print("Sector fetch error:", e)
+        return None
 
 
 # ============================================================
-# HELPER
+# FETCH FINANCIAL STATEMENTS
 # ============================================================
 
-def safe_value(node):
+def fetch_financials(symbol: str):
+    sym = symbol.upper()
 
-    if isinstance(node, dict):
+    url = f"{BASE_URL}/vX/reference/financials"
+    params = {
+        "ticker": sym,
+        "limit": 8,
+        "apiKey": _get_massive_api_key(),
+    }
 
-        return node.get("value")
+    r = requests.get(url, params=params, timeout=20)
+
+    if r.status_code != 200:
+        raise Exception(r.text)
+
+    data = r.json()
+    return data.get("results") or []
+
+
+# ============================================================
+# REVENUE SERIES
+# ============================================================
+
+def _extract_revenue_series(results):
+    revenues = []
+
+    for row in results:
+        inc = (row.get("financials", {}) or {}).get("income_statement", {}) or {}
+        rev = (inc.get("revenues") or {}).get("value")
+
+        if rev is None:
+            rev = (inc.get("revenue") or {}).get("value")
+
+        rev = _safe_float(rev)
+        if rev is not None:
+            revenues.append(rev)
+
+    return revenues
+
+
+# ============================================================
+# REVENUE TTM
+# ============================================================
+
+def compute_revenue_ttm(results):
+    revenues = _extract_revenue_series(results)
+
+    if len(revenues) >= 4:
+        return sum(revenues[:4])
 
     return None
+
+
+# ============================================================
+# REVENUE CAGR
+# ============================================================
+
+def compute_revenue_cagr(results):
+    """
+    Computes a trailing annualized growth rate using two 4-quarter blocks.
+    This is a 1-year CAGR-style comparison between the latest TTM and prior TTM.
+    """
+    revenues = _extract_revenue_series(results)
+
+    if len(revenues) >= 8:
+        latest_ttm = sum(revenues[:4])
+        prior_ttm = sum(revenues[4:8])
+
+        if prior_ttm and prior_ttm > 0:
+            return (latest_ttm / prior_ttm) - 1
+
+    return None
+
+
+# ============================================================
+# MARGINS
+# ============================================================
+
+def compute_margins(results):
+    if not results:
+        return None, None, None, None
+
+    latest = results[0]
+
+    financials = latest.get("financials", {}) or {}
+    inc = financials.get("income_statement", {}) or {}
+    cash = financials.get("cash_flow_statement", {}) or {}
+
+    revenue = _safe_float((inc.get("revenues") or {}).get("value"))
+    if revenue is None:
+        revenue = _safe_float((inc.get("revenue") or {}).get("value"))
+
+    gross = _safe_float((inc.get("gross_profit") or {}).get("value"))
+    op = _safe_float((inc.get("operating_income_loss") or {}).get("value"))
+
+    cfo = _safe_float((cash.get("net_cash_flow_from_operating_activities") or {}).get("value"))
+    capex = _safe_float((cash.get("capital_expenditure") or {}).get("value"))
+
+    if not revenue or revenue == 0:
+        return None, None, None, None
+
+    gross_margin = (gross / revenue) if gross is not None else None
+    op_margin = (op / revenue) if op is not None else None
+
+    # Correct FCF formula: CFO - |CapEx|
+    fcf = None
+    fcf_margin = None
+    if cfo is not None:
+        capex = capex if capex is not None else 0.0
+        fcf = float(cfo) - abs(float(capex))
+        fcf_margin = fcf / revenue
+
+    # Final fallback proxy if direct FCF unavailable
+    if fcf_margin is None and gross_margin is not None and op_margin is not None:
+        try:
+            fcf_margin = float(gross_margin) * float(op_margin)
+        except Exception:
+            fcf_margin = None
+
+    return gross_margin, op_margin, fcf_margin, fcf
 
 
 # ============================================================
@@ -82,226 +237,98 @@ def safe_value(node):
 # ============================================================
 
 def ingest_massive_fundamentals(db: Session, tenant_id: str, symbol: str):
+    sym = symbol.upper()
 
-    api_key = get_massive_api_key()
+    print("\nFetching fundamentals for", sym)
 
-    symbol = symbol.upper()
-
-    st.write(f"Fetching fundamentals for {symbol}")
-
-    # ---------------------------------
-    # Ticker reference
-    # ---------------------------------
-
-    ticker_url = f"{BASE_URL}/v3/reference/tickers/{symbol}"
-
-    r = requests.get(
-
-        ticker_url,
-
-        params={"apiKey": api_key},
-
-        timeout=15
-
-    )
-
-    if r.status_code != 200:
-
-        raise Exception(f"Ticker API error: {r.text}")
-
-    ticker = r.json().get("results", {})
-
-    raw_sector = ticker.get("sic_description")
-
-    sector = map_sector(raw_sector)
-
-    market_cap = ticker.get("market_cap")
-
-    shares = ticker.get("weighted_shares_outstanding")
-
-    st.write(f"Sector detected: {raw_sector} → mapped: {sector}")
-
-    # ---------------------------------
-    # Financials
-    # ---------------------------------
-
-    fin_url = f"{BASE_URL}/vX/reference/financials"
-
-    r = requests.get(
-
-        fin_url,
-
-        params={
-
-            "ticker": symbol,
-
-            "limit": 1,
-
-            "apiKey": api_key
-
-        },
-
-        timeout=15
-
-    )
-
-    if r.status_code != 200:
-
-        raise Exception(f"Financial API error: {r.text}")
-
-    results = r.json().get("results", [])
-
+    results = fetch_financials(sym)
     if not results:
+        raise Exception("No financial statements returned")
 
-        raise Exception("No financials returned")
+    revenue_ttm = compute_revenue_ttm(results)
+    revenue_cagr = compute_revenue_cagr(results)
+    gross_margin, op_margin, fcf_margin, fcf = compute_margins(results)
 
-    item = results[0]
-
-    financials = item.get("financials", {})
-
-    income = financials.get("income_statement", {})
-
-    balance = financials.get("balance_sheet", {})
-
-    cashflow = financials.get("cash_flow_statement", {})
-
-    revenue = safe_value(income.get("revenues"))
-
-    gross_profit = safe_value(income.get("gross_profit"))
-
-    operating_income = safe_value(income.get("operating_income_loss"))
-
-    net_income = safe_value(income.get("net_income_loss"))
-
-    ebitda = safe_value(income.get("ebitda"))
-
-    operating_cash = safe_value(
-
-        cashflow.get("net_cash_flow_from_operating_activities")
-
-    )
-
-    cash = safe_value(
-
-        balance.get("cash_and_cash_equivalents")
-
-    )
-
-    debt = safe_value(
-
-        balance.get("long_term_debt")
-
-    )
-
-    # ---------------------------------
-    # Margins
-    # ---------------------------------
-
-    gross_margin = None
-
-    op_margin = None
-
-    fcf_margin = None
-
-    if revenue and gross_profit:
-
-        gross_margin = gross_profit / revenue
-
-    if revenue and operating_income:
-
-        op_margin = operating_income / revenue
-
-    if revenue and operating_cash:
-
-        fcf_margin = operating_cash / revenue
-
-    # ---------------------------------
-    # Store snapshot
-    # ---------------------------------
+    sector = fetch_sector(sym)
+    print("Sector being saved:", sector)
 
     existing = (
         db.query(FundamentalSnapshot)
         .filter(
             FundamentalSnapshot.tenant_id == tenant_id,
-            FundamentalSnapshot.symbol == symbol,
+            FundamentalSnapshot.symbol == sym,
         )
         .first()
     )
 
     if existing:
         existing.asof = datetime.now(UTC)
-        existing.market_cap = market_cap
-        existing.revenue_ttm = revenue
-        existing.net_income = net_income
-        existing.ebitda = ebitda
-        existing.shares_outstanding = shares
-        existing.cash = cash
-        existing.total_debt = debt
         existing.sector = sector
+        existing.revenue_ttm = revenue_ttm
+
+        # Use the field your pipeline expects now
+        if hasattr(existing, "revenue_cagr"):
+            existing.revenue_cagr = revenue_cagr
+        elif hasattr(existing, "revenue_cagr_3y"):
+            existing.revenue_cagr_3y = revenue_cagr
+
         existing.gross_margin = gross_margin
         existing.op_margin = op_margin
         existing.fcf_margin = fcf_margin
+        snap = existing
     else:
-        snap = FundamentalSnapshot(
-
+        kwargs = dict(
             tenant_id=tenant_id,
-            symbol=symbol,
+            symbol=sym,
             asof=datetime.now(UTC),
-            market_cap=market_cap,
-            revenue_ttm=revenue,
-            net_income=net_income,
-            ebitda=ebitda,
-            shares_outstanding=shares,
-            cash=cash,
-            total_debt=debt,
             sector=sector,
+            revenue_ttm=revenue_ttm,
             gross_margin=gross_margin,
             op_margin=op_margin,
             fcf_margin=fcf_margin,
-
         )
 
+        # Use whichever column exists on the model
+        if hasattr(FundamentalSnapshot, "revenue_cagr"):
+            kwargs["revenue_cagr"] = revenue_cagr
+        elif hasattr(FundamentalSnapshot, "revenue_cagr_3y"):
+            kwargs["revenue_cagr_3y"] = revenue_cagr
+
+        snap = FundamentalSnapshot(**kwargs)
         db.add(snap)
 
     db.commit()
 
-    st.success(f"Fundamentals stored. Sector: {sector}")
+    print("Fundamentals stored. Sector:", sector)
+
+    return {
+        "symbol": sym,
+        "sector": sector,
+        "revenue_ttm": revenue_ttm,
+        "revenue_cagr": revenue_cagr,
+        "gross_margin": gross_margin,
+        "operating_margin": op_margin,
+        "fcf": fcf,
+        "fcf_margin": fcf_margin,
+    }
 
 
 # ============================================================
-# SNAPSHOT CACHE
+# LATEST SNAPSHOT
 # ============================================================
 
-def latest_snapshot(
-
-        db: Session,
-
-        tenant_id: str,
-
-        symbol: str,
-
-        max_age_hours: int = 24
-
-):
-
+def latest_snapshot(db: Session, tenant_id: str, symbol: str, max_age_hours: int = 72):
     cutoff = datetime.now(UTC) - timedelta(hours=max_age_hours)
 
-    return (
-
+    row = (
         db.query(FundamentalSnapshot)
-
         .filter(
-
             FundamentalSnapshot.tenant_id == tenant_id,
-
             FundamentalSnapshot.symbol == symbol.upper(),
-
             FundamentalSnapshot.asof >= cutoff,
-
         )
-
         .order_by(FundamentalSnapshot.asof.desc())
-
         .first()
-
     )
+
+    return row

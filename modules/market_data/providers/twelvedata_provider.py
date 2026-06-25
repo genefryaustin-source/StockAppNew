@@ -22,7 +22,8 @@ def get_history(
     interval="1day",
 ):
 
-    key = st.secrets.get("TWELVEDATA_API_KEY")
+    from modules.admin.tenant_api_keys import get_provider_key
+    key = get_provider_key("TWELVEDATA_API_KEY")
 
     if not key:
         print("TWELVEDATA API KEY MISSING")

@@ -10,6 +10,45 @@ from modules.analytics.models import AnalyticsSnapshot
 from modules.utils.config import get_secret
 
 
+def _has_streamlit_context() -> bool:
+    """True only on the actual Streamlit script thread. This pipeline can
+    run as a background job (see modules/universe/job_runner.py), and a
+    background thread has no ScriptRunContext attached -- calling
+    st.write/st.warning/st.success from there doesn't raise a normal
+    Python exception we could try/except; it fails inside Streamlit's
+    own runtime trying to deliver a message to a session that doesn't
+    exist ("Tried to use SessionInfo before it was initialized"). The
+    fix is to never make the call when there's no valid context."""
+    try:
+        from streamlit.runtime.scriptrunner_utils.script_run_context import (
+            get_script_run_ctx,
+        )
+        return get_script_run_ctx() is not None
+    except Exception:
+        return False
+
+
+def _st_warning(msg: str):
+    if _has_streamlit_context():
+        st.warning(msg)
+    else:
+        print("[runner]", msg)
+
+
+def _st_write(msg: str):
+    if _has_streamlit_context():
+        st.write(msg)
+    else:
+        print("[runner]", msg)
+
+
+def _st_success(msg: str):
+    if _has_streamlit_context():
+        st.success(msg)
+    else:
+        print("[runner]", msg)
+
+
 def _is_dead_connection_error(e: Exception) -> bool:
     """True if `e` looks like a dropped/expired database connection
     (the classic Neon-serverless-Postgres symptom: SSL connection closed,
@@ -846,9 +885,14 @@ def _get_finnhub_fundamentals(sym):
 
 def _get_fmp_profile_sector(sym, api_key):
     try:
+        # FMP retired the /api/v3/ endpoints for non-legacy accounts
+        # (returns 403 "Legacy Endpoint" now) -- the replacement is
+        # /stable/, with the symbol as a query param instead of a path
+        # segment.
         response = requests.get(
-            f"https://financialmodelingprep.com/api/v3/profile/{sym}",
+            "https://financialmodelingprep.com/stable/profile",
             params={
+                "symbol": sym,
                 "apikey": api_key,
             },
             timeout=8,
@@ -869,8 +913,12 @@ def _get_fmp_profile_sector(sym, api_key):
             sym,
         )
 
+        # Defensive: the stable endpoint has historically returned a list
+        # like v3 did, but parse a bare dict too in case that changes.
         if isinstance(data, list) and data:
             return data[0].get("sector") or data[0].get("industry")
+        if isinstance(data, dict) and data:
+            return data.get("sector") or data.get("industry")
 
     except Exception as e:
         print("FMP PROFILE ERROR:", sym, e)
@@ -889,8 +937,9 @@ def _get_fmp_fundamentals(sym):
         return None
 
     response = requests.get(
-        f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{sym}",
+        "https://financialmodelingprep.com/stable/key-metrics-ttm",
         params={
+            "symbol": sym,
             "apikey": key,
         },
         timeout=8,
@@ -1491,7 +1540,7 @@ def run_analytics(db, tenant_id, symbols):
     clean_symbols = list(dict.fromkeys(clean_symbols))
 
     if not clean_symbols:
-        st.warning("No symbols provided for analytics.")
+        _st_warning("No symbols provided for analytics.")
         return []
 
     # ---------------------------------
@@ -1508,7 +1557,7 @@ def run_analytics(db, tenant_id, symbols):
 
     for i, sym in enumerate(clean_symbols):
         if i % 25 == 0:
-            st.write(f"Processing {i}/{len(clean_symbols)}")
+            _st_write(f"Processing {i}/{len(clean_symbols)}")
 
         try:
             try:
@@ -1549,7 +1598,7 @@ def run_analytics(db, tenant_id, symbols):
 
     db.commit()
 
-    st.success(f"Analytics completed: {len(results)} symbols")
+    _st_success(f"Analytics completed: {len(results)} symbols")
 
     return results
 

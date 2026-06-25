@@ -74,7 +74,8 @@ class AlpacaOptionsBroker:
                 self.base = ("https://paper-api.alpaca.markets"
                              if paper else "https://api.alpaca.markets")
         except Exception:
-            self.key    = os.getenv("ALPACA_API_KEY","")
+            from modules.admin.tenant_api_keys import get_provider_key
+            self.key    = get_provider_key("ALPACA_API_KEY")
             self.secret = os.getenv("ALPACA_API_SECRET","")
             self.base   = ("https://paper-api.alpaca.markets"
                            if paper else "https://api.alpaca.markets")
@@ -354,6 +355,3 @@ class AlpacaOptionsBroker:
             pass
 
         return {}
-
-
-

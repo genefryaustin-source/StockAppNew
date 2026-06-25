@@ -58,7 +58,8 @@ def get_institutional_flow(symbol: str) -> dict:
 # ─────────────────────────────────────────────────────────────
 
 def _fetch_fintel(symbol: str) -> Optional[dict]:
-    api_key = os.getenv("FINTEL_API_KEY")
+    from modules.admin.tenant_api_keys import get_provider_key
+    api_key = get_provider_key("FINTEL_API_KEY")
     if not api_key:
         return None
 
@@ -118,7 +119,7 @@ def _fetch_yfinance(symbol: str) -> Optional[dict]:
                 label = str(row.iloc[1]).lower() if len(row) > 1 else ""
                 if "institution" in label:
                     try:
-                        ownership_pct = float(str(row.iloc[0]).replace("%", "")) 
+                        ownership_pct = float(str(row.iloc[0]).replace("%", ""))
                     except Exception:
                         pass
 

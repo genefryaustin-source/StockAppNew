@@ -28,16 +28,19 @@ import pandas as pd
 
 def _anthropic_client():
     import anthropic
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    from modules.admin.tenant_api_keys import get_provider_key
+    api_key = get_provider_key("ANTHROPIC_API_KEY")
     if not api_key:
         raise EnvironmentError(
-            "ANTHROPIC_API_KEY not set. Add it to your environment or Streamlit secrets."
+            "ANTHROPIC_API_KEY not set. Add it to your environment, Streamlit secrets, "
+            "or your tenant's own API Keys page."
         )
     return anthropic.Anthropic(api_key=api_key)
 
 
 def anthropic_enabled() -> bool:
-    return bool(os.getenv("ANTHROPIC_API_KEY"))
+    from modules.admin.tenant_api_keys import get_provider_key
+    return bool(get_provider_key("ANTHROPIC_API_KEY"))
 
 
 # ─────────────────────────────────────────────────────────────

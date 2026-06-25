@@ -574,15 +574,8 @@ def generate_report(
 
 def _fmp_key() -> Optional[str]:
     """Get FMP API key using same pattern as all other services."""
-    import os
-    try:
-        import streamlit as st
-        val = st.secrets.get("FMP_API_KEY", "")
-        if val:
-            return str(val)
-    except Exception:
-        pass
-    val = os.getenv("FMP_API_KEY", "")
+    from modules.admin.tenant_api_keys import get_provider_key
+    val = get_provider_key("FMP_API_KEY")
     if val:
         return val
     try:
@@ -612,13 +605,8 @@ def _fill_fmp_metrics(ticker: str, data: dict):
     )
 
     # ── Finnhub basic financials (market cap — confirmed working) ─
-    import os as _os
-    fh_key = None
-    try:
-        import streamlit as _st2
-        fh_key = _st2.secrets.get("FINNHUB_API_KEY", "")
-    except Exception:
-        fh_key = _os.getenv("FINNHUB_API_KEY", "")
+    from modules.admin.tenant_api_keys import get_provider_key
+    fh_key = get_provider_key("FINNHUB_API_KEY")
     if not fh_key:
         try:
             from modules.utils.config import get_secret as _gs
@@ -665,8 +653,8 @@ def _fill_fmp_metrics(ticker: str, data: dict):
     # ── Company profile (market cap, name) ───────────────────
     try:
         r = requests.get(
-            f"https://financialmodelingprep.com/api/v3/profile/{ticker.upper()}",
-            params={"apikey": key},
+            "https://financialmodelingprep.com/stable/profile",
+            params={"symbol": ticker.upper(), "apikey": key},
             timeout=8,
         )
         if r.status_code == 200:
@@ -702,8 +690,8 @@ def _fill_fmp_metrics(ticker: str, data: dict):
     # This is faster than income-statement and covers margins + growth
     try:
         r2 = requests.get(
-            f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{ticker.upper()}",
-            params={"apikey": key},
+            "https://financialmodelingprep.com/stable/key-metrics-ttm",
+            params={"symbol": ticker.upper(), "apikey": key},
             timeout=8,
         )
         if r2.status_code == 200:
@@ -728,8 +716,8 @@ def _fill_fmp_metrics(ticker: str, data: dict):
     if missing("revenue_growth") or missing("net_margin") or missing("gross_margin"):
         try:
             r3 = requests.get(
-                f"https://financialmodelingprep.com/api/v3/income-statement/{ticker.upper()}",
-                params={"apikey": key, "limit": 2, "period": "annual"},
+                "https://financialmodelingprep.com/stable/income-statement",
+                params={"symbol": ticker.upper(), "apikey": key, "limit": 2, "period": "annual"},
                 timeout=8,
             )
             if r3.status_code == 200:
@@ -949,12 +937,8 @@ def load_report_data(db, ticker: str, tenant_id: str) -> dict:
 
     # ── Company metrics from FMP ──────────────────────────────
     try:
-        fmp_key = None
-        try:
-            import streamlit as st
-            fmp_key = st.secrets.get("FMP_API_KEY", "")
-        except Exception:
-            fmp_key = os.getenv("FMP_API_KEY", "")
+        from modules.admin.tenant_api_keys import get_provider_key
+        fmp_key = get_provider_key("FMP_API_KEY")
         if not fmp_key:
             try:
                 from modules.utils.config import get_secret
@@ -967,8 +951,8 @@ def load_report_data(db, ticker: str, tenant_id: str) -> dict:
 
             # Profile — market cap, company name, sector
             prof = _req.get(
-                f"https://financialmodelingprep.com/api/v3/profile/{ticker.upper()}",
-                params={"apikey": fmp_key}, timeout=8,
+                "https://financialmodelingprep.com/stable/profile",
+                params={"symbol": ticker.upper(), "apikey": fmp_key}, timeout=8,
             )
             if prof.status_code == 200 and prof.json():
                 p = prof.json()[0]
@@ -983,8 +967,8 @@ def load_report_data(db, ticker: str, tenant_id: str) -> dict:
 
             # Key metrics TTM — margins + valuation
             km = _req.get(
-                f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{ticker.upper()}",
-                params={"apikey": fmp_key}, timeout=8,
+                "https://financialmodelingprep.com/stable/key-metrics-ttm",
+                params={"symbol": ticker.upper(), "apikey": fmp_key}, timeout=8,
             )
             if km.status_code == 200 and km.json():
                 k = km.json()[0]
@@ -1001,8 +985,8 @@ def load_report_data(db, ticker: str, tenant_id: str) -> dict:
 
             # Financial growth — revenue growth
             fg = _req.get(
-                f"https://financialmodelingprep.com/api/v3/financial-growth/{ticker.upper()}",
-                params={"apikey": fmp_key, "limit": 1}, timeout=8,
+                "https://financialmodelingprep.com/stable/financial-growth",
+                params={"symbol": ticker.upper(), "apikey": fmp_key, "limit": 1}, timeout=8,
             )
             if fg.status_code == 200 and fg.json():
                 g = fg.json()[0]
