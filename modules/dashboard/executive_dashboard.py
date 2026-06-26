@@ -1592,6 +1592,58 @@ def _render_ai_summary(
 # -----------------------------------------------------------------------------
 
 
+def _render_api_key_grace_banner(db: Session, user: Optional[Dict[str, Any]]) -> None:
+    """Surfaces the platform API key grace period status right where an
+    admin will actually see it on login, instead of only inside the
+    Admin Panel's API Keys tab -- which they might never visit until
+    something has already broken for their tenant.
+
+    Only fires for the urgent tiers (a few days left, or already
+    expired); says nothing while there's plenty of time left, so this
+    doesn't become daily noise on the one page everyone lands on.
+    """
+    tenant_id = (user or {}).get("tenant_id")
+    if not tenant_id:
+        return
+
+    try:
+        from modules.admin.tenant_api_keys import (
+            grace_period_status,
+            PLATFORM_KEY_GRACE_PERIOD_DAYS,
+        )
+        status = grace_period_status(db, tenant_id)
+    except Exception:
+        return  # never let this banner break the dashboard itself
+
+    if status.get("unlimited") or status.get("created_at") is None:
+        return
+
+    effective_days = status.get("days_override") or PLATFORM_KEY_GRACE_PERIOD_DAYS
+
+    if status.get("expired"):
+        msg = (
+            f"⏰ **The platform's shared API key is no longer available for this account.** "
+            f"It was only provided for the first {effective_days} days after signup. "
+            f"Any feature without your own key set has stopped working."
+        )
+        action = st.error
+    elif status.get("days_left") is not None and status["days_left"] <= 3:
+        msg = (
+            f"⏳ **{status['days_left']} day(s) left** on the platform's shared API key. "
+            f"After {effective_days} days from signup, features without your own key "
+            f"set will stop working."
+        )
+        action = st.warning
+    else:
+        return  # plenty of time left -- stay quiet
+
+    action(msg + " Go to **Admin → API Keys** to add your own.")
+
+    if st.button("🔑 Go to API Keys", key="exec_dash_goto_api_keys"):
+        st.session_state["nav_page"] = "Admin"
+        st.rerun()
+
+
 def render_executive_dashboard(
     db: Session,
     user: Optional[Dict[str, Any]] = None,
@@ -1605,6 +1657,9 @@ def render_executive_dashboard(
     }
 
     st.markdown("## Executive Dashboard")
+
+    if is_admin:
+        _render_api_key_grace_banner(db, user)
 
     market = get_market_metrics(db, user)
     universe = get_universe_metrics(db, user)
@@ -1905,6 +1960,3 @@ def render_executive_dashboard(
     st.caption(
         f"Dashboard updated {datetime.now(UTC):%Y-%m-%d %H:%M:%S UTC}"
     )
-
-
-
