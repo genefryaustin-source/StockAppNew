@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Optional
 from sqlalchemy.orm import Session
 from modules.db.core import SessionLocal
+from modules.db.connection_resilience import (
+    is_dead_connection_error,
+    get_fresh_session,
+)
 from modules.jobs.models import Job
 from modules.jobs.service import (
     start_job,
@@ -115,7 +119,39 @@ def run_one_queued_job(db: Session, tenant_id: str, universe_id: str = None):
                 universe_id=universe_id,
                 progress=progress,
             )
-            db.expire_all()
+
+            # The refresh above can run for many minutes across thousands
+            # of symbols -- this `db` session has been checked out the
+            # whole time, which is exactly the situation Neon's
+            # serverless idle-connection cutoff tends to kill mid-job.
+            # Internal per-symbol recovery (in runner.py) doesn't help
+            # here: it reassigns a *local* variable inside that function,
+            # which never propagates back to this outer `db`. Check and
+            # recover here before touching `db` again.
+            try:
+                db.expire_all()
+            except Exception as e:
+                if not is_dead_connection_error(e):
+                    raise
+                print(f"⚠️ Job session dropped after refresh_universe_cache -- reconnecting: {e}")
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                try:
+                    db.close()
+                except Exception:
+                    pass
+                db = get_fresh_session()
+                # `job` is an ORM object bound to the now-closed session --
+                # re-fetch it against the new one rather than risk a
+                # DetachedInstanceError on its next attribute access.
+                job = db.query(Job).filter(Job.id == job.id).first()
+                if job is None:
+                    raise Exception(
+                        "Job row disappeared after reconnecting -- cannot finalize."
+                    )
+
             print(
                 "🚨 STEP 2 — AFTER refresh_universe_cache"
             )
@@ -144,8 +180,27 @@ def run_one_queued_job(db: Session, tenant_id: str, universe_id: str = None):
         return job.id
 
     except Exception as e:
-        fail_job(db, job, str(e))
-        append_log(db, job, f"Job failed: {e}")
+        # `db` might also be the dead one if we got here some other way
+        # (or if the reconnect above itself failed) -- without this, the
+        # job would get stuck showing "running" forever instead of being
+        # correctly marked failed, since fail_job() itself would silently
+        # fail too.
+        try:
+            fail_job(db, job, str(e))
+            append_log(db, job, f"Job failed: {e}")
+        except Exception as e2:
+            if is_dead_connection_error(e2):
+                try:
+                    db2 = get_fresh_session()
+                    job2 = db2.query(Job).filter(Job.id == job.id).first()
+                    if job2 is not None:
+                        fail_job(db2, job2, str(e))
+                        append_log(db2, job2, f"Job failed: {e}")
+                    db2.close()
+                except Exception as e3:
+                    print(f"⚠️ Could not mark job {job.id} as failed even after reconnecting: {e3}")
+            else:
+                print(f"⚠️ Could not mark job {job.id} as failed: {e2}")
         return job.id
 
 
