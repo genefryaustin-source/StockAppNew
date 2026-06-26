@@ -157,6 +157,42 @@ class ForexPortfolioRiskResult:
         return data
 
 
+@dataclass
+class ForexTerminalSnapshot:
+    """
+    Unified institutional terminal snapshot.
+
+    This is the single source-of-truth payload for the Forex terminal UI.
+    It intentionally combines account, portfolio, positions, orders,
+    executions, exposure, risk, and performance into one stable structure.
+    """
+
+    tenant_id: Optional[str]
+    user_id: Optional[str]
+    portfolio_id: Optional[str]
+    account_id: str
+    generated_at: datetime
+    account: Dict[str, Any]
+    portfolio: Dict[str, Any]
+    positions: List[Dict[str, Any]]
+    open_orders: List[Dict[str, Any]]
+    filled_orders: List[Dict[str, Any]]
+    execution_history: List[Dict[str, Any]]
+    cash_ledger: List[Dict[str, Any]]
+    currency_exposure: List[Dict[str, Any]]
+    pair_exposure: List[Dict[str, Any]]
+    risk: Dict[str, Any]
+    performance: Dict[str, Any]
+    margin: Dict[str, Any]
+    system: Dict[str, Any]
+    raw: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = asdict(self)
+        data["generated_at"] = self.generated_at.isoformat()
+        return data
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -1049,6 +1085,710 @@ class ForexPortfolioEngine:
             and signal.recommendation in {"STRONG_BUY", "BUY", "SELL"},
         }
 
+    # ------------------------------------------------------------------
+    # Terminal Snapshot / Institutional Analytics
+    # ------------------------------------------------------------------
+
+    def get_terminal_snapshot(
+        self,
+        *,
+        account_id: Optional[str] = None,
+        portfolio_id: Optional[str] = None,
+        persist: bool = True,
+        refresh: bool = True,
+        include_orders: bool = True,
+        include_history: bool = True,
+    ) -> ForexTerminalSnapshot:
+        """
+        Build a complete institutional terminal snapshot.
+
+        The dashboard should consume this method instead of independently
+        calculating account, portfolio, risk, position, order, or performance
+        values.
+        """
+        account = None
+
+        if account_id:
+            account = self.get_account(account_id=account_id)
+
+        if account is None:
+            account = self.get_or_create_account(
+                portfolio_id=portfolio_id or self.portfolio_id,
+            )
+
+        if refresh:
+            self.refresh_positions(account_id=account.id)
+
+        account = self.recalculate_account(account.id) or account
+
+        portfolio_snapshot = self.get_snapshot(
+            account_id=account.id,
+            persist=persist,
+            refresh=False,
+        )
+
+        positions = self.list_positions(
+            account_id=account.id,
+            status="OPEN",
+        )
+        closed_positions = self.list_positions(
+            account_id=account.id,
+            status="CLOSED",
+        )
+
+        position_rows = [position.to_dict() for position in positions]
+        closed_position_rows = [position.to_dict() for position in closed_positions]
+
+        risk_result = self.calculate_risk(
+            account_id=account.id,
+            account=account,
+            positions=positions,
+        )
+
+        open_orders = self.load_open_orders(
+            account_id=account.id,
+            portfolio_id=account.portfolio_id,
+        ) if include_orders else []
+
+        filled_orders = self.load_filled_orders(
+            account_id=account.id,
+            portfolio_id=account.portfolio_id,
+        ) if include_orders else []
+
+        execution_history = self.load_execution_history(
+            account_id=account.id,
+            portfolio_id=account.portfolio_id,
+        ) if include_history else []
+
+        cash_ledger = self.load_cash_ledger(
+            account_id=account.id,
+            limit=100,
+        ) if include_history else []
+
+        currency_exposure = self.calculate_currency_exposure(
+            positions=positions,
+            account=account,
+        )
+
+        pair_exposure = self.calculate_pair_exposure(
+            positions=positions,
+            account=account,
+        )
+
+        performance = self.calculate_performance_statistics(
+            account=account,
+            positions=positions,
+            closed_positions=closed_positions,
+            filled_orders=filled_orders,
+            execution_history=execution_history,
+            cash_ledger=cash_ledger,
+        )
+
+        margin = {
+            "margin_used": _round(account.margin_used, 2),
+            "margin_available": _round(account.margin_available, 2),
+            "buying_power": _round(account.margin_available, 2),
+            "leverage": _round(account.leverage, 2),
+            "margin_utilization_pct": _round(
+                (account.margin_used / max(account.equity * account.leverage, 1e-9)) * 100.0,
+                4,
+            ),
+        }
+
+        portfolio = portfolio_snapshot.to_dict() if portfolio_snapshot else {}
+        portfolio.update({
+            "closed_positions": closed_position_rows,
+            "open_orders": open_orders,
+            "filled_orders": filled_orders,
+            "execution_history": execution_history,
+            "cash_ledger": cash_ledger,
+            "currency_exposure": currency_exposure,
+            "pair_exposure": pair_exposure,
+            "performance": performance,
+            "margin": margin,
+        })
+
+        system = {
+            "status": "READY",
+            "source": "forex_portfolio_engine",
+            "snapshot_type": "ForexTerminalSnapshot",
+            "refresh": bool(refresh),
+            "persist": bool(persist),
+            "positions_live": len(position_rows) > 0,
+            "orders_live": len(open_orders) > 0 or len(filled_orders) > 0,
+            "cash_ledger_live": len(cash_ledger) > 0,
+            "generated_at": _utc_now().isoformat(),
+        }
+
+        return ForexTerminalSnapshot(
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+            portfolio_id=account.portfolio_id,
+            account_id=account.id,
+            generated_at=_utc_now(),
+            account=account.to_dict(),
+            portfolio=portfolio,
+            positions=position_rows,
+            open_orders=open_orders,
+            filled_orders=filled_orders,
+            execution_history=execution_history,
+            cash_ledger=cash_ledger,
+            currency_exposure=currency_exposure,
+            pair_exposure=pair_exposure,
+            risk=risk_result.to_dict(),
+            performance=performance,
+            margin=margin,
+            system=system,
+            raw={
+                "portfolio_snapshot": portfolio_snapshot.to_dict() if portfolio_snapshot else None,
+                "risk": risk_result.to_dict(),
+            },
+        )
+
+    def calculate_currency_exposure(
+        self,
+        *,
+        positions: Optional[List[ForexPosition]] = None,
+        account: Optional[ForexPortfolioAccount] = None,
+        account_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Calculate net, long, and short exposure by currency.
+
+        For a LONG EUR/USD:
+            +EUR base exposure
+            -USD quote exposure
+        For a SHORT EUR/USD:
+            -EUR base exposure
+            +USD quote exposure
+        """
+        if positions is None:
+            if account is None and account_id:
+                account = self.get_account(account_id=account_id)
+            positions = self.list_positions(
+                account_id=(account.id if account else account_id),
+                status="OPEN",
+            )
+
+        equity = _safe_float(account.equity if account else 0.0)
+        exposures: Dict[str, Dict[str, float]] = {}
+
+        def bucket(currency: str) -> Dict[str, float]:
+            code = str(currency or "").upper()[:3]
+            if code not in exposures:
+                exposures[code] = {
+                    "long_exposure": 0.0,
+                    "short_exposure": 0.0,
+                    "net_exposure": 0.0,
+                    "gross_exposure": 0.0,
+                }
+            return exposures[code]
+
+        for position in positions or []:
+            base = str(position.base_currency or "").upper()[:3]
+            quote = str(position.quote_currency or "").upper()[:3]
+            side = str(position.side or "").upper()
+            notional = abs(_safe_float(position.notional_value))
+
+            if not base or not quote or notional <= 0:
+                continue
+
+            base_bucket = bucket(base)
+            quote_bucket = bucket(quote)
+
+            if side in {"LONG", "BUY"}:
+                base_bucket["long_exposure"] += notional
+                base_bucket["net_exposure"] += notional
+                quote_bucket["short_exposure"] += notional
+                quote_bucket["net_exposure"] -= notional
+            else:
+                base_bucket["short_exposure"] += notional
+                base_bucket["net_exposure"] -= notional
+                quote_bucket["long_exposure"] += notional
+                quote_bucket["net_exposure"] += notional
+
+            base_bucket["gross_exposure"] += notional
+            quote_bucket["gross_exposure"] += notional
+
+        rows: List[Dict[str, Any]] = []
+        for currency, values in exposures.items():
+            gross = _safe_float(values.get("gross_exposure"))
+            net = _safe_float(values.get("net_exposure"))
+            rows.append({
+                "currency": currency,
+                "long_exposure": _round(values.get("long_exposure"), 2),
+                "short_exposure": _round(values.get("short_exposure"), 2),
+                "net_exposure": _round(net, 2),
+                "gross_exposure": _round(gross, 2),
+                "net_exposure_pct": _round((net / equity) * 100.0, 4) if equity > 0 else 0.0,
+                "gross_exposure_pct": _round((gross / equity) * 100.0, 4) if equity > 0 else 0.0,
+                "bias": "LONG" if net > 0 else "SHORT" if net < 0 else "FLAT",
+            })
+
+        rows.sort(key=lambda row: abs(_safe_float(row.get("net_exposure"))), reverse=True)
+        return rows
+
+    def calculate_pair_exposure(
+        self,
+        *,
+        positions: Optional[List[ForexPosition]] = None,
+        account: Optional[ForexPortfolioAccount] = None,
+        account_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Aggregate exposure by currency pair."""
+        if positions is None:
+            if account is None and account_id:
+                account = self.get_account(account_id=account_id)
+            positions = self.list_positions(
+                account_id=(account.id if account else account_id),
+                status="OPEN",
+            )
+
+        equity = _safe_float(account.equity if account else 0.0)
+        pairs: Dict[str, Dict[str, Any]] = {}
+
+        for position in positions or []:
+            pair = normalize_pair(position.pair)
+            side = str(position.side or "").upper()
+            notional = abs(_safe_float(position.notional_value))
+            pnl = _safe_float(position.unrealized_pnl)
+            margin = _safe_float(position.margin_required)
+
+            if pair not in pairs:
+                pairs[pair] = {
+                    "pair": pair,
+                    "long_notional": 0.0,
+                    "short_notional": 0.0,
+                    "net_notional": 0.0,
+                    "gross_notional": 0.0,
+                    "unrealized_pnl": 0.0,
+                    "margin_required": 0.0,
+                    "position_count": 0,
+                    "long_count": 0,
+                    "short_count": 0,
+                }
+
+            row = pairs[pair]
+            if side in {"LONG", "BUY"}:
+                row["long_notional"] += notional
+                row["net_notional"] += notional
+                row["long_count"] += 1
+            else:
+                row["short_notional"] += notional
+                row["net_notional"] -= notional
+                row["short_count"] += 1
+
+            row["gross_notional"] += notional
+            row["unrealized_pnl"] += pnl
+            row["margin_required"] += margin
+            row["position_count"] += 1
+
+        rows: List[Dict[str, Any]] = []
+        for pair, values in pairs.items():
+            net = _safe_float(values.get("net_notional"))
+            gross = _safe_float(values.get("gross_notional"))
+            rows.append({
+                **values,
+                "long_notional": _round(values.get("long_notional"), 2),
+                "short_notional": _round(values.get("short_notional"), 2),
+                "net_notional": _round(net, 2),
+                "gross_notional": _round(gross, 2),
+                "unrealized_pnl": _round(values.get("unrealized_pnl"), 2),
+                "margin_required": _round(values.get("margin_required"), 2),
+                "net_exposure_pct": _round((net / equity) * 100.0, 4) if equity > 0 else 0.0,
+                "gross_exposure_pct": _round((gross / equity) * 100.0, 4) if equity > 0 else 0.0,
+                "bias": "LONG" if net > 0 else "SHORT" if net < 0 else "FLAT",
+            })
+
+        rows.sort(key=lambda row: abs(_safe_float(row.get("net_notional"))), reverse=True)
+        return rows
+
+    def calculate_performance_statistics(
+        self,
+        *,
+        account: Optional[ForexPortfolioAccount] = None,
+        positions: Optional[List[ForexPosition]] = None,
+        closed_positions: Optional[List[ForexPosition]] = None,
+        filled_orders: Optional[List[Dict[str, Any]]] = None,
+        execution_history: Optional[List[Dict[str, Any]]] = None,
+        cash_ledger: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Calculate terminal-level performance statistics.
+
+        Uses realized P/L from closed positions, filled orders, executions, and
+        cash ledger events where available. Falls back gracefully when no closed
+        trade history exists.
+        """
+        positions = positions or []
+        closed_positions = closed_positions or []
+        filled_orders = filled_orders or []
+        execution_history = execution_history or []
+        cash_ledger = cash_ledger or []
+
+        realized_values: List[float] = []
+
+        for position in closed_positions:
+            realized_values.append(_safe_float(position.realized_pnl))
+
+        for row in filled_orders + execution_history:
+            if isinstance(row, dict):
+                for key in ("realized_pnl", "pnl", "profit_loss", "net_pnl", "gross_pnl"):
+                    if key in row and row.get(key) is not None:
+                        realized_values.append(_safe_float(row.get(key)))
+                        break
+
+        for row in cash_ledger:
+            if isinstance(row, dict) and str(row.get("event_type", "")).upper() in {
+                "POSITION_CLOSED",
+                "TRADE_CLOSED",
+                "REALIZED_PNL",
+                "ORDER_FILLED",
+            }:
+                realized_values.append(_safe_float(row.get("amount")))
+
+        realized_values = [value for value in realized_values if abs(value) > 1e-12]
+        wins = [value for value in realized_values if value > 0]
+        losses = [value for value in realized_values if value < 0]
+
+        total_realized = sum(realized_values)
+        total_unrealized = sum(_safe_float(position.unrealized_pnl) for position in positions)
+        total_pnl = total_realized + total_unrealized
+
+        trade_count = len(realized_values)
+        win_count = len(wins)
+        loss_count = len(losses)
+        win_rate = (win_count / trade_count * 100.0) if trade_count else 0.0
+
+        gross_profit = sum(wins)
+        gross_loss = abs(sum(losses))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else (gross_profit if gross_profit > 0 else 0.0)
+
+        average_win = gross_profit / win_count if win_count else 0.0
+        average_loss = gross_loss / loss_count if loss_count else 0.0
+        expectancy = (win_rate / 100.0) * average_win - (1.0 - win_rate / 100.0) * average_loss if trade_count else 0.0
+
+        largest_win = max(wins) if wins else 0.0
+        largest_loss = min(losses) if losses else 0.0
+
+        equity = _safe_float(account.equity if account else 0.0)
+        realized_return_pct = (total_realized / equity * 100.0) if equity > 0 else 0.0
+        unrealized_return_pct = (total_unrealized / equity * 100.0) if equity > 0 else 0.0
+
+        # Conservative placeholder based on observed trade P/L distribution.
+        # If richer daily equity history is connected later, these can be
+        # replaced by full time-series calculations.
+        mean = sum(realized_values) / trade_count if trade_count else 0.0
+        variance = (
+            sum((value - mean) ** 2 for value in realized_values) / trade_count
+            if trade_count
+            else 0.0
+        )
+        stdev = math.sqrt(variance) if variance > 0 else 0.0
+        sharpe = mean / stdev if stdev > 0 else 0.0
+
+        downside = [value for value in realized_values if value < 0]
+        downside_variance = (
+            sum((value) ** 2 for value in downside) / len(downside)
+            if downside
+            else 0.0
+        )
+        downside_dev = math.sqrt(downside_variance) if downside_variance > 0 else 0.0
+        sortino = mean / downside_dev if downside_dev > 0 else 0.0
+
+        kelly = 0.0
+        if average_win > 0 and average_loss > 0:
+            win_prob = win_rate / 100.0
+            loss_prob = 1.0 - win_prob
+            payoff = average_win / average_loss
+            kelly = win_prob - (loss_prob / payoff)
+
+        return {
+            "trade_count": trade_count,
+            "open_position_count": len(positions),
+            "closed_position_count": len(closed_positions),
+            "win_count": win_count,
+            "loss_count": loss_count,
+            "win_rate": _round(win_rate, 2),
+            "gross_profit": _round(gross_profit, 2),
+            "gross_loss": _round(gross_loss, 2),
+            "profit_factor": _round(profit_factor, 4),
+            "average_win": _round(average_win, 2),
+            "average_loss": _round(average_loss, 2),
+            "largest_win": _round(largest_win, 2),
+            "largest_loss": _round(largest_loss, 2),
+            "expectancy": _round(expectancy, 2),
+            "total_realized_pnl": _round(total_realized, 2),
+            "total_unrealized_pnl": _round(total_unrealized, 2),
+            "total_pnl": _round(total_pnl, 2),
+            "realized_return_pct": _round(realized_return_pct, 4),
+            "unrealized_return_pct": _round(unrealized_return_pct, 4),
+            "sharpe": _round(sharpe, 4),
+            "sortino": _round(sortino, 4),
+            "kelly_fraction": _round(kelly, 4),
+        }
+
+    def load_open_orders(
+        self,
+        *,
+        account_id: Optional[str] = None,
+        portfolio_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        return self._load_orders(
+            statuses=("open", "pending", "submitted", "new"),
+            account_id=account_id,
+            portfolio_id=portfolio_id,
+            limit=limit,
+        )
+
+    def load_filled_orders(
+        self,
+        *,
+        account_id: Optional[str] = None,
+        portfolio_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        return self._load_orders(
+            statuses=("filled", "complete", "completed", "closed"),
+            account_id=account_id,
+            portfolio_id=portfolio_id,
+            limit=limit,
+        )
+
+    def load_execution_history(
+        self,
+        *,
+        account_id: Optional[str] = None,
+        portfolio_id: Optional[str] = None,
+        limit: int = 250,
+    ) -> List[Dict[str, Any]]:
+        if self.db is None:
+            return []
+
+        tables = [
+            "forex_fills",
+            "forex_executions",
+            "forex_execution_history",
+            "forex_trade_orders",
+        ]
+
+        for table in tables:
+            rows = self._load_table_rows(
+                table=table,
+                account_id=account_id,
+                portfolio_id=portfolio_id,
+                limit=limit,
+                order_by_candidates=("filled_at", "executed_at", "created_at", "updated_at", "id"),
+            )
+            if rows:
+                return rows
+
+        return []
+
+    def load_cash_ledger(
+        self,
+        *,
+        account_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        if self.db is None:
+            return []
+
+        try:
+            self.ensure_tables()
+
+            params: Dict[str, Any] = {
+                "tenant_id": self.tenant_id,
+                "limit": int(limit),
+            }
+            where = "tenant_id = :tenant_id"
+
+            if account_id:
+                where += " AND account_id = :account_id"
+                params["account_id"] = account_id
+
+            rows = self.db.execute(
+                f"""
+                SELECT *
+                FROM forex_cash_ledger
+                WHERE {where}
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """,
+                params,
+            ).fetchall()
+
+            return [dict(row._mapping) for row in rows]
+
+        except Exception as exc:
+            logger.warning("Failed to load forex cash ledger: %s", exc)
+            self._rollback_quietly()
+            return []
+
+    def _load_orders(
+        self,
+        *,
+        statuses: Tuple[str, ...],
+        account_id: Optional[str] = None,
+        portfolio_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        if self.db is None:
+            return []
+
+        # Prefer the existing order management engine if available.
+        try:
+            from modules.forex.forex_order_management_engine import (
+                get_forex_order_management_engine,
+            )
+
+            order_engine = get_forex_order_management_engine(db=self.db)
+            if statuses and any(status in statuses for status in ("open", "pending", "submitted", "new")):
+                rows = order_engine.open_orders()
+            else:
+                rows = order_engine.filled_orders()
+
+            if rows:
+                return self._filter_order_rows(
+                    rows,
+                    account_id=account_id,
+                    portfolio_id=portfolio_id,
+                    limit=limit,
+                )
+
+        except Exception:
+            pass
+
+        tables = ["forex_trade_orders", "forex_orders"]
+        rows: List[Dict[str, Any]] = []
+
+        for table in tables:
+            rows = self._load_table_rows(
+                table=table,
+                account_id=account_id,
+                portfolio_id=portfolio_id,
+                limit=limit,
+                order_by_candidates=("created_at", "filled_at", "updated_at", "id"),
+            )
+            if rows:
+                break
+
+        wanted = {str(status).lower() for status in statuses}
+        filtered = [
+            row
+            for row in rows
+            if str(row.get("status", "")).lower() in wanted
+        ]
+
+        return filtered[: int(limit)]
+
+    def _filter_order_rows(
+        self,
+        rows: List[Dict[str, Any]],
+        *,
+        account_id: Optional[str] = None,
+        portfolio_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        filtered: List[Dict[str, Any]] = []
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+
+            if account_id and row.get("account_id") and str(row.get("account_id")) != str(account_id):
+                continue
+
+            if portfolio_id and row.get("portfolio_id") and str(row.get("portfolio_id")) != str(portfolio_id):
+                continue
+
+            filtered.append(row)
+
+        return filtered[: int(limit)]
+
+    def _load_table_rows(
+        self,
+        *,
+        table: str,
+        account_id: Optional[str] = None,
+        portfolio_id: Optional[str] = None,
+        limit: int = 100,
+        order_by_candidates: Tuple[str, ...] = ("created_at", "updated_at", "id"),
+    ) -> List[Dict[str, Any]]:
+        if self.db is None:
+            return []
+
+        try:
+            columns = self._table_columns(table)
+            if not columns:
+                return []
+
+            params: Dict[str, Any] = {"limit": int(limit)}
+            where_parts: List[str] = []
+
+            if "tenant_id" in columns:
+                where_parts.append("tenant_id = :tenant_id")
+                params["tenant_id"] = self.tenant_id
+
+            if account_id and "account_id" in columns:
+                where_parts.append("account_id = :account_id")
+                params["account_id"] = account_id
+
+            if portfolio_id and "portfolio_id" in columns:
+                where_parts.append("portfolio_id = :portfolio_id")
+                params["portfolio_id"] = portfolio_id
+
+            where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+            order_col = next((col for col in order_by_candidates if col in columns), None)
+            order_by = f"ORDER BY {order_col} DESC" if order_col else ""
+
+            rows = self.db.execute(
+                f"""
+                SELECT *
+                FROM {table}
+                {where}
+                {order_by}
+                LIMIT :limit
+                """,
+                params,
+            ).fetchall()
+
+            return [dict(row._mapping) for row in rows]
+
+        except Exception as exc:
+            logger.warning("Failed to load rows from %s: %s", table, exc)
+            self._rollback_quietly()
+            return []
+
+    def _table_columns(self, table: str) -> List[str]:
+        if self.db is None:
+            return []
+
+        try:
+            rows = self.db.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = :table
+                """,
+                {"table": table},
+            ).fetchall()
+
+            return [str(_row_get(row, "column_name")) for row in rows]
+
+        except Exception:
+            try:
+                row = self.db.execute(f"SELECT * FROM {table} LIMIT 1").fetchone()
+                if row is None:
+                    return []
+                return list(dict(row._mapping).keys())
+            except Exception:
+                return []
+
+
     def _calculate_position_pnl(
         self,
         *,
@@ -1515,6 +2255,34 @@ def get_forex_portfolio_engine(
         forex_ai_engine=forex_ai_engine,
         account_currency=account_currency,
     )
+
+
+def get_forex_terminal_snapshot(
+    *,
+    tenant_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    portfolio_id: Optional[str] = None,
+    account_id: Optional[str] = None,
+    db: Any = None,
+    persist: bool = True,
+    refresh: bool = True,
+    include_orders: bool = True,
+    include_history: bool = True,
+) -> Dict[str, Any]:
+    engine = get_forex_portfolio_engine(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        portfolio_id=portfolio_id,
+        db=db,
+    )
+    return engine.get_terminal_snapshot(
+        account_id=account_id,
+        portfolio_id=portfolio_id,
+        persist=persist,
+        refresh=refresh,
+        include_orders=include_orders,
+        include_history=include_history,
+    ).to_dict()
 
 
 def create_forex_account(

@@ -43,7 +43,7 @@ class ForexTerminalDashboard:
 
     def render(self, *args: Any, **kwargs: Any):
         api = self._api()
-        snapshot = api.get_terminal_snapshot(**kwargs)
+        snapshot = _load_terminal_snapshot(db=self.db, api=api, **kwargs)
         if not isinstance(snapshot, dict):
             snapshot = {"status": "UNKNOWN", "payload": snapshot}
 
@@ -55,17 +55,14 @@ class ForexTerminalDashboard:
         c_refresh, c_title = st.columns([0.08, 0.92])
         with c_refresh:
             if st.button("↻", help="Refresh Forex terminal", use_container_width=True, key="fx_terminal_refresh_top"):
-                refreshed = api.refresh_terminal()
-                if isinstance(refreshed, dict) and "snapshot" in refreshed:
-                    snapshot = refreshed.get("snapshot") or refreshed
-                elif isinstance(refreshed, dict):
-                    snapshot = refreshed
+                snapshot = _load_terminal_snapshot(db=self.db, api=api, refresh=True, **kwargs)
         with c_title:
             st.markdown("## 🌍 Forex Institutional Terminal")
             st.caption(f"Live terminal • {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}")
 
         data = _normalize_snapshot(snapshot, api=api)
         _render_top_ribbon(data)
+        _render_terminal_status_bar(data)
 
         workspace = st.radio(
             "Workspace",
@@ -133,8 +130,170 @@ def _normalize_pair(pair: Any) -> str:
         p = p[:3] + "/" + p[3:]
     return p
 
+def _load_terminal_snapshot(db=None, api=None, **kwargs) -> Dict[str, Any]:
+    """
+    Prefer ForexPortfolioEngine.get_terminal_snapshot() and fall back to the
+    existing terminal API. This keeps router/controller/service layers untouched.
+    """
+    try:
+        from modules.forex.forex_portfolio_engine import get_forex_portfolio_engine
+
+        engine = get_forex_portfolio_engine(
+            tenant_id=kwargs.get("tenant_id"),
+            user_id=kwargs.get("user_id"),
+            portfolio_id=kwargs.get("portfolio_id"),
+            db=db,
+        )
+        snap = engine.get_terminal_snapshot(
+            account_id=kwargs.get("account_id"),
+            portfolio_id=kwargs.get("portfolio_id"),
+            persist=True,
+            refresh=kwargs.get("refresh", True),
+            include_orders=True,
+            include_history=True,
+        )
+        return snap.to_dict() if hasattr(snap, "to_dict") else snap
+    except Exception as exc:
+        portfolio_error = str(exc)
+
+    try:
+        if api is not None:
+            snap = api.get_terminal_snapshot(**kwargs)
+            if isinstance(snap, dict):
+                snap.setdefault("portfolio_engine_error", portfolio_error)
+                return snap
+    except Exception as exc:
+        return {"status": "ERROR", "error": str(exc), "portfolio_engine_error": portfolio_error}
+
+    return {"status": "ERROR", "error": "No terminal snapshot source available.", "portfolio_engine_error": portfolio_error}
+
+
+def _is_terminal_snapshot(snapshot: Dict[str, Any]) -> bool:
+    return (
+        isinstance(snapshot, dict)
+        and isinstance(snapshot.get("account"), dict)
+        and isinstance(snapshot.get("performance"), dict)
+        and ("positions" in snapshot or "currency_exposure" in snapshot or "open_orders" in snapshot)
+    )
+
+
+def _first_dict(*values: Any) -> Dict[str, Any]:
+    for value in values:
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _first_list(*values: Any) -> List[Any]:
+    for value in values:
+        if isinstance(value, list):
+            return value
+    return []
+
+
 
 def _normalize_snapshot(snapshot: Dict[str, Any], api=None) -> Dict[str, Any]:
+    """Normalize ForexTerminalSnapshot first, legacy terminal payloads second."""
+    snapshot = snapshot or {}
+
+    if _is_terminal_snapshot(snapshot):
+        account = _first_dict(snapshot.get("account"))
+        portfolio = _first_dict(snapshot.get("portfolio"))
+        margin = _first_dict(snapshot.get("margin"), portfolio.get("margin"))
+        performance = _first_dict(snapshot.get("performance"), portfolio.get("performance"))
+        risk = _first_dict(snapshot.get("risk"), portfolio.get("risk"))
+        system = _first_dict(snapshot.get("system"))
+        ai = _first_dict(snapshot.get("ai_summary"), snapshot.get("ai"), portfolio.get("ai_summary"))
+
+        raw_positions = _first_list(snapshot.get("positions"), portfolio.get("positions"))
+        positions = _normalize_positions({"positions": raw_positions}, portfolio)
+
+        orders = {
+            "open": _first_list(snapshot.get("open_orders"), portfolio.get("open_orders")),
+            "filled": _first_list(snapshot.get("filled_orders"), portfolio.get("filled_orders")),
+        }
+
+        execution_history = _first_list(snapshot.get("execution_history"), portfolio.get("execution_history"))
+        cash_ledger = _first_list(snapshot.get("cash_ledger"), portfolio.get("cash_ledger"))
+        journal = _first_list(snapshot.get("journal"), cash_ledger)
+
+        currency_exposure = _first_list(snapshot.get("currency_exposure"), portfolio.get("currency_exposure"))
+        pair_exposure = _first_list(snapshot.get("pair_exposure"), portfolio.get("pair_exposure"))
+
+        currency_strength = _first_list(snapshot.get("currency_strength"))
+        if not currency_strength and currency_exposure:
+            max_abs = max([abs(_safe_float(row.get("net_exposure"))) for row in currency_exposure if isinstance(row, dict)] or [1.0])
+            currency_strength = []
+            for row in currency_exposure:
+                if isinstance(row, dict):
+                    net = _safe_float(row.get("net_exposure"))
+                    currency_strength.append({
+                        "currency": row.get("currency", "-"),
+                        "score": min(100.0, abs(net) / max_abs * 100.0) if max_abs else 0.0,
+                        "trend": "UP" if net >= 0 else "DOWN",
+                    })
+
+        provider_health = _first_list(snapshot.get("provider_health"), system.get("provider_health"))
+        recommendations = _normalize_recommendations(snapshot)
+
+        regime = ai.get("regime") or portfolio.get("market_regime") or snapshot.get("market_regime") or "RISK_OFF"
+        if str(regime).upper() in {"ERROR", "WARNING", "READY", "UNKNOWN"}:
+            regime = "RISK_OFF"
+
+        macro_score = _safe_float(ai.get("confidence") or portfolio.get("macro_score") or snapshot.get("macro_score") or 78)
+
+        strongest = "USD"
+        weakest = "AUD"
+        if currency_strength:
+            strongest = max(currency_strength, key=lambda x: _safe_float(x.get("score") if isinstance(x, dict) else 0)).get("currency", "USD")
+            weakest = min(currency_strength, key=lambda x: _safe_float(x.get("score") if isinstance(x, dict) else 0)).get("currency", "AUD")
+
+        realized = _safe_float(performance.get("total_realized_pnl") or account.get("realized_pnl"))
+        unrealized = _safe_float(performance.get("total_unrealized_pnl") or account.get("unrealized_pnl"))
+        total_pnl = _safe_float(performance.get("total_pnl"), realized + unrealized)
+        equity = _safe_float(account.get("equity") or portfolio.get("equity"))
+        daily_pnl = _safe_float(performance.get("daily_pnl"), total_pnl)
+        daily_pnl_pct = _safe_float(
+            performance.get("daily_return_pct")
+            or performance.get("daily_pnl_pct")
+            or ((daily_pnl / equity) * 100.0 if equity else 0.0)
+        )
+
+        return {
+            "generated_at": snapshot.get("generated_at") or datetime.now(timezone.utc).isoformat(),
+            "status": system.get("status") or snapshot.get("status", "READY"),
+            "regime": str(regime).replace("_", "-").upper(),
+            "macro_score": macro_score,
+            "strongest_currency": strongest,
+            "weakest_currency": weakest,
+            "ai_confidence": _safe_float(ai.get("confidence") or macro_score),
+            "open_positions": len(positions),
+            "daily_pnl": daily_pnl,
+            "daily_pnl_pct": daily_pnl_pct,
+            "equity": equity,
+            "account": account,
+            "portfolio": portfolio,
+            "margin": margin,
+            "risk": risk,
+            "performance": performance,
+            "currency_strength": currency_strength,
+            "currency_exposure": currency_exposure,
+            "pair_exposure": pair_exposure,
+            "provider_health": provider_health,
+            "recommendations": recommendations,
+            "positions": positions,
+            "orders": orders,
+            "journal": journal,
+            "execution_history": execution_history,
+            "cash_ledger": cash_ledger,
+            "ai": ai,
+            "economic_calendar": _first_list(snapshot.get("economic_calendar"), portfolio.get("economic_calendar"), _fallback_calendar()),
+            "central_bank_events": _first_list(snapshot.get("central_bank_events"), portfolio.get("central_bank_events"), _fallback_central_banks()),
+            "alerts": _first_list(snapshot.get("alerts"), _build_alerts(recommendations)),
+            "market_overview": snapshot,
+            "raw_snapshot": snapshot,
+        }
+
     market_overview = snapshot.get("market_overview") or snapshot.get("command_center") or snapshot.get("terminal", {}).get("market_overview") or snapshot
     if isinstance(market_overview, dict):
         market_regime = market_overview.get("market_regime") or market_overview.get("regime") or market_overview.get("macro_regime") or market_overview
@@ -155,10 +314,10 @@ def _normalize_snapshot(snapshot: Dict[str, Any], api=None) -> Dict[str, Any]:
     weakest = sorted(strength_rows, key=lambda r: _safe_float(r.get("score")))[0]["currency"] if strength_rows else "AUD"
     ai_conf = max([_safe_float(r.get("confidence")) for r in recommendations] + [_safe_float(ai.get("confidence"), 91)])
 
-    open_positions = _safe_int(portfolio.get("open_positions")) or _safe_int(portfolio.get("position_count")) or len(positions) or 12
-    daily_pnl = _safe_float(portfolio.get("daily_pnl") or portfolio.get("unrealized_pnl") or portfolio.get("pnl") or 2842.35)
-    daily_pnl_pct = _safe_float(portfolio.get("daily_pnl_pct") or portfolio.get("pnl_pct") or 0.78)
-    equity = _safe_float(portfolio.get("equity") or portfolio.get("portfolio_value") or portfolio.get("total_value") or 368452.17)
+    open_positions = _safe_int(portfolio.get("open_positions")) or _safe_int(portfolio.get("position_count")) or len(positions)
+    daily_pnl = _safe_float(portfolio.get("daily_pnl") or portfolio.get("unrealized_pnl") or portfolio.get("pnl"))
+    daily_pnl_pct = _safe_float(portfolio.get("daily_pnl_pct") or portfolio.get("pnl_pct"))
+    equity = _safe_float(portfolio.get("equity") or portfolio.get("portfolio_value") or portfolio.get("total_value"))
 
     return {
         "generated_at": snapshot.get("generated_at") or datetime.now(timezone.utc).isoformat(),
@@ -172,13 +331,21 @@ def _normalize_snapshot(snapshot: Dict[str, Any], api=None) -> Dict[str, Any]:
         "daily_pnl": daily_pnl,
         "daily_pnl_pct": daily_pnl_pct,
         "equity": equity,
+        "account": {},
+        "portfolio": portfolio,
+        "margin": {},
+        "risk": {},
+        "performance": {},
         "currency_strength": strength_rows,
+        "currency_exposure": [],
+        "pair_exposure": [],
         "provider_health": provider_rows,
         "recommendations": recommendations,
-        "portfolio": portfolio,
         "positions": positions,
         "orders": orders,
         "journal": journal,
+        "execution_history": orders.get("filled", []),
+        "cash_ledger": [],
         "ai": ai,
         "economic_calendar": _fallback_calendar(),
         "central_bank_events": _fallback_central_banks(),
@@ -346,12 +513,7 @@ def _normalize_positions(snapshot: Dict[str, Any], portfolio: Dict[str, Any]) ->
     if isinstance(rows, dict):
         rows = list(rows.values())
     if not isinstance(rows, list) or not rows:
-        return [
-            {"Symbol": "EUR/USD", "Side": "Buy", "Size": 1.00, "Entry": 1.06782, "Current": 1.07182, "P/L": "+400.00", "P/L %": "+0.37%"},
-            {"Symbol": "USD/JPY", "Side": "Buy", "Size": 0.75, "Entry": 156.240, "Current": 158.420, "P/L": "+1,032.56", "P/L %": "+1.40%"},
-            {"Symbol": "GBP/USD", "Side": "Buy", "Size": 0.60, "Entry": 1.26145, "Current": 1.26305, "P/L": "+96.00", "P/L %": "+0.13%"},
-            {"Symbol": "AUD/USD", "Side": "Sell", "Size": 1.00, "Entry": 0.66680, "Current": 0.66410, "P/L": "+270.00", "P/L %": "+0.40%"},
-        ]
+        return []
     normalized = []
     for item in rows:
         if isinstance(item, dict):
@@ -467,15 +629,43 @@ def _render_table(rows: Any, height: int = 230) -> None:
 
 
 def _render_top_ribbon(data: Dict[str, Any]) -> None:
+    account = data.get("account") or {}
+    margin = data.get("margin") or {}
+    performance = data.get("performance") or {}
+
+    cash = _safe_float(account.get("cash_balance"))
+    margin_used = _safe_float(margin.get("margin_used") or account.get("margin_used"))
+    margin_available = _safe_float(margin.get("margin_available") or account.get("margin_available"))
+    total_pnl = _safe_float(performance.get("total_pnl"), data.get("daily_pnl", 0))
+
     cols = st.columns([1.25, 1.18, 1.18, 1.05, 1.0, 1.08, 1.18, 1.12])
     with cols[0]: _metric_card("Market Regime", data["regime"], f"Macro Score: {data['macro_score']:.0f}/100", data["regime"], data["macro_score"])
-    with cols[1]: _metric_card("Strongest Currency", f"{_currency_flag(data['strongest_currency'])} {data['strongest_currency']}", "Strength leader", "BUY", 100)
-    with cols[2]: _metric_card("Weakest Currency", f"{_currency_flag(data['weakest_currency'])} {data['weakest_currency']}", "Weakness leader", "SELL", 42)
-    with cols[3]: _metric_card("AI Confidence", f"{data['ai_confidence']:.0f}%", "Model consensus", "HIGH", data["ai_confidence"])
-    with cols[4]: _metric_card("Open Positions", data["open_positions"], "Active exposure", "READY", 64)
-    with cols[5]: _metric_card("Daily P/L", f"{'+' if data['daily_pnl'] >= 0 else '-'}${abs(data['daily_pnl']):,.2f}", f"{data['daily_pnl_pct']:+.2f}%", "BUY" if data["daily_pnl"] >= 0 else "SELL", 78)
-    with cols[6]: _metric_card("Equity", f"${data['equity']:,.2f}", "Portfolio value", "READY", 74)
+    with cols[1]: _metric_card("Equity", f"${data['equity']:,.2f}", "Portfolio value", "READY", 74 if data["equity"] else 0)
+    with cols[2]: _metric_card("Cash", f"${cash:,.2f}", "Account balance", "READY", 70 if cash else 0)
+    with cols[3]: _metric_card("Open Positions", data["open_positions"], "Active exposure", "READY", 64 if data["open_positions"] else 0)
+    with cols[4]: _metric_card("Margin Used", f"${margin_used:,.2f}", "Allocated", "WARNING" if margin_used else "READY", 50 if margin_used else 0)
+    with cols[5]: _metric_card("Buying Power", f"${margin_available:,.2f}", "Margin available", "READY", 78 if margin_available else 0)
+    with cols[6]: _metric_card("Total P/L", f"{'+' if total_pnl >= 0 else '-'}${abs(total_pnl):,.2f}", f"{data['daily_pnl_pct']:+.2f}%", "BUY" if total_pnl >= 0 else "SELL", 78 if total_pnl else 0)
     with cols[7]: _metric_card("Server Time", datetime.now(timezone.utc).strftime("%H:%M:%S UTC"), datetime.now(timezone.utc).strftime("%b %d, %Y"), "READY")
+
+
+def _render_terminal_status_bar(data: Dict[str, Any]) -> None:
+    account = data.get("account") or {}
+    margin = data.get("margin") or {}
+    raw = data.get("raw_snapshot") or {}
+    system = raw.get("system") if isinstance(raw, dict) else {}
+    if not isinstance(system, dict):
+        system = {}
+    st.caption(
+        " | ".join([
+            f"Snapshot: {str(data.get('generated_at', '-'))[:19]}",
+            f"Account: {account.get('account_name') or account.get('id') or 'N/A'}",
+            f"Currency: {account.get('account_currency', 'USD')}",
+            f"Leverage: {account.get('leverage', margin.get('leverage', '-'))}",
+            f"Margin Utilization: {_safe_float(margin.get('margin_utilization_pct')):.2f}%",
+            f"Source: {system.get('source', 'terminal_api')}",
+        ])
+    )
 
 
 def _render_strength(rows: List[Dict[str, Any]]) -> None:
@@ -516,12 +706,18 @@ def _demo_chart(pair: str = "EUR/USD"):
     return fig
 
 
-def _render_order_book(pair: str) -> None:
-    _section("Order Book", pair)
-    _render_table([
-        {"Price":"1.07210","Size (M)":12.0,"Total (M)":52.1,"Side":"Ask"}, {"Price":"1.07207","Size (M)":8.5,"Total (M)":40.1,"Side":"Ask"}, {"Price":"1.07204","Size (M)":10.0,"Total (M)":31.6,"Side":"Ask"},
-        {"Price":"1.07182","Size (M)":0.3,"Total (M)":0.3,"Side":"Mid"}, {"Price":"1.07179","Size (M)":6.2,"Total (M)":6.2,"Side":"Bid"}, {"Price":"1.07176","Size (M)":9.8,"Total (M)":16.0,"Side":"Bid"},
-    ], height=230)
+def _render_order_book(pair: str, data: Optional[Dict[str, Any]] = None) -> None:
+    _section("Order / Execution Flow", pair)
+    data = data or {}
+    rows = []
+    for row in (data.get("orders", {}).get("open", []) or []):
+        if isinstance(row, dict) and _normalize_pair(row.get("pair") or row.get("symbol") or pair) == _normalize_pair(pair):
+            rows.append(row)
+    if not rows:
+        for row in (data.get("execution_history", []) or []):
+            if isinstance(row, dict) and _normalize_pair(row.get("pair") or row.get("symbol") or pair) == _normalize_pair(pair):
+                rows.append(row)
+    _render_table(rows, height=230)
 
 
 def _render_trade_ticket(api, pair: str) -> None:
@@ -599,21 +795,48 @@ def _render_right_panel(data: Dict[str, Any]) -> None:
 
 def _render_bottom_panel(data: Dict[str, Any]) -> None:
     st.markdown('<div class="fx-panel">', unsafe_allow_html=True)
-    t1,t2,t3,t4,t5 = st.tabs(["Positions", "Orders", "Journal", "Executions", "Equity Curve"])
-    with t1: _render_table(data["positions"], height=230)
+    t1,t2,t3,t4,t5,t6 = st.tabs(["Positions", "Orders", "Cash Ledger", "Executions", "Exposure", "Equity Curve"])
+    with t1:
+        _render_table(data["positions"], height=230)
     with t2:
         c1,c2=st.columns(2)
-        with c1: st.subheader("Open Orders"); _render_table(data["orders"]["open"], height=205)
-        with c2: st.subheader("Filled Orders"); _render_table(data["orders"]["filled"], height=205)
-    with t3: _render_table(data["journal"], height=230)
-    with t4: _render_table(data["orders"]["filled"], height=230)
+        with c1:
+            st.subheader("Open Orders")
+            _render_table(data["orders"]["open"], height=205)
+        with c2:
+            st.subheader("Filled Orders")
+            _render_table(data["orders"]["filled"], height=205)
+    with t3:
+        _render_table(data.get("cash_ledger") or data.get("journal"), height=230)
+    with t4:
+        _render_table(data.get("execution_history") or data["orders"]["filled"], height=230)
     with t5:
-        if go is None: st.info("Plotly is unavailable.")
-        else:
-            x=list(range(30)); y=[100000+i*290+((i%6)-3)*380 for i in x]
-            fig=go.Figure(go.Scatter(x=x,y=y,mode="lines",fill="tozeroy",name="Equity")); fig.update_layout(template="plotly_dark",height=230,margin=dict(l=5,r=5,t=20,b=5),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig, use_container_width=True)
+        c1,c2=st.columns(2)
+        with c1:
+            st.subheader("Currency Exposure")
+            _render_table(data.get("currency_exposure"), height=205)
+        with c2:
+            st.subheader("Pair Exposure")
+            _render_table(data.get("pair_exposure"), height=205)
+    with t6:
+        _render_equity_curve(data)
     st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_equity_curve(data: Dict[str, Any]) -> None:
+    if go is None:
+        st.info("Plotly is unavailable.")
+        return
+    equity = _safe_float(data.get("equity"))
+    pnl = _safe_float(data.get("daily_pnl"))
+    if equity <= 0:
+        st.info("No live equity value available yet.")
+        return
+    x=list(range(30))
+    y=[equity - pnl + pnl*(i/29.0) for i in x]
+    fig=go.Figure(go.Scatter(x=x,y=y,mode="lines",fill="tozeroy",name="Equity"))
+    fig.update_layout(template="plotly_dark",height=230,margin=dict(l=5,r=5,t=20,b=5),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # ----------------------------- Workspace renderers -----------------------------
@@ -627,7 +850,7 @@ def _render_trading_desk(api, data: Dict[str, Any]) -> None:
         with top_left:
             st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _section("Live Chart", pair); fig=_demo_chart(pair); st.plotly_chart(fig, use_container_width=True) if fig is not None else st.info("Plotly is unavailable."); st.markdown("</div>", unsafe_allow_html=True)
         with top_right:
-            st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _render_order_book(pair); st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _render_order_book(pair, data); st.markdown("</div>", unsafe_allow_html=True)
             st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _render_trade_ticket(api, pair); st.markdown("</div>", unsafe_allow_html=True)
         st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _render_recommendations(data["recommendations"]); st.markdown("</div>", unsafe_allow_html=True)
     with right: _render_right_panel(data)
@@ -643,7 +866,20 @@ def _render_command_center(data: Dict[str, Any]) -> None:
     with right: _render_right_panel(data)
 
 
-def _render_portfolio(data: Dict[str, Any]) -> None: _render_bottom_panel(data)
+def _render_portfolio(data: Dict[str, Any]) -> None:
+    account = data.get("account") or {}
+    margin = data.get("margin") or {}
+    performance = data.get("performance") or {}
+    st.markdown('<div class="fx-panel">', unsafe_allow_html=True)
+    _section("Portfolio Account", account.get("account_currency", "USD"))
+    c1,c2,c3,c4,c5 = st.columns(5)
+    c1.metric("Cash", f"${_safe_float(account.get('cash_balance')):,.2f}")
+    c2.metric("Equity", f"${_safe_float(account.get('equity')):,.2f}")
+    c3.metric("Margin Used", f"${_safe_float(margin.get('margin_used') or account.get('margin_used')):,.2f}")
+    c4.metric("Buying Power", f"${_safe_float(margin.get('margin_available') or account.get('margin_available')):,.2f}")
+    c5.metric("Total P/L", f"${_safe_float(performance.get('total_pnl')):,.2f}")
+    st.markdown("</div>", unsafe_allow_html=True)
+    _render_bottom_panel(data)
 def _render_orders(data: Dict[str, Any]) -> None:
     st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _section("Order Management", "open / filled"); c1,c2=st.columns(2)
     with c1: st.subheader("Open Orders"); _render_table(data["orders"]["open"], height=420)
@@ -651,10 +887,48 @@ def _render_orders(data: Dict[str, Any]) -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 def _render_risk(data: Dict[str, Any]) -> None:
-    st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _section("Risk Dashboard", data["regime"]); c1,c2,c3,c4=st.columns(4); c1.metric("Gross Exposure","$1.24M"); c2.metric("Net Exposure","$482K"); c3.metric("Portfolio VaR","1.8%"); c4.metric("Max Drawdown","-3.2%"); st.info("Risk engine output will be connected here. JSON is available in Developer / Debug below."); st.markdown("</div>", unsafe_allow_html=True)
+    risk = data.get("risk") or {}
+    pair_exposure = data.get("pair_exposure") or []
+    currency_exposure = data.get("currency_exposure") or []
+    gross = sum(abs(_safe_float(row.get("gross_notional") or row.get("gross_exposure"))) for row in pair_exposure if isinstance(row, dict))
+    net = sum(_safe_float(row.get("net_notional") or row.get("net_exposure")) for row in pair_exposure if isinstance(row, dict))
+
+    st.markdown('<div class="fx-panel">', unsafe_allow_html=True)
+    _section("Risk Dashboard", data["regime"])
+    c1,c2,c3,c4=st.columns(4)
+    c1.metric("Gross Exposure", f"${gross:,.2f}" if gross else f"${_safe_float(risk.get('total_notional')):,.2f}")
+    c2.metric("Net Exposure", f"${net:,.2f}")
+    c3.metric("Risk Score", f"{_safe_float(risk.get('risk_score')):.2f}")
+    c4.metric("Margin Available", f"${_safe_float(risk.get('margin_available') or data.get('margin', {}).get('margin_available')):,.2f}")
+    if risk.get("warnings"):
+        st.warning(risk.get("warnings"))
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    c1,c2 = st.columns(2)
+    with c1:
+        st.markdown('<div class="fx-panel">', unsafe_allow_html=True)
+        _section("Currency Exposure", "live")
+        _render_table(currency_exposure, height=320)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with c2:
+        st.markdown('<div class="fx-panel">', unsafe_allow_html=True)
+        _section("Pair Exposure", "live")
+        _render_table(pair_exposure, height=320)
+        st.markdown("</div>", unsafe_allow_html=True)
 
 def _render_performance(data: Dict[str, Any]) -> None:
-    st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _section("Performance Analytics", "portfolio"); c1,c2,c3,c4=st.columns(4); c1.metric("Daily P/L",f"${data['daily_pnl']:,.2f}",f"{data['daily_pnl_pct']:+.2f}%"); c2.metric("Win Rate","64%"); c3.metric("Profit Factor","1.82"); c4.metric("Sharpe","1.34"); st.markdown("</div>", unsafe_allow_html=True); _render_bottom_panel(data)
+    perf = data.get("performance") or {}
+    st.markdown('<div class="fx-panel">', unsafe_allow_html=True)
+    _section("Performance Analytics", "portfolio")
+    c1,c2,c3,c4,c5=st.columns(5)
+    c1.metric("Total P/L", f"${_safe_float(perf.get('total_pnl') or data.get('daily_pnl')):,.2f}", f"{data['daily_pnl_pct']:+.2f}%")
+    c2.metric("Win Rate", f"{_safe_float(perf.get('win_rate')):.2f}%")
+    c3.metric("Profit Factor", f"{_safe_float(perf.get('profit_factor')):.2f}")
+    c4.metric("Sharpe", f"{_safe_float(perf.get('sharpe')):.2f}")
+    c5.metric("Expectancy", f"${_safe_float(perf.get('expectancy')):,.2f}")
+    st.markdown("</div>", unsafe_allow_html=True)
+    _render_table(perf, height=220)
+    _render_bottom_panel(data)
 
 def _render_journal(data: Dict[str, Any]) -> None:
     st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _section("Trade Journal", "entries"); _render_table(data["journal"], height=470); st.markdown("</div>", unsafe_allow_html=True)
@@ -669,9 +943,20 @@ def _render_provider_health(data: Dict[str, Any]) -> None:
 def _render_developer_debug(raw_snapshot: Dict[str, Any], normalized: Dict[str, Any]) -> None:
     with st.expander("Developer / Debug", expanded=False):
         t1,t2,t3=st.tabs(["Raw JSON", "Normalized View", "System Status"])
-        with t1: st.json(raw_snapshot)
-        with t2: st.json(normalized)
-        with t3: st.write("Generated at:", normalized.get("generated_at")); st.write("Dashboard:", "forex_terminal_dashboard.py"); st.write("Status:", normalized.get("status", "READY"))
+        with t1:
+            st.json(raw_snapshot)
+        with t2:
+            st.json(normalized)
+        with t3:
+            raw = normalized.get("raw_snapshot") or {}
+            system = raw.get("system") if isinstance(raw, dict) else {}
+            if not isinstance(system, dict):
+                system = {}
+            st.write("Generated at:", normalized.get("generated_at"))
+            st.write("Dashboard:", "forex_terminal_dashboard.py")
+            st.write("Status:", normalized.get("status", "READY"))
+            st.write("Account:", (normalized.get("account") or {}).get("id"))
+            st.write("Snapshot Source:", system.get("source", "terminal_api"))
 
 
 _DASH = None

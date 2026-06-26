@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
@@ -826,11 +825,31 @@ def render_universe(db, user):
             "Universe job running... refreshing automatically."
         )
 
-        import time
+        # IMPORTANT: this used to time.sleep(60) for a full minute while
+        # holding the live db connection open and idle, then call
+        # st.rerun() -- which tears the script down immediately, before
+        # the connection was ever explicitly returned to the pool. Every
+        # browser tab with this page open while a job is running repeats
+        # this every 60 seconds, each pinning a connection the whole
+        # time. With only pool_size=3 + max_overflow=2 = 5 connections
+        # total, a couple of tabs open during a long-running refresh is
+        # enough to exhaust the pool -- which is the likely cause of the
+        # repeated "SSL connection has been closed unexpectedly" errors
+        # showing up during/after universe refreshes.
+        #
+        # Close the connection before waiting, and wait a much shorter
+        # interval so the UI actually feels responsive rather than
+        # freezing for a full minute at a time.
+        try:
+            db.close()
+        except Exception:
+            pass
 
-        time.sleep(60)
+        import time
+        time.sleep(5)
 
         st.rerun()
+        return
 
     # --------------------------------------------------
     # Rankings
@@ -908,6 +927,3 @@ def render_universe(db, user):
             ])
 
             _show_dataframe(sdf, MAX_SECTOR_ROWS)
-
-
-
