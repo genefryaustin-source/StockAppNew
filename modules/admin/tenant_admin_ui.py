@@ -619,7 +619,15 @@ def render_tenant_admin_panel(db, user):
 
                     ORDER BY u.name
                 """),
-                db.bind,
+                # db.bind (the Engine) makes pandas open a SECOND, separate
+                # connection from the pool for this one query, on top of
+                # the `db` session already checked out for the whole page
+                # render -- db.connection() reuses the connection the
+                # session already has instead of asking the pool for
+                # another one. With 9 admin tabs each fully re-rendering
+                # on every Streamlit rerun, that compounds fast and was a
+                # real contributor to the pool-exhaustion timeout.
+                db.connection(),
                 params={
                     "tenant_id": tenant_id
                 }
