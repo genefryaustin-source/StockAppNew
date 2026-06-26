@@ -202,6 +202,35 @@ class ForexTerminalExecutionService:
         }
 
     def submit_order(self, **kwargs: Any) -> Dict[str, Any]:
+        """
+        Phase 12 broker-routed submit.
+
+        Paper remains the default. Non-paper brokers route through the broker
+        abstraction layer. Live adapters are safety-locked by their configs.
+        """
+        broker = str(kwargs.get("broker") or "paper").lower()
+
+        # Paper orders use the local validated execution path to avoid router
+        # recursion through ForexPaperBroker -> execution service.
+        if broker in {"paper", "sim", "simulation"}:
+            return self._submit_order_internal(**kwargs)
+
+        try:
+            from modules.forex.forex_broker_router import get_forex_broker_router
+            routed = get_forex_broker_router(db=self.db, default_broker="paper").route_order(**kwargs)
+            if isinstance(routed, dict):
+                routed.setdefault("broker_routed", True)
+                routed.setdefault("broker", broker)
+            return routed
+        except Exception as exc:
+            return {
+                "status": "ERROR",
+                "message": "Broker routing failed.",
+                "broker": broker,
+                "error": str(exc),
+            }
+
+    def _submit_order_internal(self, **kwargs: Any) -> Dict[str, Any]:
         validation = self.validate_order(**kwargs)
 
         if not validation["valid"]:
@@ -354,7 +383,15 @@ class ForexTerminalExecutionService:
             "verified_at": _now_iso(),
         }
 
-    def cancel_order(self, broker_order_id: str) -> Dict[str, Any]:
+    def cancel_order(self, broker_order_id: str, broker: str = "paper") -> Dict[str, Any]:
+        broker_name = str(broker or "paper").lower()
+        if broker_name not in {"paper", "sim", "simulation"}:
+            try:
+                from modules.forex.forex_broker_router import get_forex_broker_router
+                return get_forex_broker_router(db=self.db).cancel_order(broker_order_id, broker=broker_name)
+            except Exception as exc:
+                return {"status": "ERROR", "broker": broker_name, "broker_order_id": broker_order_id, "error": str(exc)}
+
         if self.db is None or text is None:
             return {"status": "ERROR", "message": "Database unavailable."}
 

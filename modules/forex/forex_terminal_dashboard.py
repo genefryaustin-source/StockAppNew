@@ -71,7 +71,7 @@ class ForexTerminalDashboard:
             "Workspace",
             [
                 "Trading Desk", "Institutional Workstation", "Command Center", "Portfolio", "Orders", "Risk",
-                "Performance", "Journal", "AI Briefing", "Provider Health",
+                "Performance", "Journal", "AI Briefing", "Provider Health", "Production Health",
             ],
             horizontal=True,
             key="forex_terminal_institutional_workspace",
@@ -97,6 +97,8 @@ class ForexTerminalDashboard:
             _render_ai_briefing(data)
         elif workspace == "Provider Health":
             _render_provider_health(data)
+        elif workspace == "Production Health":
+            _render_production_health(data, db=self.db)
 
         _render_developer_debug(snapshot, data)
         return snapshot
@@ -674,6 +676,10 @@ def _render_institutional_workstation(api, data: Dict[str, Any], db=None) -> Non
         _render_table(_rows_from_payload(journal, "entries"), height=180)
         st.markdown("</div>", unsafe_allow_html=True)
 
+    with st.expander("Production Services", expanded=False):
+        production = workspace.get("production_services") or (workspace.get("terminal") or {}).get("production") or {}
+        st.json(production)
+
     with st.expander("Phase 6 Workstation Payload", expanded=False):
         st.json(workspace)
 
@@ -889,6 +895,41 @@ def _render_developer_debug(raw_snapshot: Dict[str, Any], normalized: Dict[str, 
         with t1: st.json(raw_snapshot)
         with t2: st.json(normalized)
         with t3: st.write("Generated at:", normalized.get("generated_at")); st.write("Dashboard:", "forex_terminal_dashboard.py"); st.write("Status:", normalized.get("status", "READY"))
+
+
+def _render_production_health(data: Dict[str, Any], db=None) -> None:
+    st.markdown("### 🏦 Production Health & Broker Routing")
+
+    try:
+        from modules.forex.forex_phase12_production_services import get_forex_phase12_production_services
+        prod = get_forex_phase12_production_services(db=db)
+        broker_health = prod.broker_health()
+        operations = prod.operations_health()
+        risk = prod.institutional_risk(data.get("raw_snapshot") or data)
+        attribution = prod.attribution(data.get("raw_snapshot") or data)
+        execution = prod.execution_analytics()
+    except Exception as exc:
+        st.error(f"Production services unavailable: {exc}")
+        return
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Broker Layer", broker_health.get("status", "UNKNOWN"))
+    c2.metric("Operations", operations.get("status", "UNKNOWN"))
+    c3.metric("Risk Score", f"{_safe_float(risk.get('risk_score')):.2f}")
+    c4.metric("Total P/L", f"${_safe_float(attribution.get('total_pnl')):,.2f}")
+    c5.metric("Fill Rate", f"{_safe_float(execution.get('fill_rate')):.2f}%")
+
+    t1, t2, t3, t4, t5 = st.tabs(["Brokers", "Operations", "Risk", "Attribution", "Execution Analytics"])
+    with t1:
+        _render_table(broker_health.get("brokers", []), height=320)
+    with t2:
+        st.json(operations)
+    with t3:
+        st.json(risk)
+    with t4:
+        st.json(attribution)
+    with t5:
+        st.json(execution)
 
 
 _DASH = None

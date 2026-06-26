@@ -32,6 +32,20 @@ REQUIRED_MODULES = [
     "modules.forex.forex_economic_intelligence",
     "modules.forex.forex_microstructure_engine",
     "modules.forex.forex_autonomous_portfolio_manager",
+    "modules.forex.forex_broker_base",
+    "modules.forex.forex_broker_registry",
+    "modules.forex.forex_broker_router",
+    "modules.forex.forex_paper_broker",
+    "modules.forex.forex_mt5_broker",
+    "modules.forex.forex_oanda_broker",
+    "modules.forex.forex_ibkr_broker",
+    "modules.forex.forex_dxtrade_broker",
+    "modules.forex.forex_institutional_risk_engine",
+    "modules.forex.forex_portfolio_attribution",
+    "modules.forex.forex_execution_analytics",
+    "modules.forex.forex_ai_trade_supervisor",
+    "modules.forex.forex_operations_health_monitor",
+    "modules.forex.forex_phase12_production_services",
 ]
 
 REQUIRED_TABLES = [
@@ -140,6 +154,52 @@ class ForexTerminalValidationCenter:
             self._validate_workspace_shape(workspace, add)
         except Exception as exc:
             add("Workstation", "Phase 6 workspace", False, str(exc))
+
+        try:
+            from modules.forex.forex_phase12_production_services import get_forex_phase12_production_services
+            prod = get_forex_phase12_production_services(db=self.db)
+
+            broker_health = prod.broker_health()
+            artifacts["phase12_broker_health"] = broker_health
+            add("Phase 12", "Broker health payload", isinstance(broker_health, dict) and broker_health.get("status") in {"READY", "ERROR"}, str(broker_health.get("status")))
+
+            ops = prod.operations_health()
+            artifacts["phase12_operations_health"] = ops
+            add("Phase 12", "Operations health payload", isinstance(ops, dict), str(ops.get("status")))
+
+            risk = prod.institutional_risk(snapshot)
+            artifacts["phase12_institutional_risk"] = risk
+            add("Phase 12", "Institutional risk engine", isinstance(risk, dict) and "risk_score" in risk, str(risk.get("risk_score")))
+
+            attribution = prod.attribution(snapshot)
+            artifacts["phase12_attribution"] = attribution
+            add("Phase 12", "Portfolio attribution", isinstance(attribution, dict) and "total_pnl" in attribution, str(attribution.get("total_pnl")))
+
+            exec_analytics = prod.execution_analytics()
+            artifacts["phase12_execution_analytics"] = exec_analytics
+            add("Phase 12", "Execution analytics", isinstance(exec_analytics, dict) and "fill_rate" in exec_analytics, str(exec_analytics.get("fill_rate")))
+
+            try:
+                from modules.forex.forex_broker_router import get_forex_broker_router
+                router = get_forex_broker_router(db=self.db)
+                live_lock = router.route_order(
+                    broker="oanda",
+                    pair="EUR/USD",
+                    side="BUY",
+                    lots=0.01,
+                    order_type="MARKET",
+                )
+                artifacts["phase12_live_broker_safety"] = live_lock
+                add("Phase 12", "Live broker safety lockout", str(live_lock.get("status", "")).upper() == "REJECTED", live_lock.get("message", ""))
+            except Exception as exc:
+                add("Phase 12", "Live broker safety lockout", False, str(exc))
+
+            if execute_trade:
+                route = prod.paper_broker_route_test(account_id=account_id, portfolio_id=portfolio_id)
+                artifacts["phase12_paper_route_test"] = route
+                add("Phase 12", "Paper broker route test", str(route.get("status", "")).upper() in {"FILLED", "OPEN"}, str(route.get("status")))
+        except Exception as exc:
+            add("Phase 12", "Production services validation", False, str(exc))
 
         passed = sum(1 for r in results if r["Passed"])
         failed = sum(1 for r in results if not r["Passed"])

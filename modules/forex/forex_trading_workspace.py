@@ -28,6 +28,7 @@ class ForexTradingWorkspace:
         from modules.forex.forex_ai_command_center import get_forex_ai_command_center
         from modules.forex.forex_economic_intelligence import get_forex_economic_intelligence
         from modules.forex.forex_microstructure_engine import get_forex_microstructure_engine
+        from modules.forex.forex_phase12_production_services import get_forex_phase12_production_services
 
         pair = kwargs.get("pair") or "EUR/USD"
 
@@ -47,6 +48,7 @@ class ForexTradingWorkspace:
             "ai_command_center": get_forex_ai_command_center(db=self.db).briefing(**kwargs),
             "economic_intelligence": get_forex_economic_intelligence(db=self.db).dashboard(**kwargs),
             "microstructure": get_forex_microstructure_engine(db=self.db).dashboard(pair=pair, **kwargs),
+            "production_services": get_forex_phase12_production_services(db=self.db).operations_health(),
         }
 
     def quote_trade(self, **kwargs) -> Dict[str, Any]:

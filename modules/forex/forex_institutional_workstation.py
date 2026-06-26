@@ -42,11 +42,35 @@ class ForexInstitutionalWorkstation:
         risk = get_forex_institutional_risk_manager(db=self.db)
         monitor = get_forex_execution_monitor(db=self.db)
 
+        ai_candidates = assistant.generate_candidates(limit=8, account_snapshot=snapshot.get("account"))
+
+        production = {}
+        try:
+            from modules.forex.forex_phase12_production_services import get_forex_phase12_production_services
+            prod = get_forex_phase12_production_services(db=self.db)
+            production = {
+                "broker_health": prod.broker_health(),
+                "operations_health": prod.operations_health(),
+                "institutional_risk": prod.institutional_risk(snapshot),
+                "portfolio_attribution": prod.attribution(snapshot),
+                "execution_analytics": prod.execution_analytics(),
+                "ai_supervision": [
+                    {
+                        "candidate": c,
+                        "review": prod.supervise_candidate(c, snapshot),
+                    }
+                    for c in ai_candidates[:5]
+                ],
+            }
+        except Exception as exc:
+            production = {"status": "ERROR", "error": str(exc)}
+
         return {
             "snapshot": snapshot,
-            "ai_candidates": assistant.generate_candidates(limit=8, account_snapshot=snapshot.get("account")),
+            "ai_candidates": ai_candidates,
             "risk_assessment": risk.assess_snapshot(snapshot),
             "execution_blotter": monitor.blotter(limit=100),
+            "production": production,
         }
 
     def quote_trade(self, **kwargs) -> Dict[str, Any]:
