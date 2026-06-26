@@ -165,11 +165,25 @@ def init_database():
     # plain ADD COLUMN works identically on both.
     try:
         inspector = inspect(engine)
-        existing_cols = {c["name"] for c in inspector.get_columns("tenants")}
+        existing_cols_info = {c["name"]: c for c in inspector.get_columns("tenants")}
+        existing_cols = set(existing_cols_info.keys())
 
+        # IMPORTANT: each DDL type here must match the ORM's declared
+        # Python type in modules/db/models.py exactly. SQLite's type
+        # system is loose enough to silently tolerate a mismatch (e.g.
+        # storing a Python bool into a column added as "INTEGER") --
+        # Postgres is strict and raises DatatypeMismatch the moment the
+        # ORM tries to UPDATE/INSERT through a session, since psycopg2
+        # binds the value according to the ORM's type (Boolean), not
+        # whatever the raw column actually is. This is exactly what
+        # happened with api_grace_unlimited: it was added as INTEGER
+        # here while the model declares it Boolean, and that mismatch
+        # was invisible in SQLite testing the whole time. BOOLEAN/TRUE/
+        # FALSE are valid, portable keywords on both engines (SQLite
+        # just stores them as 0/1 under the hood).
         tenant_column_migrations = [
-            ("is_active", "INTEGER DEFAULT 1"),
-            ("api_grace_unlimited", "INTEGER DEFAULT 0"),
+            ("is_active", "BOOLEAN DEFAULT TRUE"),
+            ("api_grace_unlimited", "BOOLEAN DEFAULT FALSE"),
             ("api_grace_days_override", "INTEGER"),
         ]
 
@@ -178,6 +192,47 @@ def init_database():
                 with engine.begin() as conn:
                     conn.execute(text(f"ALTER TABLE tenants ADD COLUMN {col_name} {col_ddl}"))
                 print(f"TENANT migration: added column '{col_name}'")
+
+        # One-time corrective pass: on any database where the migration
+        # above already ran with the old (wrong) INTEGER DDL, the
+        # column exists now but with the wrong type -- adding it
+        # correctly above won't fix an already-existing column, since
+        # the ADD COLUMN only fires when the column is missing entirely.
+        # Postgres has no implicit integer->boolean cast (it was removed
+        # in 9.0), so this can't just be `::boolean` -- comparing against
+        # 0 produces a real boolean safely, including for NULLs.
+        # SQLite never had this surface as an error in the first place
+        # (loose typing tolerates it), so this only needs to run, and
+        # only CAN run, against Postgres.
+        if engine.dialect.name == "postgresql":
+            boolean_columns_to_fix = {
+                "is_active": "TRUE",
+                "api_grace_unlimited": "FALSE",
+            }
+            for col_name, default_literal in boolean_columns_to_fix.items():
+                col_info = existing_cols_info.get(col_name)
+                if col_info is None:
+                    continue
+                current_type = str(col_info.get("type", "")).upper()
+                if "BOOL" in current_type:
+                    continue  # already correct, nothing to do
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text(
+                            f"ALTER TABLE tenants ALTER COLUMN {col_name} DROP DEFAULT"
+                        ))
+                        conn.execute(text(f"""
+                            ALTER TABLE tenants
+                            ALTER COLUMN {col_name} TYPE BOOLEAN
+                            USING ({col_name} <> 0)
+                        """))
+                        conn.execute(text(
+                            f"ALTER TABLE tenants ALTER COLUMN {col_name} "
+                            f"SET DEFAULT {default_literal}"
+                        ))
+                    print(f"TENANT migration: corrected '{col_name}' column type to BOOLEAN")
+                except Exception as e:
+                    print(f"TENANT migration: could not correct '{col_name}' type:", e)
 
         print("TENANT column migrations complete")
     except Exception as e:
