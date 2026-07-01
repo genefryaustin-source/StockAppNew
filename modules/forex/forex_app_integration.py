@@ -18,9 +18,22 @@ from modules.forex.forex_institutional_scanner import get_forex_institutional_sc
 from modules.forex.forex_command_center_engine import get_forex_command_center_engine
 
 class ForexApplication:
+    class ForexApplication:
 
-    def __init__(self):
-        self.services={}
+        def __init__(
+                self,
+                db=None,
+                tenant_id=None,
+                user_id=None,
+                portfolio_id=None,
+        ):
+            self.db = db
+
+            self.tenant_id = tenant_id
+            self.user_id = user_id
+            self.portfolio_id = portfolio_id
+
+            self.services = {}
 
     def initialize(self):
         self.services={
@@ -53,15 +66,41 @@ class ForexApplication:
             st.error(f"Forex initialization failed: {health.get('error')}")
             return
 
-        render_forex_workspace()
+        render_forex_workspace(
+            db=self.db,
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+            portfolio_id=self.portfolio_id,
+        )
 
-_APP=None
+_APP = None
 
-def get_forex_application():
+
+def get_forex_application(
+    db=None,
+    tenant_id=None,
+    user_id=None,
+    portfolio_id=None,
+):
     global _APP
-    if _APP is None:
-        _APP=ForexApplication()
+
+    if (
+        _APP is None
+        or getattr(_APP, "db", None) is not db
+        or getattr(_APP, "tenant_id", None) != tenant_id
+        or getattr(_APP, "user_id", None) != user_id
+        or getattr(_APP, "portfolio_id", None) != portfolio_id
+    ):
+
+        _APP = ForexApplication(
+            db=db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+        )
+
         _APP.initialize()
+
     return _APP
 
 def initialize_forex():

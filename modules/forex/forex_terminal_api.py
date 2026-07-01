@@ -129,7 +129,12 @@ class ForexTerminalAPI:
     def render(self):
         try:
             from modules.forex.forex_workspace import render_forex_workspace
-            return render_forex_workspace(db=self.db)
+            return render_forex_workspace(
+                db=self.db,
+                tenant_id=self.tenant_id,
+                user_id=self.user_id,
+                portfolio_id=self.portfolio_id,
+            )
         except Exception as exc:
             return {"status": "ERROR", "error": str(exc)}
 

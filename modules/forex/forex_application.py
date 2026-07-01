@@ -16,9 +16,22 @@ from typing import Any, Dict, Optional
 
 
 class ForexApplication:
-    def __init__(self, db: Optional[Any] = None):
+    def __init__(
+        self,
+        db: Optional[Any] = None,
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        portfolio_id: Optional[str] = None,
+    ):
         self.db = db
-        self.created_at = datetime.now(timezone.utc).isoformat()
+
+        self.tenant_id = tenant_id
+        self.user_id = user_id
+        self.portfolio_id = portfolio_id
+
+        self.created_at = datetime.now(
+            timezone.utc,
+        ).isoformat()
 
     def initialize(self) -> Dict[str, Any]:
         try:
@@ -37,7 +50,12 @@ class ForexApplication:
         """
         try:
             from modules.forex.forex_workspace import render_forex_workspace
-            return render_forex_workspace(db=self.db)
+            return render_forex_workspace(
+                db=self.db,
+                tenant_id=self.tenant_id,
+                user_id=self.user_id,
+                portfolio_id=self.portfolio_id,
+            )
         except Exception as exc:
             try:
                 import streamlit as st
@@ -83,8 +101,28 @@ class ForexApplication:
 _APP = None
 
 
-def get_forex_application(db: Optional[Any] = None) -> ForexApplication:
+def get_forex_application(
+    db: Optional[Any] = None,
+    tenant_id=None,
+    user_id=None,
+    portfolio_id=None,
+) -> ForexApplication:
+
     global _APP
-    if _APP is None or (db is not None and _APP.db is None):
-        _APP = ForexApplication(db=db)
+
+    if (
+        _APP is None
+        or _APP.db is not db
+        or getattr(_APP, "tenant_id", None) != tenant_id
+        or getattr(_APP, "user_id", None) != user_id
+        or getattr(_APP, "portfolio_id", None) != portfolio_id
+    ):
+
+        _APP = ForexApplication(
+            db=db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+        )
+
     return _APP

@@ -22,6 +22,17 @@ try:
     import plotly.graph_objects as go
 except Exception:
     go = None
+from modules.forex.ui.forex_ui_theme import inject_forex_ui_theme
+from modules.forex.ui.forex_ui_layout import (
+    render_page_header,
+    panel,
+)
+from modules.forex.ui.forex_ui_layout import (
+    panel,
+    render_section_header,
+)
+
+
 
 DEFAULT_PAIRS = [
     "EUR/USD", "USD/JPY", "GBP/USD", "USD/CHF", "AUD/USD", "USD/CAD", "NZD/USD",
@@ -44,6 +55,9 @@ class ForexTerminalDashboard:
     def render(self, *args: Any, **kwargs: Any):
         api = self._api()
         snapshot = api.get_terminal_snapshot(**kwargs)
+
+        inject_forex_ui_theme(st)
+
         if not isinstance(snapshot, dict):
             snapshot = {"status": "UNKNOWN", "payload": snapshot}
 
@@ -53,25 +67,36 @@ class ForexTerminalDashboard:
         _inject_terminal_css()
 
         c_refresh, c_title = st.columns([0.08, 0.92])
-        with c_refresh:
-            if st.button("↻", help="Refresh Forex terminal", use_container_width=True, key="fx_terminal_refresh_top"):
-                refreshed = api.refresh_terminal()
-                if isinstance(refreshed, dict) and "snapshot" in refreshed:
-                    snapshot = refreshed.get("snapshot") or refreshed
-                elif isinstance(refreshed, dict):
-                    snapshot = refreshed
+
         with c_title:
-            st.markdown("## 🌍 Forex Institutional Terminal")
-            st.caption(f"Live terminal • {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}")
+            render_page_header(
+                title="Forex Institutional Terminal",
+                subtitle=(
+                    "Real-Time Market Intelligence • "
+                    "Portfolio Management • "
+                    "AI Decision Support"
+                ),
+                icon="🌍",
+            )
+
+            with c_refresh:
+                if st.button("↻", help="Refresh Forex terminal", use_container_width=True,
+                             key="fx_terminal_refresh_top"):
+                    refreshed = api.refresh_terminal()
+                    if isinstance(refreshed, dict) and "snapshot" in refreshed:
+                        snapshot = refreshed.get("snapshot") or refreshed
+                    elif isinstance(refreshed, dict):
+                        snapshot = refreshed
+
 
         data = _normalize_snapshot(snapshot, api=api)
         _render_top_ribbon(data)
-
         workspace = st.radio(
             "Workspace",
             [
                 "Trading Desk", "Institutional Workstation", "Command Center", "Portfolio", "Orders", "Risk",
-                "Performance", "Journal", "AI Briefing", "Provider Health", "Production Health",
+                "Performance", "Journal", "AI Briefing", "AI & Quant Platform", "Autonomous Trading Platform",
+                "Data & Intelligence Fabric", "Provider Health", "Production Health",
             ],
             horizontal=True,
             key="forex_terminal_institutional_workspace",
@@ -95,6 +120,16 @@ class ForexTerminalDashboard:
             _render_journal(data)
         elif workspace == "AI Briefing":
             _render_ai_briefing(data)
+        elif workspace == "AI & Quant Platform":
+            _render_ai_quant_platform(data, db=self.db)
+
+        elif workspace == "Autonomous Trading Platform":
+            from modules.forex.forex_autonomous_platform_dashboard import render_forex_autonomous_trading_platform
+            render_forex_autonomous_trading_platform(data, db=self.db)
+
+        elif workspace == "Data & Intelligence Fabric":
+            _render_data_intelligence_fabric(data, db=self.db)
+
         elif workspace == "Provider Health":
             _render_provider_health(data)
         elif workspace == "Production Health":
@@ -102,6 +137,10 @@ class ForexTerminalDashboard:
 
         _render_developer_debug(snapshot, data)
         return snapshot
+
+
+
+
 
 
 # ----------------------------- Normalization -----------------------------
@@ -527,7 +566,7 @@ def _render_institutional_workstation(api, data: Dict[str, Any], db=None) -> Non
     workspace = _load_phase6_workspace(db=db, pair=pair)
 
     if workspace.get("status") == "ERROR":
-        st.error(f"Phase 6 workstation failed: {workspace.get('error')}")
+        st.error(f"workstation failed: {workspace.get('error')}")
         with st.expander("Fallback Terminal Snapshot", expanded=False):
             st.json(data)
         return
@@ -820,23 +859,52 @@ def _render_right_panel(data: Dict[str, Any]) -> None:
     st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _section("Alerts", str(len(data["alerts"]))); _render_table(data["alerts"], height=150); st.markdown("</div>", unsafe_allow_html=True)
 
 
-def _render_bottom_panel(data: Dict[str, Any]) -> None:
-    st.markdown('<div class="fx-panel">', unsafe_allow_html=True)
-    t1,t2,t3,t4,t5 = st.tabs(["Positions", "Orders", "Journal", "Executions", "Equity Curve"])
-    with t1: _render_table(data["positions"], height=230)
-    with t2:
-        c1,c2=st.columns(2)
-        with c1: st.subheader("Open Orders"); _render_table(data["orders"]["open"], height=205)
-        with c2: st.subheader("Filled Orders"); _render_table(data["orders"]["filled"], height=205)
-    with t3: _render_table(data["journal"], height=230)
-    with t4: _render_table(data["orders"]["filled"], height=230)
-    with t5:
-        if go is None: st.info("Plotly is unavailable.")
-        else:
-            x=list(range(30)); y=[100000+i*290+((i%6)-3)*380 for i in x]
-            fig=go.Figure(go.Scatter(x=x,y=y,mode="lines",fill="tozeroy",name="Equity")); fig.update_layout(template="plotly_dark",height=230,margin=dict(l=5,r=5,t=20,b=5),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
-            st.plotly_chart(fig, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+def _render_bottom_panel(data):
+
+    with panel(
+        "Trading Activity",
+        kicker="Bottom Workspace",
+        meta="Portfolio • Orders • Journal • Executions",
+    ):
+
+        t1, t2, t3, t4, t5 = st.tabs([
+            "📌 Positions",
+            "📑 Orders",
+            "📝 Journal",
+            "⚡ Executions",
+            "📈 Equity Curve",
+        ])
+        with t1: _render_table(data["positions"], height=230)
+        with t2:
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+                render_section_header(
+                    "Open Orders",
+                    kicker="Live Orders",
+                )
+                _render_table(data["orders"]["open"], height=205)
+
+            with c2:
+                render_section_header(
+                    "Filled Orders",
+                    kicker="Execution History",
+                )
+                _render_table(data["orders"]["filled"], height=205)
+        with t3: _render_table(data["journal"], height=230)
+        with t4: _render_table(data["orders"]["filled"], height=230)
+        with t5:
+            if go is None: st.info("Plotly is unavailable.")
+            else:
+                x=list(range(30)); y=[100000+i*290+((i%6)-3)*380 for i in x]
+                render_section_header(
+                    "Portfolio Equity Curve",
+                    kicker="Performance",
+                )
+                fig=go.Figure(go.Scatter(x=x,y=y,mode="lines",fill="tozeroy",name="Equity")); fig.update_layout(template="plotly_dark",height=230,margin=dict(l=5,r=5,t=20,b=5),paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)")
+                st.plotly_chart(fig, use_container_width=True)
+
 
 
 # ----------------------------- Workspace renderers -----------------------------
@@ -947,3 +1015,118 @@ def render_forex_terminal_dashboard(*args: Any, **kwargs: Any):
     if db is None and args:
         db = args[0]
     return get_forex_terminal_dashboard(db=db).render(*args, **kwargs)
+
+def _render_ai_quant_platform(data, db=None):
+    from modules.forex.ui.forex_ai_workspace import render_forex_ai_workspace
+
+    try:
+        from modules.forex.forex_institutional_command_center_v2 import (
+            get_forex_institutional_command_center_v2,
+        )
+        payload = get_forex_institutional_command_center_v2(
+            db=db
+        ).dashboard(snapshot=data.get("raw_snapshot") or data)
+    except Exception as exc:
+        payload = {
+            "status": "WARNING",
+            "error": str(exc),
+            "snapshot": data.get("raw_snapshot") or data,
+        }
+
+    return render_forex_ai_workspace(
+        payload=payload,
+        db=db,
+        snapshot=data.get("raw_snapshot") or data,
+    )
+
+    tabs = st.tabs([
+        "Executive",
+        "Quant Research",
+        "Factor Models",
+        "Regime",
+        "Alpha",
+        "Signal Validation",
+        "Portfolio Optimizer",
+        "Strategy Lab",
+        "AI Committee",
+        "Enterprise Reports"
+    ])
+
+    with tabs[0]:
+        st.json(payload)
+
+    with tabs[1]:
+        st.json(payload["quant_research"])
+
+    with tabs[2]:
+        st.json(payload["quant_research"]["factor_models"])
+
+    with tabs[3]:
+        st.json(payload["quant_research"]["regime"])
+
+    with tabs[4]:
+        st.json(payload["quant_research"]["alpha_research"])
+
+    with tabs[5]:
+        st.json(payload["quant_research"]["signal_validation"])
+
+    with tabs[6]:
+        st.json(payload["portfolio_optimizer"])
+
+    with tabs[7]:
+        st.json(payload["strategy_lab"])
+
+    with tabs[8]:
+        st.json(payload["ai_investment_committee"])
+
+    with tabs[9]:
+        st.json(payload["enterprise_reporting"])
+
+def _render_data_intelligence_fabric(data, db=None):
+    import streamlit as st
+    from modules.forex.forex_data_analytics_command_center import \
+        get_forex_data_analytics_command_center
+
+    payload = get_forex_data_analytics_command_center(
+        db=db
+    ).dashboard(snapshot=data.get("raw_snapshot") or data)
+
+    tabs = st.tabs([
+        "Executive",
+        "Market Data",
+        "Data Quality",
+        "Macro",
+        "Flow",
+        "Currency",
+        "Alerts",
+        "AI Copilot",
+    ])
+
+    with tabs[0]:
+        st.json(payload)
+
+    with tabs[1]:
+        st.json(payload["market_data_fabric"])
+
+    with tabs[2]:
+        st.json(payload["market_data_fabric"]["market_snapshot"]["quality"])
+
+    with tabs[3]:
+        st.json(payload["macro_intelligence"])
+
+    with tabs[4]:
+        st.json(payload["flow_analytics"])
+
+    with tabs[5]:
+        st.json({
+            "rankings": payload["currency_rankings"],
+            "relative_value": payload["relative_value"],
+            "rotation": payload["currency_rotation"],
+            "cross_pairs": payload["cross_pairs"],
+        })
+
+    with tabs[6]:
+        st.json(payload["alerts"])
+
+    with tabs[7]:
+        st.json(payload["ai_research_copilot"])

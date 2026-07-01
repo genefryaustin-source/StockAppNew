@@ -21,7 +21,14 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 from threading import Lock
 from typing import Any, Callable, Iterable, Optional
-
+from modules.forex.providers.forex_history_cache import get_forex_history_cache
+from modules.forex.providers.forex_quote_cache import (
+    get_forex_quote_cache,
+)
+from modules.forex.providers.provider_runtime_history import (
+    get_provider_runtime_history,
+)
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DEFAULT_CACHE_TTL_SECONDS = 60
 RATE_LIMIT_COOLDOWN_SECONDS = 15 * 60
@@ -30,7 +37,7 @@ MAX_RETRIES_PER_PROVIDER = 1
 
 DEFAULT_PROVIDER_MODULES: list[tuple[str, str]] = [
     ("polygon_fx", "modules.forex.providers.polygon_forex_provider"),
-    ("twelvedata_fx", "modules.forex.providers.twelvedata_forex_provider"),
+    #("twelvedata_fx", "modules.forex.providers.twelvedata_forex_provider"),
     ("marketdata_fx", "modules.forex.providers.marketdata_forex_provider"),
     ("finnhub_fx", "modules.forex.providers.finnhub_forex_provider"),
     ("alpha_vantage_fx", "modules.forex.providers.alpha_vantage_forex_provider"),
@@ -251,10 +258,24 @@ class ForexProviderRouter:
     def __init__(self, cache_ttl_seconds: int = DEFAULT_CACHE_TTL_SECONDS):
         self.cache_ttl_seconds = int(cache_ttl_seconds)
         self._lock = Lock()
-        self._quote_cache: dict[str, dict] = {}
+
         self._providers: dict[str, ForexProviderStatus] = {}
         self._provider_functions: dict[str, Callable[..., Any]] = {}
         self._register_defaults()
+        self._history_cache = get_forex_history_cache()
+        self._runtime_stats = {
+            "requests": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "failovers": 0,
+            "provider_usage": {},
+        }
+        self.runtime_history = get_provider_runtime_history()
+
+
+
+        self.quote_cache = get_forex_quote_cache()
+
 
     def _register_defaults(self) -> None:
         for priority, (name, module_path) in enumerate(DEFAULT_PROVIDER_MODULES, start=1):
@@ -361,6 +382,40 @@ class ForexProviderRouter:
 
         return provider.provider in self._provider_functions
 
+    def router_score(
+            self,
+            provider: ForexProviderStatus,
+    ) -> float:
+
+        success_total = (
+                provider.success_count +
+                provider.failure_count
+        )
+
+        success_rate = (
+            provider.success_count / success_total
+            if success_total
+            else 1.0
+        )
+
+        latency_score = max(
+            0.0,
+            100.0 - provider.avg_latency_ms,
+        )
+
+        cooldown_penalty = (
+            50.0
+            if provider.cooldown_until
+               and provider.cooldown_until > utc_now()
+            else 0.0
+        )
+
+        return (
+                provider.health_score * 0.45
+                + success_rate * 100 * 0.30
+                + latency_score * 0.20
+                - cooldown_penalty
+        )
     def get_ranked_providers(self, allowed: Optional[list[str]] = None) -> list[ForexProviderStatus]:
         allowed_set = {self._provider_key(p) for p in allowed} if allowed else None
         rows = []
@@ -369,7 +424,12 @@ class ForexProviderRouter:
                 continue
             if self.is_available(provider.provider):
                 rows.append(provider)
-        rows.sort(key=lambda p: (-p.health_score, p.priority, p.avg_latency_ms, p.provider))
+        rows.sort(
+            key=lambda p: (
+                -self.router_score(p),
+                p.priority,
+            )
+        )
         return rows
 
     def _cache_key(self, pair: str) -> str:
@@ -377,22 +437,25 @@ class ForexProviderRouter:
 
     def get_cached_quote(self, pair: str) -> Optional[dict]:
         key = self._cache_key(pair)
-        entry = self._quote_cache.get(key)
+        entry = self.quote_cache.get(key)
         if not entry:
             return None
         age = time.time() - float(entry.get("ts", 0))
         if age > self.cache_ttl_seconds:
-            self._quote_cache.pop(key, None)
+            self.quote_cache.invalidate(pair)
             return None
         payload = entry.get("data")
         return dict(payload) if quote_has_usable_rate(payload) else None
 
     def set_cached_quote(self, pair: str, payload: dict) -> dict:
-        self._quote_cache[self._cache_key(pair)] = {"ts": time.time(), "data": dict(payload)}
+        self.quote_cache.put(
+            pair,
+            payload,
+        )
         return payload
 
     def clear_cache(self) -> None:
-        self._quote_cache.clear()
+        self.quote_cache.clear()
 
     def mark_success(self, provider_name: str, latency_ms: float = 0.0) -> None:
         provider = self.get_provider(provider_name)
@@ -442,60 +505,226 @@ class ForexProviderRouter:
             provider.health_score = max(0.0, provider.health_score - 25.0)
 
     def get_quote(
-        self,
-        pair: str,
-        *,
-        force_refresh: bool = False,
-        allowed_providers: Optional[list[str]] = None,
-        raise_on_failure: bool = False,
+            self,
+            pair,
+            *,
+            runtime=None,
+            force_refresh=False,
+            allowed_providers=None,
+            raise_on_failure=False,
     ) -> dict:
+        #
+        # Sprint 29
+        # Shared Quote Cache
+        #
+        if not force_refresh:
+
+            cached = self.quote_cache.get(pair)
+
+            if cached is not None:
+                print("=" * 80)
+                print("QUOTE CACHE")
+                print("PAIR  :", pair)
+                print("CACHE :", "HIT")
+                print("=" * 80)
+
+                return cached
+
+        else:
+
+            print("=" * 80)
+            print("QUOTE CACHE")
+            print("PAIR  :", pair)
+            print("CACHE :", "BYPASS (force_refresh)")
+            print("=" * 80)
         pair = normalize_pair(pair)
         if not pair or "/" not in pair:
             return build_quote_payload(pair, "router", error="Valid Forex pair is required")
 
-        if not force_refresh:
-            cached = self.get_cached_quote(pair)
-            if cached:
-                return cached
+
 
         errors: list[str] = []
-        ranked = self.get_ranked_providers(allowed=allowed_providers)
+        ranked = self.get_ranked_providers(
+            allowed=allowed_providers,
+        )
+
+        if runtime is not None:
+
+
+
+            ranked = self._rank_runtime_providers(
+                ranked,
+                runtime,
+            )
+            print("=" * 80)
+            print("PROVIDER SCORES")
+
+            for provider in ranked:
+                history = self.runtime_history.get_stats(
+                    provider.provider,
+                )
+
+                print(
+                    f"{provider.provider:<25}"
+                    f" score={self._provider_score(provider, runtime):8.2f}"
+                    f" success={history.success_rate:.2%}"
+                    f" avg={history.average_latency_ms:7.2f}ms"
+                )
+
+            print("=" * 80)
+        if runtime is not None:
+
+            print("=" * 80)
+            print("PROVIDER RANKING")
+
+            for provider in ranked:
+                print(
+                    f"{provider.provider:<24}"
+                    f" score={self._provider_score(provider, runtime):8.2f}"
+                    f" health={provider.health_score:6.1f}"
+                    f" latency={runtime.provider_latency.get(provider.provider, '-')}"
+                )
+
+            print("=" * 80)
 
         for provider in ranked:
+
+            #
+            # Sprint 29
+            # Skip providers currently cooling down.
+            #
+            if self._provider_on_cooldown(
+                    provider.provider,
+            ):
+                print(
+                    f"SKIPPING {provider.provider} "
+                    "(cooldown active)"
+                )
+
+                continue
+
+            #
+            # Runtime Provider Memory
+            #
+            if not self._provider_available(
+                    provider.provider,
+                    runtime,
+            ):
+                continue
+
             fn = self._provider_functions.get(provider.provider)
             if not callable(fn):
                 errors.append(f"{provider.provider}: provider function unavailable")
                 continue
 
             for attempt in range(max(1, MAX_RETRIES_PER_PROVIDER)):
-                started = time.perf_counter()
-                try:
-                    response = fn(pair)
-                    latency_ms = (time.perf_counter() - started) * 1000.0
-                    payload = normalize_provider_response(pair, provider.provider, response, errors)
+                provider_start = time.perf_counter()
 
+                try:
+                    print(f"REQUEST  : {pair}")
+
+                    response = fn(pair)
+
+                    latency_ms = (time.perf_counter() - provider_start) * 1000
+
+                    print("=" * 80)
+                    print(f"PAIR     : {pair}")
+                    print(f"PROVIDER : {provider.provider}")
+                    print(f"LATENCY  : {latency_ms:.2f} ms")
+                    print("RESULT   : SUCCESS")
+                    print(f"TYPE     : {type(response).__name__}")
+
+                    if isinstance(response, dict):
+                        print(f"KEYS     : {list(response.keys())[:10]}")
+                    payload = normalize_provider_response(
+                        pair,
+                        provider.provider,
+                        response,
+                        errors,
+                    )
+                    if payload.get("rate") is None:
+                        payload["rate"] = (
+                                payload.get("mid")
+                                or payload.get("last")
+                                or payload.get("bid")
+                                or payload.get("ask")
+                        )
+                    print(f"RATE     : {payload.get('rate')}")
+                    print(f"SOURCE   : {payload.get('source')}")
+                    print(f"ERROR    : {payload.get('error')}")
                     if quote_has_usable_rate(payload):
                         self.mark_success(provider.provider, latency_ms=latency_ms)
+                        self._record_runtime_success(
+                            runtime,
+                            provider.provider,
+                            latency_ms,
+                        )
+                        if runtime is not None:
+                            print("=" * 80)
+                            print("RUNTIME SUCCESS")
+                            print("provider :", provider.provider)
+                            print("usage    :", runtime.provider_usage)
+                            print("latency  :", runtime.provider_latency)
+                            print("=" * 80)
+
                         payload["provider"] = provider.provider
                         payload["source"] = payload.get("source") or provider.provider
                         payload["failover_errors"] = list(errors)
-                        return self.set_cached_quote(pair, payload)
+                        self.quote_cache.put(
+                            pair,
+                            payload,
+                        )
 
-                    msg = payload.get("error") or f"{provider.provider} returned no usable rate"
+                        return payload
+
+                    msg = payload.get("error") or (
+                        f"{provider.provider} returned no usable rate"
+                    )
+
                     errors.append(f"{provider.provider}: {msg}")
                     self.mark_invalid_response(provider.provider, msg)
-
+                    self._record_runtime_failure(
+                        runtime,
+                        provider.provider,
+                    )
+                    if runtime is not None:
+                        print("=" * 80)
+                        print("RUNTIME SUCCESS")
+                        print("provider :", provider.provider)
+                        print("usage    :", runtime.provider_usage)
+                        print("latency  :", runtime.provider_latency)
+                        print("=" * 80)
                 except Exception as exc:
+
+                    latency_ms = (time.perf_counter() - provider_start) * 1000
+
+                    print("=" * 80)
+                    print(f"PAIR     : {pair}")
+                    print(f"PROVIDER : {provider.provider}")
+                    print(f"LATENCY  : {latency_ms:.2f} ms")
+                    print("RESULT   : FAILED")
+                    print(f"ERROR    : {type(exc).__name__}")
+                    print(f"MESSAGE  : {repr(exc)}")
+
                     msg = str(exc)
                     errors.append(f"{provider.provider}: {msg}")
+
                     if is_rate_limit_error(msg):
                         self.mark_rate_limited(provider.provider, msg)
                         break
+
                     self.mark_failure(provider.provider, msg)
+                    self._record_runtime_failure(
+                        runtime,
+                        provider.provider,
+                    )
+
                     if is_auth_error(msg):
                         break
+
                     if attempt + 1 < max(1, MAX_RETRIES_PER_PROVIDER):
                         time.sleep(0.25)
+
 
         payload = build_quote_payload(
             pair,
@@ -507,11 +736,93 @@ class ForexProviderRouter:
             raise RuntimeError(f"{payload['error']}: {errors}")
         return payload
 
-    def get_quotes(self, pairs: Iterable[str], *, force_refresh: bool = False, allowed_providers: Optional[list[str]] = None) -> dict[str, dict]:
-        return {
-            normalize_pair(pair): self.get_quote(pair, force_refresh=force_refresh, allowed_providers=allowed_providers)
+    def get_quotes(
+            self,
+            pairs: Iterable[str],
+            *,
+            runtime=None,
+            force_refresh: bool = False,
+            allowed_providers: Optional[list[str]] = None,
+            max_pairs: int = 12,
+    ) -> dict[str, dict]:
+
+        results = {}
+        #
+        # Sprint 29 Phase 3
+        #
+        pairs = [
+            normalize_pair(pair)
             for pair in pairs
-        }
+        ]
+
+        pairs = list(dict.fromkeys(pairs))
+        #
+        # Runtime statistics
+        #
+        if runtime is not None:
+            runtime.batch_requests += 1
+
+        selected = list(pairs or [])[:max_pairs]
+
+        workers = min(
+            6,
+            max(1, len(selected)),
+        )
+        print("=" * 80)
+        print("PARALLEL QUOTE DOWNLOAD")
+        print("Workers :", workers)
+        print("Pairs   :", len(selected))
+        print("=" * 80)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+
+            futures = {}
+
+            for pair in selected:
+
+                normalized = normalize_pair(pair)
+
+                if runtime is not None:
+                    runtime.individual_requests += 1
+
+                future = executor.submit(
+                    self.get_quote,
+                    normalized,
+                    runtime=runtime,
+                    force_refresh=force_refresh,
+                    allowed_providers=allowed_providers,
+                )
+
+                futures[future] = normalized
+
+            for future in as_completed(futures):
+
+                normalized = futures[future]
+
+                try:
+                    results[normalized] = future.result()
+
+                except Exception as exc:
+
+                    results[normalized] = build_quote_payload(
+                        normalized,
+                        "router",
+                        error=str(exc),
+                    )
+        successful = sum(
+            1
+            for payload in results.values()
+            if isinstance(payload, dict)
+            and not payload.get("error")
+        )
+
+        failed = len(results) - successful
+
+        print("=" * 80)
+        print("QUOTE BATCH COMPLETE")
+        print("Successful :", successful)
+        print("Failed     :", failed)
+        print("=" * 80)
+        return results
 
     def get_latest_price(self, pair: str, **kwargs) -> Optional[float]:
         payload = self.get_quote(pair, **kwargs)
@@ -523,6 +834,169 @@ class ForexProviderRouter:
             for pair, payload in self.get_quotes(pairs, **kwargs).items()
         }
 
+
+    # -------------------------------
+    # Historical data failover
+    # -------------------------------
+
+    def _load_provider_history_function(self, provider_name: str) -> Optional[Callable[..., Any]]:
+        """Resolve an optional historical data function for a registered provider.
+
+        Providers may expose get_history(), get_daily_history(), history(), or fetch_history().
+        If an existing provider has not been upgraded yet, this method falls back to the
+        Phase 4.5 provider adapters without changing the provider quote API.
+        """
+        provider = self.get_provider(provider_name)
+        if not provider:
+            return None
+
+        # First try the actual provider module.
+        if provider.module_path:
+            try:
+                module = importlib.import_module(provider.module_path)
+                for fn_name in ("get_history", "get_daily_history", "history", "fetch_history"):
+                    fn = getattr(module, fn_name, None)
+                    if callable(fn):
+                        return fn
+            except Exception as exc:
+                provider.last_error = str(exc)
+
+        # Then try the shared adapter module so we do not duplicate provider files.
+        try:
+            from modules.forex.forex_history_provider_adapters import HISTORY_ADAPTERS
+            fn = HISTORY_ADAPTERS.get(self._provider_key(provider_name))
+            if callable(fn):
+                return fn
+        except Exception as exc:
+            provider.last_error = str(exc)
+
+        return None
+
+    def get_history(
+        self,
+        pair: str,
+        *,
+        start_date: Any,
+        end_date: Any,
+        interval: str = "1day",
+        force_refresh: bool = False,
+        allowed_providers: Optional[list[str]] = None,
+        raise_on_failure: bool = False,
+    ) -> dict:
+        """Fetch historical OHLCV data using the same ranked failover model as quotes.
+
+        This method intentionally does not write to Postgres. Persistence belongs in
+        forex_history_repository.py / forex_history_service.py.
+        """
+
+        pair = normalize_pair(pair)
+        if not force_refresh:
+
+            cached = self._history_cache.get(
+                pair,
+                interval=interval,
+                start_date=start_date,
+                end_date=end_date,
+            )
+
+            if cached:
+                return cached
+        if not pair or "/" not in pair:
+            return {"status": "ERROR", "pair": pair, "error": "Valid Forex pair is required", "rows": []}
+
+        errors: list[str] = []
+        ranked = self.get_ranked_providers(allowed=allowed_providers)
+
+        for provider in ranked:
+            fn = self._load_provider_history_function(provider.provider)
+            if not callable(fn):
+                errors.append(f"{provider.provider}: history function unavailable")
+                continue
+
+            started = time.perf_counter()
+            try:
+                response = fn(
+                    pair,
+                    start_date=start_date,
+                    end_date=end_date,
+                    interval=interval,
+                )
+                latency_ms = (time.perf_counter() - started) * 1000.0
+
+                if not isinstance(response, dict):
+                    response = {"provider": provider.provider, "rows": response if isinstance(response, list) else []}
+
+                rows = response.get("rows") or response.get("history") or response.get("data") or []
+                error = response.get("error")
+
+                if rows:
+                    self.mark_success(provider.provider, latency_ms=latency_ms)
+                    return {
+                        "status": "OK",
+                        "pair": pair,
+                        "provider": response.get("provider") or provider.provider,
+                        "interval": interval,
+                        "start_date": str(start_date),
+                        "end_date": str(end_date),
+                        "rows": rows,
+                        "raw": response.get("raw") or {},
+                        "failover_errors": list(errors),
+                    }
+
+                msg = error or f"{provider.provider} returned no historical rows"
+                errors.append(f"{provider.provider}: {msg}")
+                self.mark_invalid_response(provider.provider, msg)
+
+            except Exception as exc:
+                msg = str(exc)
+                errors.append(f"{provider.provider}: {msg}")
+                if is_rate_limit_error(msg):
+                    self.mark_rate_limited(provider.provider, msg)
+                    continue
+                self.mark_failure(provider.provider, msg)
+                if is_auth_error(msg):
+                    continue
+
+        payload = {
+            "status": "OK",
+            "pair": pair,
+            "provider": response.get("provider") or provider.provider,
+            "interval": interval,
+            "start_date": str(start_date),
+            "end_date": str(end_date),
+            "rows": rows,
+            "raw": response.get("raw") or {},
+            "failover_errors": list(errors),
+        }
+
+        self._history_cache.put(
+            pair,
+            payload,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        return payload
+
+    def get_daily_history(
+        self,
+        pair: str,
+        *,
+        start_date: Any,
+        end_date: Any,
+        force_refresh: bool = False,
+        allowed_providers: Optional[list[str]] = None,
+    ) -> dict:
+        return self.get_history(
+            pair,
+            start_date=start_date,
+            end_date=end_date,
+            interval="1day",
+            force_refresh=force_refresh,
+            allowed_providers=allowed_providers,
+        )
+
     def get_status_rows(self) -> list[dict]:
         return [provider.as_row() for provider in self.all_providers()]
 
@@ -532,8 +1006,8 @@ class ForexProviderRouter:
     def cache_status(self) -> dict:
         now = time.time()
         rows = []
-        for key, entry in self._quote_cache.items():
-            data = entry.get("data") or {}
+        for key, entry in self.quote_cache.items():
+            data = entry.get("value") or {}
             age = now - float(entry.get("ts", 0))
             rows.append({
                 "key": key,
@@ -550,14 +1024,234 @@ class ForexProviderRouter:
         return {
             "summary": {
                 "providers": len(providers),
+                "history_cache": self._history_cache.stats(),
+
+                "quote_cache": self.quote_cache.stats(),
                 "enabled": len([p for p in providers if p.enabled]),
                 "available": len(self.get_ranked_providers()),
-                "cache_entries": len(self._quote_cache),
+                "cache_entries": self.quote_cache.stats()["entries"],
                 "generated_at": utc_now_iso(),
             },
             "providers": self.get_status_rows(),
             "ranked": [p.as_row() for p in self.get_ranked_providers()],
             "cache": self.cache_status(),
+        }
+
+    def _provider_available(
+            self,
+            provider_name: str,
+            runtime=None,
+    ):
+        if runtime is None:
+            return True
+
+        failed = getattr(
+            runtime,
+            "failed_providers",
+            set(),
+        )
+
+        return provider_name not in failed
+
+    def _provider_score(
+            self,
+            provider,
+            runtime=None,
+    ):
+
+        score = float(
+            getattr(
+                provider,
+                "health_score",
+                100.0,
+            )
+        )
+
+        history = self.runtime_history.get_stats(
+            provider.provider,
+        )
+
+        score += history.success_rate * 100.0
+
+        if history.average_latency_ms > 0:
+            score += max(
+                0.0,
+                100.0 - history.average_latency_ms / 10.0,
+            )
+
+        if (
+                runtime is not None
+                and provider.provider in runtime.provider_latency
+        ):
+            latency = runtime.provider_latency[
+                provider.provider
+            ]
+
+            score += max(
+                0.0,
+                50.0 - latency / 20.0,
+            )
+
+        if (
+                runtime is not None
+                and provider.provider in runtime.failed_providers
+        ):
+            score -= 1000.0
+
+        score -= provider.priority
+
+        return score
+
+    def _rank_runtime_providers(
+            self,
+            ranked,
+            runtime=None,
+    ):
+
+        if runtime is None:
+            return ranked
+
+        return sorted(
+            ranked,
+            key=lambda p: self._provider_score(
+                p,
+                runtime,
+            ),
+            reverse=True,
+        )
+
+    def _record_runtime_success(
+            self,
+            runtime,
+            provider_name,
+            latency_ms,
+    ):
+
+        if runtime is None:
+            return
+
+        runtime.provider_latency[
+            provider_name
+        ] = latency_ms
+
+        runtime.provider_usage[
+            provider_name
+        ] = (
+                runtime.provider_usage.get(
+                    provider_name,
+                    0,
+                )
+                + 1
+        )
+
+        self.runtime_history.record_success(
+            provider_name,
+            latency_ms,
+        )
+
+    def _record_runtime_failure(
+            self,
+            runtime,
+            provider_name,
+    ):
+
+        if runtime is None:
+            return
+
+        runtime.failed_providers.add(
+            provider_name
+        )
+
+        self.runtime_history.record_failure(
+            provider_name,
+        )
+
+    def _provider_on_cooldown(
+            self,
+            provider_name,
+    ):
+
+        provider = self.get_provider(
+            provider_name,
+        )
+
+        if provider is None:
+            return False
+
+        if provider.cooldown_until is None:
+            return False
+
+        return provider.cooldown_until > utc_now()
+
+    def get_histories(
+            self,
+            pairs,
+            *,
+            start_date,
+            end_date,
+            interval="1day",
+            force_refresh=False,
+    ):
+
+        results = {}
+
+        for pair in pairs:
+            results[pair] = self.get_history(
+                pair,
+                start_date=start_date,
+                end_date=end_date,
+                interval=interval,
+                force_refresh=force_refresh,
+            )
+
+        return results
+
+    def refresh_history(
+            self,
+            pairs,
+            *,
+            start_date,
+            end_date,
+            interval="1day",
+    ):
+
+        for pair in pairs:
+            self._history_cache.invalidate(
+                pair,
+                interval=interval,
+            )
+
+        return self.get_histories(
+            pairs,
+            start_date=start_date,
+            end_date=end_date,
+            interval=interval,
+            force_refresh=True,
+        )
+
+    def history_diagnostics(self):
+
+        providers = []
+
+        for provider in self.get_ranked_providers():
+            history_fn = self._load_provider_history_function(provider.provider)
+
+            providers.append(
+                {
+                    "provider": provider.provider,
+                    "priority": provider.priority,
+                    "enabled": provider.enabled,
+                    "health_score": provider.health_score,
+                    "history_supported": callable(history_fn),
+                    "cooldown_until": provider.cooldown_until,
+                    "last_error": provider.last_error,
+                }
+            )
+
+        return {
+            "generated_at": utc_now_iso(),
+            "history_cache": self._history_cache.stats(),
+            "providers": providers,
         }
 
 
@@ -577,17 +1271,31 @@ def reset_forex_provider_router() -> ForexProviderRouter:
     return _ROUTER
 
 
-def get_forex_quote_from_router(pair: str, force_refresh: bool = False, allowed_providers: Optional[list[str]] = None) -> dict:
+def get_forex_quote_from_router(
+    pair: str,
+    *,
+    runtime=None,
+    force_refresh: bool = False,
+    allowed_providers: Optional[list[str]] = None,
+) -> dict:
     return get_forex_provider_router().get_quote(
         pair,
+        runtime=runtime,
         force_refresh=force_refresh,
         allowed_providers=allowed_providers,
     )
 
 
-def get_forex_quotes_from_router(pairs: Iterable[str], force_refresh: bool = False, allowed_providers: Optional[list[str]] = None) -> dict[str, dict]:
+def get_forex_quotes_from_router(
+    pairs: Iterable[str],
+    *,
+    runtime=None,
+    force_refresh: bool = False,
+    allowed_providers: Optional[list[str]] = None,
+) -> dict[str, dict]:
     return get_forex_provider_router().get_quotes(
         pairs,
+        runtime=runtime,
         force_refresh=force_refresh,
         allowed_providers=allowed_providers,
     )
@@ -601,9 +1309,50 @@ def get_forex_latest_prices(pairs: Iterable[str], force_refresh: bool = False) -
     return get_forex_provider_router().get_latest_prices(pairs, force_refresh=force_refresh)
 
 
+
+
+def get_forex_history_from_router(
+    pair: str,
+    *,
+    start_date: Any,
+    end_date: Any,
+    interval: str = "1day",
+    force_refresh: bool = False,
+    allowed_providers: Optional[list[str]] = None,
+) -> dict:
+    return get_forex_provider_router().get_history(
+        pair,
+        start_date=start_date,
+        end_date=end_date,
+        interval=interval,
+        force_refresh=force_refresh,
+        allowed_providers=allowed_providers,
+    )
+
+
+def get_forex_daily_history_from_router(
+    pair: str,
+    *,
+    start_date: Any,
+    end_date: Any,
+    force_refresh: bool = False,
+    allowed_providers: Optional[list[str]] = None,
+) -> dict:
+    return get_forex_provider_router().get_daily_history(
+        pair,
+        start_date=start_date,
+        end_date=end_date,
+        force_refresh=force_refresh,
+        allowed_providers=allowed_providers,
+    )
+
 def clear_forex_quote_router_cache() -> None:
     get_forex_provider_router().clear_cache()
 
 
 def get_forex_provider_status_rows() -> list[dict]:
     return get_forex_provider_router().get_status_rows()
+
+
+
+

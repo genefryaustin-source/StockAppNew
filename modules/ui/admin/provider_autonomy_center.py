@@ -35,6 +35,7 @@ def render_provider_autonomy_center():
 
     if run:
         result = optimizer.optimize(
+
             dry_run=dry_run,
         )
 

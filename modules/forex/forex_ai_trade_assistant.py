@@ -63,7 +63,8 @@ class ForexAITradeAssistant:
         candidates: List[Dict[str, Any]] = []
 
         candidates.extend(self._scanner_candidates())
-        candidates.extend(self._alpha_candidates())
+        # Disable alpha expansion in AI Command Center until router quote latency is capped.
+        # candidates.extend(self._alpha_candidates())
 
         if not candidates:
             candidates = self._fallback_candidates()
@@ -153,6 +154,7 @@ class ForexAITradeAssistant:
         )
 
     def _scanner_candidates(self) -> List[Dict[str, Any]]:
+
         try:
             from modules.forex.forex_institutional_scanner import get_forex_institutional_scanner
             data = get_forex_institutional_scanner().scan(force_refresh=False)

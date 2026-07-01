@@ -66,5 +66,11 @@ def get_forex_order_dashboard(db=None):
         _INSTANCE=ForexOrderDashboard(db=db)
     return _INSTANCE
 
-def render_forex_order_dashboard(db=None):
+def render_forex_order_dashboard(
+    db=None,
+    tenant_id=None,
+    user_id=None,
+    portfolio_id=None,
+    **kwargs,
+):
     return get_forex_order_dashboard(db=db).render()

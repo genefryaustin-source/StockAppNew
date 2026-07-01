@@ -21,8 +21,33 @@ class ForexMacroRegimeEngine:
         self.strength=get_forex_currency_strength_engine() if get_forex_currency_strength_engine else None
         self.cb=get_forex_central_bank_engine() if get_forex_central_bank_engine else None
 
-    def analyze(self,force_refresh=False):
-        strength=self.strength.scan_currencies(force_refresh=force_refresh) if self.strength else {}
+    def analyze(
+            self,
+            runtime=None,
+            force_refresh=False,
+    ):
+        if (
+                runtime is not None
+                and isinstance(runtime.currency_strength, dict)
+        ):
+
+            strength = runtime.currency_strength
+
+            print("=" * 80)
+            print("MACRO REGIME USING RUNTIME STRENGTH")
+            print("runtime id :", id(runtime))
+            print("strength source : runtime")
+            print("=" * 80)
+
+        elif self.strength:
+
+            strength = self.strength.scan_currencies(
+                force_refresh=force_refresh,
+            )
+
+        else:
+
+            strength = {}
         cb=self.cb.analyze() if self.cb else {}
 
         strongest=(strength.get("strongest_currency") or {}).get("currency","USD")

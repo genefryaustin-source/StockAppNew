@@ -22,7 +22,9 @@ import math
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, List
-
+from modules.forex.forex_portfolio_cache import (
+    get_forex_portfolio_cache,
+)
 try:
     from sqlalchemy import text
 except Exception:
@@ -148,7 +150,7 @@ class ForexTradeExecutionEngine:
             if get_forex_portfolio_manager
             else None
         )
-
+        self.cache = get_forex_portfolio_cache()
     # ------------------------------------------------------------------
     # Database
     # ------------------------------------------------------------------
@@ -282,6 +284,13 @@ class ForexTradeExecutionEngine:
         })
         self.db.commit()
 
+        print("INVALIDATING PORTFOLIO CACHE")
+
+        self.cache.invalidate_portfolio(
+            tenant_id=request.tenant_id,
+            user_id=request.user_id,
+            portfolio_id=request.portfolio_id,
+        )
     # ------------------------------------------------------------------
     # Execution
     # ------------------------------------------------------------------

@@ -1,7 +1,7 @@
 # modules/forex/forex_portfolio_engine.py
 
 from __future__ import annotations
-
+from psycopg2.extras import Json
 import json
 import math
 import logging
@@ -9,29 +9,30 @@ import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
-
+from sqlalchemy import text
+from modules.forex.forex_common import (
+        normalize_pair, split_pair
+    )
 try:
     from modules.forex.forex_service import (
         ForexService,
         get_forex_service,
-        normalize_pair,
-        split_pair,
     )
+
+except Exception as e:
+    print("FOREX SERVICE IMPORT FAILED")
+    print(e)
+    raise
+
+try:
     from modules.forex.forex_ai import (
         ForexAIEngine,
         get_forex_ai_engine,
     )
-except Exception:
-    from forex_service import (
-        ForexService,
-        get_forex_service,
-        normalize_pair,
-        split_pair,
-    )
-    from forex_ai import (
-        ForexAIEngine,
-        get_forex_ai_engine,
-    )
+except Exception as e:
+    print("FOREX AI IMPORT FAILED")
+    print(e)
+    raise
 
 
 logger = logging.getLogger(__name__)
@@ -217,15 +218,11 @@ def _round(value: Any, places: int = 6) -> float:
     return round(_safe_float(value), places)
 
 
-def _json_payload(value: Any) -> Any:
+def _json_payload(value):
     if value is None:
         return None
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        return json.loads(json.dumps(value, default=str))
-    except Exception:
-        return {"value": str(value)}
+
+    return Json(value)
 
 
 def _row_get(row: Any, key: str, default: Any = None) -> Any:
@@ -289,7 +286,7 @@ class ForexPortfolioEngine:
         if self.db is None:
             return
 
-        self.db.execute(
+        self.db.execute(text(
             """
             CREATE TABLE IF NOT EXISTS forex_accounts (
                 id VARCHAR(64) PRIMARY KEY,
@@ -311,16 +308,16 @@ class ForexPortfolioEngine:
                 updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
             """
-        )
+        ))
 
-        self.db.execute(
+        self.db.execute(text(
             """
             CREATE INDEX IF NOT EXISTS idx_forex_accounts_tenant_portfolio
             ON forex_accounts (tenant_id, portfolio_id)
             """
-        )
+        ))
 
-        self.db.execute(
+        self.db.execute(text(
             """
             CREATE TABLE IF NOT EXISTS forex_positions (
                 id VARCHAR(64) PRIMARY KEY,
@@ -349,16 +346,16 @@ class ForexPortfolioEngine:
                 updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
             """
-        )
+        ))
 
-        self.db.execute(
+        self.db.execute(text(
             """
             CREATE INDEX IF NOT EXISTS idx_forex_positions_tenant_account_pair
             ON forex_positions (tenant_id, account_id, pair)
             """
-        )
+        ))
 
-        self.db.execute(
+        self.db.execute(text(
             """
             CREATE TABLE IF NOT EXISTS forex_cash_ledger (
                 id SERIAL PRIMARY KEY,
@@ -375,9 +372,9 @@ class ForexPortfolioEngine:
                 created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
             """
-        )
+        ))
 
-        self.db.execute(
+        self.db.execute(text(
             """
             CREATE TABLE IF NOT EXISTS forex_portfolio_snapshots (
                 id SERIAL PRIMARY KEY,
@@ -405,7 +402,7 @@ class ForexPortfolioEngine:
                 created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
             """
-        )
+        ))
 
         if hasattr(self.db, "commit"):
             self.db.commit()
@@ -454,7 +451,23 @@ class ForexPortfolioEngine:
             balance_after=cash,
             notes="Forex account created.",
         )
+        #
+        # Create the initial portfolio snapshot
+        #
+        try:
+            self.get_snapshot(
+                account_id=account.id,
+                persist=True,
+                refresh=False,  # No positions yet; avoid unnecessary refresh
+            )
+        except Exception as exc:
+            logger.exception(
+                "Failed to create initial Forex portfolio snapshot.",
+                exc_info=exc,
+            )
+
         return account
+
 
     def get_or_create_account(
         self,
@@ -497,14 +510,14 @@ class ForexPortfolioEngine:
                 where += " AND portfolio_id = :portfolio_id"
                 params["portfolio_id"] = portfolio_id or self.portfolio_id
 
-            row = self.db.execute(
+            row = self.db.execute(text(
                 f"""
                 SELECT *
                 FROM forex_accounts
                 WHERE {where}
                 ORDER BY created_at DESC
                 LIMIT 1
-                """,
+                """),
                 params,
             ).fetchone()
 
@@ -747,14 +760,14 @@ class ForexPortfolioEngine:
         try:
             self.ensure_tables()
 
-            row = self.db.execute(
+            row = self.db.execute(text(
                 """
                 SELECT *
                 FROM forex_positions
                 WHERE tenant_id = :tenant_id
                   AND id = :position_id
                 LIMIT 1
-                """,
+                """),
                 {
                     "tenant_id": self.tenant_id,
                     "position_id": position_id,
@@ -796,13 +809,13 @@ class ForexPortfolioEngine:
             if status and status.upper() != "ALL":
                 where += " AND status = :status"
 
-            rows = self.db.execute(
+            rows = self.db.execute(text(
                 f"""
                 SELECT *
                 FROM forex_positions
                 WHERE {where}
                 ORDER BY updated_at DESC
-                """,
+                """),
                 params,
             ).fetchall()
 
@@ -893,7 +906,7 @@ class ForexPortfolioEngine:
             account=account,
             positions=positions,
         )
-
+        print("ENTER get_snapshot")
         snapshot = ForexPortfolioSnapshot(
             tenant_id=self.tenant_id,
             user_id=self.user_id,
@@ -917,10 +930,11 @@ class ForexPortfolioEngine:
             asof=_utc_now(),
             positions=position_rows,
         )
-
+        print("ABOUT TO BUILD SNAPSHOT")
         if persist:
             self._persist_snapshot(snapshot)
-
+        print("ENTER _persist_snapshot")
+        print("PERSIST =", persist)
         return snapshot
 
     def calculate_risk(
@@ -1608,14 +1622,14 @@ class ForexPortfolioEngine:
                 where += " AND account_id = :account_id"
                 params["account_id"] = account_id
 
-            rows = self.db.execute(
+            rows = self.db.execute(text(
                 f"""
                 SELECT *
                 FROM forex_cash_ledger
                 WHERE {where}
                 ORDER BY created_at DESC
                 LIMIT :limit
-                """,
+                """),
                 params,
             ).fetchall()
 
@@ -1744,14 +1758,14 @@ class ForexPortfolioEngine:
             order_col = next((col for col in order_by_candidates if col in columns), None)
             order_by = f"ORDER BY {order_col} DESC" if order_col else ""
 
-            rows = self.db.execute(
+            rows = self.db.execute(text(
                 f"""
                 SELECT *
                 FROM {table}
                 {where}
                 {order_by}
                 LIMIT :limit
-                """,
+                """),
                 params,
             ).fetchall()
 
@@ -1767,13 +1781,13 @@ class ForexPortfolioEngine:
             return []
 
         try:
-            rows = self.db.execute(
+            rows = self.db.execute(text(
                 """
                 SELECT column_name
                 FROM information_schema.columns
                 WHERE table_schema = 'public'
                   AND table_name = :table
-                """,
+                """),
                 {"table": table},
             ).fetchall()
 
@@ -1781,7 +1795,7 @@ class ForexPortfolioEngine:
 
         except Exception:
             try:
-                row = self.db.execute(f"SELECT * FROM {table} LIMIT 1").fetchone()
+                row = self.db.execute(text(f"SELECT * FROM {table} LIMIT 1")).fetchone()
                 if row is None:
                     return []
                 return list(dict(row._mapping).keys())
@@ -1809,7 +1823,7 @@ class ForexPortfolioEngine:
         try:
             self.ensure_tables()
 
-            self.db.execute(
+            self.db.execute(text(
                 """
                 INSERT INTO forex_accounts (
                     id,
@@ -1863,7 +1877,7 @@ class ForexPortfolioEngine:
                     status = EXCLUDED.status,
                     raw_payload = EXCLUDED.raw_payload,
                     updated_at = EXCLUDED.updated_at
-                """,
+                """),
                 {
                     "id": account.id,
                     "tenant_id": account.tenant_id,
@@ -1899,7 +1913,7 @@ class ForexPortfolioEngine:
         try:
             self.ensure_tables()
 
-            self.db.execute(
+            self.db.execute(text(
                 """
                 INSERT INTO forex_positions (
                     id,
@@ -1968,7 +1982,7 @@ class ForexPortfolioEngine:
                     status = EXCLUDED.status,
                     raw_payload = EXCLUDED.raw_payload,
                     updated_at = EXCLUDED.updated_at
-                """,
+                """),
                 {
                     "id": position.id,
                     "tenant_id": position.tenant_id,
@@ -2005,13 +2019,26 @@ class ForexPortfolioEngine:
             self._rollback_quietly()
 
     def _persist_snapshot(self, snapshot: ForexPortfolioSnapshot) -> None:
+        print("=" * 80)
+        print("ENTER _persist_snapshot")
+
         if self.db is None:
             return
-
+        print("CALLING ensure_tables()")
+        self.ensure_tables()
+        print("ensure_tables() COMPLETE")
         try:
             self.ensure_tables()
-
-            self.db.execute(
+            print("=" * 80)
+            print("SNAPSHOT INSERT")
+            print("tenant    :", snapshot.tenant_id)
+            print("user      :", snapshot.user_id)
+            print("portfolio :", snapshot.portfolio_id)
+            print("account   :", snapshot.account_id)
+            print("asof      :", snapshot.asof)
+            print("=" * 80)
+            print("EXECUTING INSERT")
+            self.db.execute(text(
                 """
                 INSERT INTO forex_portfolio_snapshots (
                     tenant_id,
@@ -2059,7 +2086,7 @@ class ForexPortfolioEngine:
                     :payload,
                     :asof
                 )
-                """,
+                """),
                 {
                     "tenant_id": snapshot.tenant_id,
                     "user_id": snapshot.user_id,
@@ -2084,13 +2111,35 @@ class ForexPortfolioEngine:
                     "asof": snapshot.asof.replace(tzinfo=None),
                 },
             )
+            print("INSERT COMPLETE")
 
             if hasattr(self.db, "commit"):
                 self.db.commit()
+                print("COMMIT COMPLETE")
+
+
 
         except Exception as exc:
-            logger.warning("Failed to persist forex portfolio snapshot: %s", exc)
+
+            print("=" * 80)
+
+            print("FOREX SNAPSHOT PERSIST FAILED")
+
+            print(type(exc).__name__)
+
+            print(str(exc))
+
+            print("=" * 80)
+
+            logger.exception(
+
+                "Failed to persist forex portfolio snapshot"
+
+            )
+
             self._rollback_quietly()
+
+            raise
 
     def _record_cash_event(
         self,
@@ -2109,7 +2158,7 @@ class ForexPortfolioEngine:
         try:
             self.ensure_tables()
 
-            self.db.execute(
+            self.db.execute(text(
                 """
                 INSERT INTO forex_cash_ledger (
                     tenant_id,
@@ -2135,7 +2184,7 @@ class ForexPortfolioEngine:
                     :notes,
                     :raw_payload
                 )
-                """,
+                """),
                 {
                     "tenant_id": self.tenant_id,
                     "user_id": self.user_id,

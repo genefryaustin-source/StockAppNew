@@ -10,13 +10,18 @@ Center, recommendation engine, portfolio optimizer, and autonomous trader.
 """
 
 from __future__ import annotations
-
+import time
 import math
 import statistics
+import inspect
+import traceback
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-
+from modules.forex.forex_alpha_execution_profiler import (
+    profile_alpha_execution,
+    get_forex_alpha_execution_profiler,
+)
 try:
     from sqlalchemy import text
 except Exception:
@@ -40,12 +45,78 @@ except Exception:
         "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY",
     ]
 
+from contextlib import contextmanager
+import time
+
+@contextmanager
+def alpha_stage(stage_name: str):
+    start = time.perf_counter()
+
+    print("=" * 80)
+    print(f"ALPHA STAGE START : {stage_name}")
+
+    try:
+        yield
+    finally:
+        elapsed = (time.perf_counter() - start) * 1000.0
+
+        print(f"ALPHA STAGE END   : {stage_name}")
+        print(f"Elapsed           : {elapsed:,.2f} ms")
+        print("=" * 80)
+
+
+def _alpha_debug(stage: str, **values: Any) -> None:
+    """Verbose Sprint 27 debug printer for Alpha runtime tracing."""
+    print("=" * 80)
+    print(f"FOREX ALPHA DEBUG | {stage}")
+    for key, value in values.items():
+        try:
+            print(f"{key}: {value}")
+        except Exception:
+            print(f"{key}: <unprintable>")
+    print("=" * 80)
+
+
+def _summarize_payload(value: Any) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "type": type(value).__name__,
+        "is_none": value is None,
+    }
+    if isinstance(value, dict):
+        summary["id"] = id(value)
+        summary["keys"] = list(value.keys())[:30]
+        if "status" in value:
+            summary["status"] = value.get("status")
+        if "signals" in value and isinstance(value.get("signals"), list):
+            summary["signals"] = len(value.get("signals", []))
+        if "currency_strength" in value and isinstance(value.get("currency_strength"), list):
+            summary["currency_strength_rows"] = len(value.get("currency_strength", []))
+        if "pair_strength" in value and isinstance(value.get("pair_strength"), list):
+            summary["pair_strength_rows"] = len(value.get("pair_strength", []))
+    elif isinstance(value, list):
+        summary["id"] = id(value)
+        summary["length"] = len(value)
+    return summary
+
+
+def _debug_stack(limit: int = 8) -> List[str]:
+    frames = []
+    try:
+        for frame in inspect.stack()[1 : limit + 1]:
+            frames.append(f"{frame.function} | {frame.filename}:{frame.lineno}")
+    except Exception as exc:
+        frames.append(f"stack_unavailable: {exc}")
+    return frames
 
 DEFAULT_PAIRS = list(MAJOR_AND_CROSS_PAIRS)
 
 DEFAULT_ACCOUNT_SIZE = 100000.0
 DEFAULT_RISK_PER_TRADE_PCT = 0.005
 DEFAULT_ATR_PROXY_BPS = 65.0
+
+
+
+
 
 
 def utc_now_iso() -> str:
@@ -154,59 +225,268 @@ class ForexAlphaModel:
             if get_forex_currency_strength_engine
             else None
         )
+        # Sprint 27 compatibility: older/refactored code paths referenced
+        # self.currency_strength directly. Keep both names bound to the same
+        # engine so Alpha never fails before the shared runtime can be filled.
+        self.currency_strength = self.strength_engine
+
+        _alpha_debug(
+            "INIT",
+            model_id=id(self),
+            pairs=len(self.pairs),
+            price_service=type(self.price_service).__name__ if self.price_service else None,
+            strength_engine=type(self.strength_engine).__name__ if self.strength_engine else None,
+            has_currency_strength=hasattr(self, "currency_strength"),
+        )
+
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Phase Timing
+    # ------------------------------------------------------------------
 
+
+    @profile_alpha_execution("ForexAlphaModel.run_alpha_model")
     def run_alpha_model(
-        self,
-        pairs: Optional[List[str]] = None,
-        force_refresh: bool = False,
-        save: bool = False,
-        db=None,
-        account_size: Optional[float] = None,
-        risk_per_trade_pct: Optional[float] = None,
+            self,
+            pairs: Optional[List[str]] = None,
+            quotes: Optional[Dict[str, Dict[str, Any]]] = None,
+            force_refresh: bool = False,
+            save: bool = False,
+            db=None,
+            account_size: Optional[float] = None,
+            risk_per_trade_pct: Optional[float] = None,
     ) -> Dict[str, Any]:
+        """
+        Sprint 27 debug-hardened Alpha execution.
+
+        Guarantees a dict return whenever possible and prints every major start,
+        end, payload summary, stack trace, and timing boundary needed to confirm
+        that the runtime builder receives a valid Alpha payload.
+        """
+        run_id = f"ALPHA-{datetime.now(timezone.utc).strftime('%H%M%S')}-{id(self) % 100000}"
+        overall_start = time.perf_counter()
+
         pairs = [normalize_pair(p) for p in (pairs or self.pairs)]
         account_size = float(account_size or self.account_size)
         risk_per_trade_pct = float(risk_per_trade_pct or self.risk_per_trade_pct)
 
-        quotes = self._load_quotes(pairs, force_refresh=force_refresh)
-        strength_scan = self._load_strength_scan(pairs, force_refresh=force_refresh)
-
-        rows = []
-        for pair in pairs:
-            rows.append(
-                self._score_pair(
-                    pair=pair,
-                    quote=quotes.get(pair, {}),
-                    strength_scan=strength_scan,
-                    account_size=account_size,
-                    risk_per_trade_pct=risk_per_trade_pct,
-                )
-            )
-
-        rows.sort(
-            key=lambda r: (
-                safe_float(r["alpha_score"]),
-                safe_float(r["confidence_score"]),
-                safe_float(r["risk_reward"]),
-            ),
-            reverse=True,
-        )
-
-        payload = self._build_payload(
+        _alpha_debug(
+            f"{run_id} | RUN START",
+            model_id=id(self),
+            pair_count=len(pairs),
             pairs=pairs,
-            rows=rows,
             quotes=quotes,
-            strength_scan=strength_scan,
+            force_refresh=force_refresh,
+            save=save,
+            db_attached=db is not None,
+            account_size=account_size,
+            risk_per_trade_pct=risk_per_trade_pct,
+            price_service=type(self.price_service).__name__ if self.price_service else None,
+            strength_engine=type(getattr(self, "strength_engine", None)).__name__ if getattr(self, "strength_engine", None) else None,
+            currency_strength=type(getattr(self, "currency_strength", None)).__name__ if getattr(self, "currency_strength", None) else None,
+            stack=_debug_stack(),
         )
 
-        if save and db is not None:
-            self.save_alpha_signals(db, payload)
 
-        return payload
+        strength_scan: Dict[str, Any] = {}
+        rows: List[Dict[str, Any]] = []
+
+        try:
+            with alpha_stage("LOAD_QUOTES"):
+                stage_start = time.perf_counter()
+                _alpha_debug(f"{run_id} | START LOAD_QUOTES", pair_count=len(pairs))
+                _alpha_debug(
+                    stage=f"{run_id} | QUOTE SOURCE",
+                    source="runtime" if quotes is not None else "price_service",
+                    quote_count=len(quotes)
+                    if isinstance(quotes, dict)
+                    else 0,
+                )
+                if quotes is None:
+                    quotes = self.price_service.get_quotes(
+                        pairs,
+                        force_refresh=force_refresh,
+                    )
+                _alpha_debug(
+                    f"{run_id} | END LOAD_QUOTES",
+                    elapsed_ms=round((time.perf_counter() - stage_start) * 1000, 2),
+                    quote_summary=_summarize_payload(quotes),
+                    quote_keys=list(quotes.keys())[:30] if isinstance(quotes, dict) else None,
+                    failed_quotes=[p for p, q in quotes.items() if isinstance(q, dict) and q.get("error")][:20] if isinstance(quotes, dict) else None,
+                )
+
+            with alpha_stage("LOAD_STRENGTH"):
+                stage_start = time.perf_counter()
+                _alpha_debug(
+                    f"{run_id} | START LOAD_STRENGTH",
+                    strength_engine=type(getattr(self, "strength_engine", None)).__name__ if getattr(self, "strength_engine", None) else None,
+                    currency_strength=type(getattr(self, "currency_strength", None)).__name__ if getattr(self, "currency_strength", None) else None,
+                    quotes_available=isinstance(quotes, dict),
+                    quote_count=len(quotes) if isinstance(quotes, dict) else None,
+                )
+                strength_scan = self._load_strength_scan(
+                    pairs=pairs,
+                    quotes=quotes,
+                    force_refresh=False,
+                )
+                _alpha_debug(
+                    stage=f"{run_id} | QUOTE SOURCE",
+                    source="runtime" if quotes is not None else "price_service",
+                    quote_count=len(quotes) if isinstance(quotes, dict) else 0,
+                    runtime_quote_object=id(quotes) if isinstance(quotes, dict) else None,
+                )
+
+            with alpha_stage("SCORE_ALL_PAIRS"):
+                stage_start = time.perf_counter()
+                _alpha_debug(f"{run_id} | START SCORE_ALL_PAIRS", pair_count=len(pairs))
+
+                for pair in pairs:
+                    pair_start = time.perf_counter()
+                    try:
+                        row = self._score_pair(
+                            pair=pair,
+                            quote=quotes.get(pair, {}) if isinstance(quotes, dict) else {},
+                            strength_scan=strength_scan,
+                            account_size=account_size,
+                            risk_per_trade_pct=risk_per_trade_pct,
+                        )
+                        rows.append(row)
+                        _alpha_debug(
+                            f"{run_id} | SCORE_PAIR END",
+                            pair=pair,
+                            elapsed_ms=round((time.perf_counter() - pair_start) * 1000, 2),
+                            alpha_score=row.get("alpha_score"),
+                            confidence_score=row.get("confidence_score"),
+                            recommendation=row.get("recommendation"),
+                            direction=row.get("direction"),
+                        )
+                    except Exception as exc:
+                        _alpha_debug(
+                            f"{run_id} | SCORE_PAIR ERROR",
+                            pair=pair,
+                            elapsed_ms=round((time.perf_counter() - pair_start) * 1000, 2),
+                            error=f"{type(exc).__name__}: {exc}",
+                            traceback=traceback.format_exc(),
+                        )
+                        rows.append({
+                            "pair": pair,
+                            "direction": "WATCH",
+                            "recommendation": "WATCH",
+                            "signal": "NO_TRADE",
+                            "alpha_score": 0.0,
+                            "confidence_score": 0.0,
+                            "risk_reward": 0.0,
+                            "warnings": f"score_pair_error: {exc}",
+                            "generated_at": utc_now_iso(),
+                        })
+
+                rows.sort(
+                    key=lambda r: (
+                        safe_float(r.get("alpha_score")),
+                        safe_float(r.get("confidence_score")),
+                        safe_float(r.get("risk_reward")),
+                    ),
+                    reverse=True,
+                )
+
+                _alpha_debug(
+                    f"{run_id} | END SCORE_ALL_PAIRS",
+                    elapsed_ms=round((time.perf_counter() - stage_start) * 1000, 2),
+                    rows=len(rows),
+                    top_pair=rows[0].get("pair") if rows else None,
+                    top_alpha=rows[0].get("alpha_score") if rows else None,
+                    top_recommendation=rows[0].get("recommendation") if rows else None,
+                )
+
+            with alpha_stage("BUILD_PAYLOAD"):
+                stage_start = time.perf_counter()
+                _alpha_debug(f"{run_id} | START BUILD_PAYLOAD", rows=len(rows))
+                payload = self._build_payload(
+                    pairs=pairs,
+                    rows=rows,
+                    quotes=quotes,
+                    strength_scan=strength_scan,
+                )
+                _alpha_debug(
+                    f"{run_id} | END BUILD_PAYLOAD",
+                    elapsed_ms=round((time.perf_counter() - stage_start) * 1000, 2),
+                    payload_summary=_summarize_payload(payload),
+                )
+
+            if save and db is not None:
+                with alpha_stage("SAVE_ALPHA_SIGNALS"):
+                    stage_start = time.perf_counter()
+                    _alpha_debug(f"{run_id} | START SAVE_ALPHA_SIGNALS")
+                    self.save_alpha_signals(db, payload)
+                    _alpha_debug(
+                        f"{run_id} | END SAVE_ALPHA_SIGNALS",
+                        elapsed_ms=round((time.perf_counter() - stage_start) * 1000, 2),
+                    )
+
+            payload.setdefault("debug", {})
+            payload["debug"].update({
+                "run_id": run_id,
+                "model_id": id(self),
+                "quote_count": len(quotes) if isinstance(quotes, dict) else 0,
+                "strength_status": strength_scan.get("status") if isinstance(strength_scan, dict) else None,
+                "runtime_safe_return": True,
+                "elapsed_ms": round((time.perf_counter() - overall_start) * 1000, 2),
+            })
+
+            _alpha_debug(
+                f"{run_id} | RUN END",
+                elapsed_ms=payload["debug"]["elapsed_ms"],
+                payload_summary=_summarize_payload(payload),
+                signal_count=len(payload.get("signals", [])),
+            )
+            return payload
+
+        except Exception as exc:
+            elapsed_ms = round((time.perf_counter() - overall_start) * 1000, 2)
+            error_payload = {
+                "status": "error",
+                "generated_at": utc_now_iso(),
+                "summary": {
+                    "pairs_scanned": len(pairs),
+                    "signals": 0,
+                    "tradable": 0,
+                    "buy_signals": 0,
+                    "sell_signals": 0,
+                    "failed_quotes": len([p for p, q in quotes.items() if isinstance(q, dict) and q.get("error")]) if isinstance(quotes, dict) else 0,
+                    "average_alpha": 0.0,
+                    "average_confidence": 0.0,
+                },
+                "top_signal": None,
+                "signals": [],
+                "failed_quotes": [p for p, q in quotes.items() if isinstance(q, dict) and q.get("error")] if isinstance(quotes, dict) else [],
+                "strength_snapshot": {
+                    "strongest_currency": strength_scan.get("strongest_currency") if isinstance(strength_scan, dict) else None,
+                    "weakest_currency": strength_scan.get("weakest_currency") if isinstance(strength_scan, dict) else None,
+                    "quote_health": strength_scan.get("quote_health") if isinstance(strength_scan, dict) else None,
+                },
+                "warnings": [f"Alpha model failed: {type(exc).__name__}: {exc}"],
+                "currency_strength": strength_scan if isinstance(strength_scan, dict) else {},
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(),
+                "debug": {
+                    "run_id": run_id,
+                    "model_id": id(self),
+                    "runtime_safe_return": False,
+                    "elapsed_ms": elapsed_ms,
+                    "stack": _debug_stack(),
+                },
+            }
+            _alpha_debug(
+                f"{run_id} | RUN ERROR",
+                elapsed_ms=elapsed_ms,
+                error=error_payload["error"],
+                traceback=error_payload["traceback"],
+                payload_summary=_summarize_payload(error_payload),
+            )
+            return error_payload
 
     def get_top_opportunities(
         self,
@@ -225,6 +505,7 @@ class ForexAlphaModel:
         ]
         return rows[: int(limit)]
 
+    @profile_alpha_execution("ForexAlphaModel.command_center_payload")
     def command_center_payload(
         self,
         pairs: Optional[List[str]] = None,
@@ -247,7 +528,7 @@ class ForexAlphaModel:
     # ------------------------------------------------------------------
     # Data loading
     # ------------------------------------------------------------------
-
+    @profile_alpha_execution("ForexAlphaModel.load_quotes")
     def _load_quotes(self, pairs: List[str], force_refresh: bool = False) -> Dict[str, Dict[str, Any]]:
         quotes: Dict[str, Dict[str, Any]] = {}
 
@@ -258,12 +539,15 @@ class ForexAlphaModel:
                     "error": "ForexPriceService unavailable.",
                 }
             return quotes
+        profiler = get_forex_alpha_execution_profiler()
+
 
         try:
             loaded = self.price_service.get_quotes(
                 pairs,
                 force_refresh=force_refresh,
             )
+
             if isinstance(loaded, dict):
                 for k, v in loaded.items():
                     quotes[normalize_pair(k)] = v
@@ -279,7 +563,14 @@ class ForexAlphaModel:
 
         return quotes
 
-    def _load_strength_scan(self, pairs: List[str], force_refresh: bool = False) -> Dict[str, Any]:
+    @profile_alpha_execution("ForexAlphaModel.load_strength")
+    def _load_strength_scan(
+            self,
+            pairs: List[str],
+            quotes: Optional[Dict[str, Dict[str, Any]]] = None,
+            force_refresh: bool = False,
+    ) -> Dict[str, Any]:
+
         if self.strength_engine is None:
             return {
                 "status": "unavailable",
@@ -291,8 +582,10 @@ class ForexAlphaModel:
         try:
             return self.strength_engine.scan_currencies(
                 pairs=pairs,
+                quotes=quotes,
                 force_refresh=force_refresh,
             )
+
         except Exception as exc:
             return {
                 "status": "error",
@@ -304,7 +597,7 @@ class ForexAlphaModel:
     # ------------------------------------------------------------------
     # Alpha scoring
     # ------------------------------------------------------------------
-
+    @profile_alpha_execution("ForexAlphaModel.score_pair")
     def _score_pair(
         self,
         pair: str,
@@ -313,6 +606,7 @@ class ForexAlphaModel:
         account_size: float,
         risk_per_trade_pct: float,
     ) -> Dict[str, Any]:
+
         base, quote_ccy = split_pair(pair)
         mid = safe_float(quote.get("mid") or quote.get("last"), 0.0)
 
@@ -605,7 +899,7 @@ class ForexAlphaModel:
     # ------------------------------------------------------------------
     # Payload / persistence
     # ------------------------------------------------------------------
-
+    @profile_alpha_execution("ForexAlphaModel.build_payload")
     def _build_payload(
         self,
         pairs: List[str],
@@ -613,6 +907,9 @@ class ForexAlphaModel:
         quotes: Dict[str, Dict[str, Any]],
         strength_scan: Dict[str, Any],
     ) -> Dict[str, Any]:
+        profiler = get_forex_alpha_execution_profiler()
+
+        
         tradable = [r for r in rows if r.get("recommendation") not in ("WATCH", "NO_TRADE")]
         buys = [r for r in rows if "BUY" in str(r.get("recommendation"))]
         sells = [r for r in rows if "SELL" in str(r.get("recommendation"))]
@@ -646,6 +943,7 @@ class ForexAlphaModel:
                 "quote_health": strength_scan.get("quote_health"),
             },
             "warnings": self._collect_warnings(rows, quotes, strength_scan),
+            "currency_strength": strength_scan,
         }
 
     def _collect_warnings(

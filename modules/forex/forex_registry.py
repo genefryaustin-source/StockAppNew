@@ -20,14 +20,26 @@ from modules.forex.providers.forex_provider_router import get_forex_provider_rou
 
 class ForexRegistry:
 
-    def __init__(self):
-        self.engines: Dict[str, Any] = {}
-        self.services: Dict[str, Any] = {}
-        self.providers: Dict[str, Any] = {}
-        self.dashboards: Dict[str, Any] = {}
+    def __init__(
+            self,
+            db=None,
+            tenant_id=None,
+            user_id=None,
+            portfolio_id=None,
+    ):
+        self.db = db
+        self.tenant_id = tenant_id
+        self.user_id = user_id
+        self.portfolio_id = portfolio_id
+
+        self.engines = {}
+        self.services = {}
+        self.providers = {}
+        self.dashboards = {}
 
     def bootstrap(self):
         self.services["price_service"] = get_forex_price_service()
+
         self.services["provider_router"] = get_forex_provider_router()
 
         self.engines.update({
@@ -85,10 +97,29 @@ class ForexRegistry:
         }
 
 
-_REGISTRY=None
+_REGISTRY = None
 
-def get_forex_registry():
+def get_forex_registry(
+    db=None,
+    tenant_id=None,
+    user_id=None,
+    portfolio_id=None,
+):
     global _REGISTRY
-    if _REGISTRY is None:
-        _REGISTRY=ForexRegistry().bootstrap()
+
+    if (
+        _REGISTRY is None
+        or getattr(_REGISTRY, "db", None) is not db
+        or getattr(_REGISTRY, "tenant_id", None) != tenant_id
+        or getattr(_REGISTRY, "user_id", None) != user_id
+        or getattr(_REGISTRY, "portfolio_id", None) != portfolio_id
+    ):
+
+        _REGISTRY = ForexRegistry(
+            db=db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+        ).bootstrap()
+
     return _REGISTRY

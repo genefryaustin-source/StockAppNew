@@ -23,25 +23,28 @@ try:
         MAJOR_PAIRS,
         CROSS_PAIRS,
         SUPPORTED_CURRENCIES,
-        normalize_pair,
     )
+except Exception as e:
+    print("FOREX SERVICE FAILED")
+    raise
+
+try:
+    from modules.forex.forex_common import (
+        normalize_pair,
+        split_pair,
+    )
+except Exception as e:
+    print("FOREX COMMON FAILED")
+    raise
+
+try:
     from modules.forex.forex_ai import (
         ForexAIEngine,
         get_forex_ai_engine,
     )
-except Exception:
-    from forex_service import (
-        ForexService,
-        get_forex_service,
-        MAJOR_PAIRS,
-        CROSS_PAIRS,
-        SUPPORTED_CURRENCIES,
-        normalize_pair,
-    )
-    from forex_ai import (
-        ForexAIEngine,
-        get_forex_ai_engine,
-    )
+except Exception as e:
+    print("FOREX AI FAILED")
+    raise
 
 
 logger = logging.getLogger(__name__)

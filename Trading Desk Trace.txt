@@ -1,0 +1,254 @@
+FOREX WORKSPACE
+db = <sqlalchemy.orm.session.Session object at 0x000001E02F2AA300>
+tenant = None
+user = None
+portfolio = None
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 178
+command_center_payload C:\StockApp\modules\forex\forex_alpha_model.py 280
+build C:\StockApp\modules\forex\forex_command_center_engine.py 50
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 127
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+render_forex_trading_desk_dashboard C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 77
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 191
+command_center_payload C:\StockApp\modules\forex\forex_alpha_model.py 280
+build C:\StockApp\modules\forex\forex_command_center_engine.py 50
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 127
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+render_forex_trading_desk_dashboard C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 77
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 204
+command_center_payload C:\StockApp\modules\forex\forex_alpha_model.py 280
+build C:\StockApp\modules\forex\forex_command_center_engine.py 50
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 127
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+render_forex_trading_desk_dashboard C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 77
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 217
+command_center_payload C:\StockApp\modules\forex\forex_alpha_model.py 280
+build C:\StockApp\modules\forex\forex_command_center_engine.py 50
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 127
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+render_forex_trading_desk_dashboard C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 77
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 178
+_run_alpha C:\StockApp\modules\forex\forex_institutional_scanner.py 92
+scan C:\StockApp\modules\forex\forex_institutional_scanner.py 33
+build C:\StockApp\modules\forex\forex_command_center_engine.py 53
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 127
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 191
+_run_alpha C:\StockApp\modules\forex\forex_institutional_scanner.py 92
+scan C:\StockApp\modules\forex\forex_institutional_scanner.py 33
+build C:\StockApp\modules\forex\forex_command_center_engine.py 53
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 127
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 204
+_run_alpha C:\StockApp\modules\forex\forex_institutional_scanner.py 92
+scan C:\StockApp\modules\forex\forex_institutional_scanner.py 33
+build C:\StockApp\modules\forex\forex_command_center_engine.py 53
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 127
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 217
+_run_alpha C:\StockApp\modules\forex\forex_institutional_scanner.py 92
+scan C:\StockApp\modules\forex\forex_institutional_scanner.py 33
+build C:\StockApp\modules\forex\forex_command_center_engine.py 53
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 127
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 178
+analyze C:\StockApp\modules\forex\forex_sentiment_engine.py 27
+build C:\StockApp\modules\forex\forex_command_center_engine.py 55
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 127
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+render_forex_trading_desk_dashboard C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 77
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 191
+analyze C:\StockApp\modules\forex\forex_sentiment_engine.py 27
+build C:\StockApp\modules\forex\forex_command_center_engine.py 55
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 127
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+render_forex_trading_desk_dashboard C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 77
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 204
+analyze C:\StockApp\modules\forex\forex_sentiment_engine.py 27
+build C:\StockApp\modules\forex\forex_command_center_engine.py 55
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 127
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+render_forex_trading_desk_dashboard C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 77
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 217
+analyze C:\StockApp\modules\forex\forex_sentiment_engine.py 27
+build C:\StockApp\modules\forex\forex_command_center_engine.py 55
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 127
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+render_forex_trading_desk_dashboard C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 77
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 178
+generate_trade_plan C:\StockApp\modules\forex\forex_strategy_engine.py 12
+run C:\StockApp\modules\forex\forex_strategy_lab.py 14
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 32
+dashboard C:\StockApp\modules\forex\forex_execution_center.py 92
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 128
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 191
+generate_trade_plan C:\StockApp\modules\forex\forex_strategy_engine.py 12
+run C:\StockApp\modules\forex\forex_strategy_lab.py 14
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 32
+dashboard C:\StockApp\modules\forex\forex_execution_center.py 92
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 128
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 204
+generate_trade_plan C:\StockApp\modules\forex\forex_strategy_engine.py 12
+run C:\StockApp\modules\forex\forex_strategy_lab.py 14
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 32
+dashboard C:\StockApp\modules\forex\forex_execution_center.py 92
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 128
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 217
+generate_trade_plan C:\StockApp\modules\forex\forex_strategy_engine.py 12
+run C:\StockApp\modules\forex\forex_strategy_lab.py 14
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 32
+dashboard C:\StockApp\modules\forex\forex_execution_center.py 92
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 128
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 178
+analyze C:\StockApp\modules\forex\forex_sentiment_engine.py 27
+generate_trade_plan C:\StockApp\modules\forex\forex_strategy_engine.py 12
+run C:\StockApp\modules\forex\forex_strategy_lab.py 14
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 32
+dashboard C:\StockApp\modules\forex\forex_execution_center.py 92
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 191
+analyze C:\StockApp\modules\forex\forex_sentiment_engine.py 27
+generate_trade_plan C:\StockApp\modules\forex\forex_strategy_engine.py 12
+run C:\StockApp\modules\forex\forex_strategy_lab.py 14
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 32
+dashboard C:\StockApp\modules\forex\forex_execution_center.py 92
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 204
+analyze C:\StockApp\modules\forex\forex_sentiment_engine.py 27
+generate_trade_plan C:\StockApp\modules\forex\forex_strategy_engine.py 12
+run C:\StockApp\modules\forex\forex_strategy_lab.py 14
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 32
+dashboard C:\StockApp\modules\forex\forex_execution_center.py 92
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 217
+analyze C:\StockApp\modules\forex\forex_sentiment_engine.py 27
+generate_trade_plan C:\StockApp\modules\forex\forex_strategy_engine.py 12
+run C:\StockApp\modules\forex\forex_strategy_lab.py 14
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 32
+dashboard C:\StockApp\modules\forex\forex_execution_center.py 92
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 178
+optimize C:\StockApp\modules\forex\forex_portfolio_optimizer.py 15
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 38
+dashboard C:\StockApp\modules\forex\forex_execution_center.py 92
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 128
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 191
+optimize C:\StockApp\modules\forex\forex_portfolio_optimizer.py 15
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 38
+dashboard C:\StockApp\modules\forex\forex_execution_center.py 92
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 128
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 204
+optimize C:\StockApp\modules\forex\forex_portfolio_optimizer.py 15
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 38
+dashboard C:\StockApp\modules\forex\forex_execution_center.py 92
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 128
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 217
+optimize C:\StockApp\modules\forex\forex_portfolio_optimizer.py 15
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 38
+dashboard C:\StockApp\modules\forex\forex_execution_center.py 92
+dashboard C:\StockApp\modules\forex\forex_trading_desk.py 128
+render C:\StockApp\modules\forex\forex_trading_desk_dashboard.py 21
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 178
+command_center_payload C:\StockApp\modules\forex\forex_alpha_model.py 280
+build C:\StockApp\modules\forex\forex_command_center_engine.py 50
+get_command_center C:\StockApp\modules\forex\forex_service.py 461
+morning_brief C:\StockApp\modules\forex\forex_ai_orchestrator.py 14
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 44
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 191
+command_center_payload C:\StockApp\modules\forex\forex_alpha_model.py 280
+build C:\StockApp\modules\forex\forex_command_center_engine.py 50
+get_command_center C:\StockApp\modules\forex\forex_service.py 461
+morning_brief C:\StockApp\modules\forex\forex_ai_orchestrator.py 14
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 44
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 204
+command_center_payload C:\StockApp\modules\forex\forex_alpha_model.py 280
+build C:\StockApp\modules\forex\forex_command_center_engine.py 50
+get_command_center C:\StockApp\modules\forex\forex_service.py 461
+morning_brief C:\StockApp\modules\forex\forex_ai_orchestrator.py 14
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 44
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 217
+command_center_payload C:\StockApp\modules\forex\forex_alpha_model.py 280
+build C:\StockApp\modules\forex\forex_command_center_engine.py 50
+get_command_center C:\StockApp\modules\forex\forex_service.py 461
+morning_brief C:\StockApp\modules\forex\forex_ai_orchestrator.py 14
+snapshot C:\StockApp\modules\forex\forex_institutional_workspace.py 44
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 178
+_run_alpha C:\StockApp\modules\forex\forex_institutional_scanner.py 92
+scan C:\StockApp\modules\forex\forex_institutional_scanner.py 33
+build C:\StockApp\modules\forex\forex_command_center_engine.py 53
+get_command_center C:\StockApp\modules\forex\forex_service.py 461
+morning_brief C:\StockApp\modules\forex\forex_ai_orchestrator.py 14
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 191
+_run_alpha C:\StockApp\modules\forex\forex_institutional_scanner.py 92
+scan C:\StockApp\modules\forex\forex_institutional_scanner.py 33
+build C:\StockApp\modules\forex\forex_command_center_engine.py 53
+get_command_center C:\StockApp\modules\forex\forex_service.py 461
+morning_brief C:\StockApp\modules\forex\forex_ai_orchestrator.py 14
+================================================================================
+================================================================================
+run_alpha_model C:\StockApp\modules\forex\forex_alpha_model.py 204
+_run_alpha C:\StockApp\modules\forex\forex_institutional_scanner.py 92
+scan C:\StockApp\modules\forex\forex_institutional_scanner.py 33
+build C:\StockApp\modules\forex\forex_command_center_engine.py 53
+get_command_center C:\StockApp\modules\forex\forex_service.py 461
+morning_brief C:\StockApp\modules\forex\forex_ai_orchestrator.py 14
+================================================================================

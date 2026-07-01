@@ -10,11 +10,27 @@ class ForexAIAssistant:
         self.lab=get_forex_strategy_lab(db=db)
         self.optimizer=get_forex_portfolio_optimizer(db=db)
 
-    def daily_briefing(self):
+
+    def daily_briefing(self,
+            runtime=None,
+            force_refresh=False,):
         return {
-            "generated_at":datetime.now(timezone.utc).isoformat(),
-            "strategy_lab":self.lab.run(),
-            "portfolio_plan":self.optimizer.optimize(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+
+            "strategy_lab": self.lab.run(
+                runtime=runtime,
+                force_refresh=force_refresh,
+            ),
+
+            "portfolio_plan": self.optimizer.optimize(
+                runtime=runtime,
+                force_refresh=force_refresh,
+            ),
+
+            #
+            # Sprint 25 Runtime Diagnostics
+            #
+            "runtime": runtime.summary() if runtime else {},
         }
 
     def execute(self, portfolio_id=None, user_id=None, tenant_id=None):

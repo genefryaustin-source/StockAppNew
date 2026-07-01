@@ -39,13 +39,48 @@ class ForexCarryTradeEngine:
     def __init__(self):
         self.price_service=get_forex_price_service() if get_forex_price_service else None
 
-    def analyze(self,pairs:List[str]|None=None,force_refresh=False)->Dict:
-        pairs=pairs or PAIRS
-        quotes={}
-        if self.price_service:
-            quotes=self.price_service.get_quotes(pairs,force_refresh=force_refresh)
+    def analyze(
+            self,
+            pairs=None,
+            runtime=None,
+            force_refresh=False,
+    ):
+        pairs = pairs or PAIRS
 
-        rows=[]
+        if (
+                runtime is not None
+                and hasattr(runtime, "quotes")
+                and isinstance(runtime.quotes, dict)
+                and runtime.quotes
+        ):
+            quotes = runtime.quotes
+
+            print("=" * 80)
+            print("CARRY QUOTE SOURCE")
+            print("runtime")
+            print("=" * 80)
+            print("=" * 80)
+            print("CARRY USING RUNTIME QUOTES")
+            print("runtime id:", id(runtime))
+            print("quote count:", len(quotes))
+            print("=" * 80)
+
+        elif self.price_service:
+            print("=" * 80)
+            print("CARRY QUOTE SOURCE")
+            print("price_service")
+            print("=" * 80)
+
+            quotes = self.price_service.get_quotes(
+                pairs,
+                runtime=runtime,
+                force_refresh=force_refresh,
+            )
+
+        else:
+            quotes = {}
+
+        rows = []
         for pair in pairs:
             b,q=_split(pair)
             carry=POLICY_RATE_PROXY.get(b,0)-POLICY_RATE_PROXY.get(q,0)

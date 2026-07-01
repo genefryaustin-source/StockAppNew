@@ -17,7 +17,9 @@ import math
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-
+from modules.forex.forex_portfolio_cache import (
+    get_forex_portfolio_cache,
+)
 try:
     from sqlalchemy import text
 except Exception:
@@ -108,7 +110,8 @@ class ForexPortfolioManager:
         self.starting_cash = float(starting_cash or DEFAULT_STARTING_CASH)
         self.price_service = get_forex_price_service() if get_forex_price_service else None
         self.alpha_model = get_forex_alpha_model() if get_forex_alpha_model else None
-
+        self._tables_ready = False
+        self.cache = get_forex_portfolio_cache()
     # ------------------------------------------------------------------
     # Database
     # ------------------------------------------------------------------
@@ -117,52 +120,92 @@ class ForexPortfolioManager:
         if self.db is None or text is None:
             return
 
-        self.db.execute(text("""
-            CREATE TABLE IF NOT EXISTS forex_positions (
-                id SERIAL PRIMARY KEY,
-                tenant_id VARCHAR(100),
-                portfolio_id VARCHAR(100),
-                user_id VARCHAR(100),
-                pair VARCHAR(20) NOT NULL,
-                side VARCHAR(20) NOT NULL,
-                units DOUBLE PRECISION NOT NULL,
-                avg_price DOUBLE PRECISION NOT NULL,
-                opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                status VARCHAR(50) DEFAULT 'OPEN'
-            )
-        """))
+        if self._tables_ready:
+            return
 
-        self.db.execute(text("""
-            CREATE TABLE IF NOT EXISTS forex_orders (
-                id SERIAL PRIMARY KEY,
-                tenant_id VARCHAR(100),
-                portfolio_id VARCHAR(100),
-                user_id VARCHAR(100),
-                pair VARCHAR(20) NOT NULL,
-                side VARCHAR(20) NOT NULL,
-                order_type VARCHAR(30) DEFAULT 'market',
-                units DOUBLE PRECISION NOT NULL,
-                requested_price DOUBLE PRECISION,
-                filled_price DOUBLE PRECISION,
-                status VARCHAR(50) DEFAULT 'paper_filled',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                filled_at TIMESTAMP
-            )
-        """))
+        try:
+            self.db.execute(text("""
+                CREATE TABLE IF NOT EXISTS forex_positions (
+                    id SERIAL PRIMARY KEY,
+                    tenant_id VARCHAR(100),
+                    portfolio_id VARCHAR(100),
+                    user_id VARCHAR(100),
+                    pair VARCHAR(20) NOT NULL,
+                    side VARCHAR(20) NOT NULL,
+                    units DOUBLE PRECISION NOT NULL,
+                    avg_price DOUBLE PRECISION NOT NULL,
+                    opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    status VARCHAR(50) DEFAULT 'OPEN'
+                )
+            """))
 
-        self.db.commit()
+            self.db.execute(text("""
+                CREATE TABLE IF NOT EXISTS forex_orders (
+                    id SERIAL PRIMARY KEY,
+                    tenant_id VARCHAR(100),
+                    portfolio_id VARCHAR(100),
+                    user_id VARCHAR(100),
+                    pair VARCHAR(20) NOT NULL,
+                    side VARCHAR(20) NOT NULL,
+                    order_type VARCHAR(30) DEFAULT 'market',
+                    units DOUBLE PRECISION NOT NULL,
+                    requested_price DOUBLE PRECISION,
+                    filled_price DOUBLE PRECISION,
+                    status VARCHAR(50) DEFAULT 'paper_filled',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    filled_at TIMESTAMP
+                )
+            """))
+
+
+
+
+
+            self.db.commit()
+            self._tables_ready = True
+        except Exception as exc:
+            print("=" * 80)
+            print("PortfolioManager.ensure_tables FAILED")
+            print(exc)
+
+            import traceback
+            traceback.print_exc()
+
+            if self.db is not None:
+                self.db.rollback()
+
+            raise
 
     def load_positions(
-        self,
-        portfolio_id: Optional[str] = None,
-        user_id: Optional[str] = None,
-        tenant_id: Optional[str] = None,
+            self,
+            portfolio_id: Optional[str] = None,
+            user_id: Optional[str] = None,
+            tenant_id: Optional[str] = None,
+            force_refresh: bool = False,
     ) -> List[Dict[str, Any]]:
         if self.db is None or text is None:
             return []
 
         self.ensure_tables()
+        #
+        # Sprint 26 Portfolio Cache
+        #
+        print("=" * 80)
+        print("LOAD_POSITIONS (CACHE)")
+        cached = self.cache.get_positions(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+        )
+
+        if cached is not None and not force_refresh:
+
+            print("POSITION CACHE HIT")
+
+            return cached
+
+        print("POSITION CACHE MISS")
 
         where = ["status = 'OPEN'"]
         params = {}
@@ -179,14 +222,67 @@ class ForexPortfolioManager:
             where.append("tenant_id = :tenant_id")
             params["tenant_id"] = str(tenant_id)
 
-        rows = self.db.execute(text(f"""
-            SELECT *
-            FROM forex_positions
-            WHERE {' AND '.join(where)}
-            ORDER BY updated_at DESC
-        """), params).fetchall()
+        print("=" * 80)
+        print("LOAD_POSITIONS (DATABASE)")
+        print("Checking database session...")
 
-        return [dict(r._mapping) for r in rows]
+        try:
+            # Clears any previous failed transaction
+            self.db.rollback()
+
+            # Tests whether the connection is still alive
+            self.db.execute(text("SELECT 1"))
+
+            print("SESSION OK")
+
+        except Exception as exc:
+            print("SESSION DEAD")
+            print(type(exc))
+            print(exc)
+
+            import traceback
+            traceback.print_exc()
+
+            raise
+
+        print("Running forex_positions query...")
+        import time
+
+        age = time.time() - getattr(self.db, "_created_at", time.time())
+
+        print(f"SESSION AGE: {age:.1f} seconds")
+        rows = self.db.execute(
+            text(f"""
+                SELECT *
+                FROM forex_positions
+                WHERE {' AND '.join(where)}
+                ORDER BY updated_at DESC
+            """),
+            params,
+        ).fetchall()
+        import time
+
+        age = time.time() - getattr(self.db, "_created_at", time.time())
+
+        print(f"SESSION AGE: {age:.1f} seconds")
+        print(f"Retrieved {len(rows)} positions")
+
+        positions = [
+            dict(r._mapping)
+            for r in rows
+        ]
+
+        #
+        # Store for future requests
+        #
+        self.cache.set_positions(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+            positions=positions,
+        )
+
+        return positions
 
     def save_position(
         self,
@@ -247,7 +343,23 @@ class ForexPortfolioManager:
             "updated_at": now,
         })
 
-        self.db.commit()
+        try:
+
+            # multiple related INSERT/UPDATE/DELETE statements
+
+            self.db.commit()
+            self.cache.invalidate_portfolio(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                portfolio_id=portfolio_id,
+            )
+
+        except Exception:
+
+            if self.db is not None:
+                self.db.rollback()
+
+            raise
 
         return {
             "status": "saved",
@@ -273,6 +385,7 @@ class ForexPortfolioManager:
             portfolio_id=portfolio_id,
             user_id=user_id,
             tenant_id=tenant_id,
+            force_refresh=force_refresh,
         )
 
         pairs = [normalize_pair(p.get("pair")) for p in positions if p.get("pair")]
@@ -334,13 +447,53 @@ class ForexPortfolioManager:
         tenant_id: Optional[str] = None,
         force_refresh: bool = False,
     ) -> Dict[str, Any]:
-        marked = self.mark_positions(
-            positions=positions,
-            portfolio_id=portfolio_id,
-            user_id=user_id,
+        #
+        # Sprint 26 Portfolio Summary Cache
+        #
+        cached = self.cache.get_summary(
             tenant_id=tenant_id,
-            force_refresh=force_refresh,
+            user_id=user_id,
+            portfolio_id=portfolio_id,
         )
+
+        if cached is not None and not force_refresh:
+            print("PORTFOLIO SUMMARY CACHE HIT")
+
+            return cached
+
+        print("PORTFOLIO SUMMARY CACHE MISS")
+        try:
+            if positions is None:
+
+                marked = self.mark_positions(
+                    portfolio_id=portfolio_id,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    force_refresh=force_refresh,
+                )
+
+            else:
+
+                marked = positions
+
+        except Exception as exc:
+            print("=" * 80)
+            print("PORTFOLIO SUMMARY FAILED")
+            print(type(exc))
+            print(exc)
+
+            import traceback
+            traceback.print_exc()
+
+            if self.db is not None:
+
+                try:
+                    self.db.rollback()
+                    print("ROLLBACK COMPLETED")
+                except Exception as rb:
+                    print("ROLLBACK FAILED:", rb)
+
+            raise
 
         total_notional = sum(safe_float(p.get("notional")) for p in marked)
         total_pnl = sum(safe_float(p.get("unrealized_pnl")) for p in marked)
@@ -349,7 +502,7 @@ class ForexPortfolioManager:
 
         exposure = self.currency_exposure(marked)
 
-        return {
+        summary = {
             "generated_at": utc_now_iso(),
             "account_currency": self.account_currency,
             "positions": marked,
@@ -359,12 +512,30 @@ class ForexPortfolioManager:
                 "unrealized_pnl": round(total_pnl, 2),
                 "winners": winners,
                 "losers": losers,
-                "win_rate": round(winners / max(len(marked), 1) * 100.0, 2),
-                "gross_exposure": round(sum(abs(safe_float(p.get("market_value"))) for p in marked), 2),
+                "win_rate": round(
+                    winners / max(len(marked), 1) * 100.0,
+                    2,
+                ),
+                "gross_exposure": round(
+                    sum(
+                        abs(safe_float(p.get("market_value")))
+                        for p in marked
+                    ),
+                    2,
+                ),
             },
             "currency_exposure": exposure,
             "risk": self.risk_metrics(marked),
         }
+
+        self.cache.set_summary(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+            summary=summary,
+        )
+
+        return summary
 
     def currency_exposure(self, marked_positions: List[Dict[str, Any]]) -> Dict[str, float]:
         exposure: Dict[str, float] = {}

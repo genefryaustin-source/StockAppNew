@@ -178,17 +178,35 @@ class ForexCurrencyStrengthEngine:
     # ------------------------------------------------------------------
 
     def scan_currencies(
-        self,
-        currencies: Optional[List[str]] = None,
-        pairs: Optional[List[str]] = None,
-        force_refresh: bool = False,
-        save: bool = False,
-        db=None,
+            self,
+            currencies: Optional[List[str]] = None,
+            pairs: Optional[List[str]] = None,
+            quotes: Optional[Dict[str, Dict[str, Any]]] = None,
+            force_refresh: bool = False,
+            save: bool = False,
+            db=None,
     ) -> Dict[str, Any]:
-        currencies = [str(c).upper()[:3] for c in (currencies or self.currencies)]
-        pairs = [normalize_pair(p) for p in (pairs or self.pairs)]
 
-        quotes = self._load_quotes(pairs, force_refresh=force_refresh)
+        currencies = [
+            str(c).upper()[:3]
+            for c in (currencies or self.currencies)
+        ]
+
+        pairs = [
+            normalize_pair(p)
+            for p in (pairs or self.pairs)
+        ]
+
+        #
+        # Sprint 27
+        # Avoid downloading the same quote set twice.
+        #
+        if quotes is None:
+            quotes = self._load_quotes(
+                pairs,
+                force_refresh=force_refresh,
+            )
+
         currency_rows, pair_rows, matrix = self._calculate_strength(
             currencies=currencies,
             pairs=pairs,
@@ -210,45 +228,66 @@ class ForexCurrencyStrengthEngine:
         return payload
 
     def get_currency_strength(
-        self,
-        currency: str,
-        force_refresh: bool = False,
+            self,
+            currency: str,
+            quotes: Optional[Dict[str, Dict[str, Any]]] = None,
+            force_refresh: bool = False,
     ) -> Dict[str, Any]:
-        scan = self.scan_currencies(force_refresh=force_refresh)
+
+        scan = self.scan_currencies(
+            quotes=quotes,
+            force_refresh=force_refresh,
+        )
+
         target = str(currency or "").upper()[:3]
+
         for row in scan["currency_strength"]:
             if row["currency"] == target:
                 return row
+
         return {
             "currency": target,
             "error": "Currency not found in strength universe.",
         }
 
     def get_pair_bias(
-        self,
-        pair: str,
-        force_refresh: bool = False,
+            self,
+            pair: str,
+            quotes: Optional[Dict[str, Dict[str, Any]]] = None,
+            force_refresh: bool = False,
     ) -> Dict[str, Any]:
+
         pair = normalize_pair(pair)
+
         scan = self.scan_currencies(
             pairs=list(dict.fromkeys(self.pairs + [pair])),
+            quotes=quotes,
             force_refresh=force_refresh,
         )
+
         for row in scan["pair_strength"]:
             if row["pair"] == pair:
                 return row
+
         return {
             "pair": pair,
             "error": "Pair not found in strength scan.",
         }
 
     def top_opportunities(
-        self,
-        limit: int = 10,
-        force_refresh: bool = False,
+            self,
+            limit: int = 10,
+            quotes: Optional[Dict[str, Dict[str, Any]]] = None,
+            force_refresh: bool = False,
     ) -> List[Dict[str, Any]]:
-        scan = self.scan_currencies(force_refresh=force_refresh)
+
+        scan = self.scan_currencies(
+            quotes=quotes,
+            force_refresh=force_refresh,
+        )
+
         rows = list(scan.get("pair_strength", []))
+
         rows.sort(
             key=lambda r: (
                 abs(safe_float(r.get("differential"))),
@@ -256,16 +295,33 @@ class ForexCurrencyStrengthEngine:
             ),
             reverse=True,
         )
+
         return rows[: int(limit)]
 
     def command_center_payload(
-        self,
-        force_refresh: bool = False,
+            self,
+            quotes: Optional[Dict[str, Dict[str, Any]]] = None,
+            force_refresh: bool = False,
     ) -> Dict[str, Any]:
-        scan = self.scan_currencies(force_refresh=force_refresh)
+
+        scan = self.scan_currencies(
+            quotes=quotes,
+            force_refresh=force_refresh,
+        )
+
         strongest = scan.get("strongest_currency")
         weakest = scan.get("weakest_currency")
-        opportunities = self.top_opportunities(limit=5, force_refresh=False)
+
+        #
+        # Sprint 27
+        # Reuse the existing quote map instead of triggering
+        # another quote download.
+        #
+        opportunities = self.top_opportunities(
+            limit=5,
+            quotes=quotes,
+            force_refresh=False,
+        )
 
         return {
             "status": scan.get("status"),

@@ -26,18 +26,52 @@ class ForexInstitutionalTerminal:
     def dashboard_view(self):
         return self.dashboard.render() if hasattr(self.dashboard, "render") else self.dashboard
 
-    def snapshot(self):
+    def snapshot(
+            self,
+            db=None,
+            refresh=False,
+    ):
+        market = self.market_overview()
+
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "terminal": "Institutional",
+
             "status": "READY",
-            "portfolio": self.portfolio.portfolio_summary() if hasattr(self.portfolio, "portfolio_summary") else {},
+
+            "market_overview": market,
+
+            "terminal": {
+                "name": "Institutional",
+                "status": "READY",
+                "market_overview": market,
+            },
+
+            "portfolio": (
+                self.portfolio.portfolio_summary()
+                if hasattr(self.portfolio, "portfolio_summary")
+                else {}
+            ),
         }
 
     def market_overview(self):
         return {
             "status": "READY",
             "workspace": "Market Overview",
+
+            "market_regime": "RISK-OFF",
+            "macro_score": 78,
+            "risk_appetite": "Low",
+            "liquidity": "Constrained",
+
+            "provider_health": {},
+
+            "alerts": [],
+
+            "economic_calendar": [],
+
+            "ai_summary": "",
+
+            "execution_health": {},
         }
 
     def trading_workspace(self):

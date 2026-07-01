@@ -233,6 +233,7 @@ def ensure_default_bootstrap(session) -> None:
 
 
 # Main DB session for this Streamlit run only. Do not cache this object.
+
 db = new_db_session()
 try:
     db = ensure_live_session(db)
@@ -240,7 +241,9 @@ except Exception as e:
     st.error(f"Database connection failed: {e}")
     st.exception(e)
     st.stop()
+import time
 
+db._created_at = time.time()
 try:
     # --------------------------------------------------
     # Provider Health Initialization
@@ -1145,6 +1148,11 @@ try:
         try:
             from modules.forex.forex_master_workspace import render_forex_master_workspace
 
+            print("=" * 80)
+            print("APP.PY FOREX ENTRY")
+            print("USER =", user)
+            print("USER TYPE =", type(user))
+            print("=" * 80)
             run_page(
                 "Forex",
                 render_forex_master_workspace,

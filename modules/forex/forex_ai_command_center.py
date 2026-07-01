@@ -14,12 +14,17 @@ class ForexAICommandCenter:
     def __init__(self, db: Optional[Any] = None):
         self.db = db
 
+
     def briefing(self, **kwargs) -> Dict[str, Any]:
+        print("AI CC: creating assistant")
         from modules.forex.forex_ai_trade_assistant import get_forex_ai_trade_assistant
 
         assistant = get_forex_ai_trade_assistant(db=self.db)
+        print("AI CC: assistant created")
         candidates = assistant.generate_candidates(limit=5)
+        print("AI CC: candidates generated")
         top = candidates[0] if candidates else {}
+        print("AI CC: returning payload")
 
         return {
             "status": "READY",

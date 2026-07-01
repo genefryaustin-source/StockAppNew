@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
-
+from sqlalchemy import text
 try:
     from modules.forex.forex_service import ForexService, get_forex_service, normalize_pair, split_pair
     from modules.forex.forex_ai import ForexAIEngine, get_forex_ai_engine
@@ -311,7 +311,7 @@ class ForexTradeAttributionEngine:
         if self.db is None:
             return
 
-        self.db.execute(
+        self.db.execute(text(
             """
             INSERT INTO forex_trade_attribution (
                 tenant_id, user_id, portfolio_id, order_id, trade_id, pair,
@@ -323,7 +323,7 @@ class ForexTradeAttributionEngine:
                 :signal_id, :recommendation, :confidence, :composite_score,
                 :payload, :created_at
             )
-            """,
+            """),
             {
                 "tenant_id": tenant_id,
                 "user_id": user_id,
@@ -388,7 +388,7 @@ class ForexTradingEngine:
         if self.db is None:
             return
 
-        self.db.execute(
+        self.db.execute(text(
             """
             CREATE TABLE IF NOT EXISTS forex_orders (
                 order_id VARCHAR(64) PRIMARY KEY,
@@ -425,9 +425,9 @@ class ForexTradingEngine:
                 cancelled_at TIMESTAMP WITHOUT TIME ZONE
             )
             """
-        )
+        ))
 
-        self.db.execute(
+        self.db.execute(text(
             """
             CREATE TABLE IF NOT EXISTS forex_trades (
                 trade_id VARCHAR(64) PRIMARY KEY,
@@ -452,9 +452,9 @@ class ForexTradingEngine:
                 closed_at TIMESTAMP WITHOUT TIME ZONE
             )
             """
-        )
+        ))
 
-        self.db.execute(
+        self.db.execute(text(
             """
             CREATE TABLE IF NOT EXISTS forex_trade_executions (
                 execution_id VARCHAR(64) PRIMARY KEY,
@@ -470,9 +470,9 @@ class ForexTradingEngine:
                 executed_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
             """
-        )
+        ))
 
-        self.db.execute(
+        self.db.execute(text(
             """
             CREATE TABLE IF NOT EXISTS forex_trade_attribution (
                 id SERIAL PRIMARY KEY,
@@ -490,9 +490,9 @@ class ForexTradingEngine:
                 created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
             """
-        )
+        ))
 
-        self.db.execute(
+        self.db.execute(text(
             """
             CREATE TABLE IF NOT EXISTS forex_trade_audit_log (
                 id SERIAL PRIMARY KEY,
@@ -508,14 +508,14 @@ class ForexTradingEngine:
                 created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
             """
-        )
+        ))
 
-        self.db.execute(
+        self.db.execute(text(
             "CREATE INDEX IF NOT EXISTS idx_forex_orders_tenant_account ON forex_orders (tenant_id, account_id)"
-        )
-        self.db.execute(
+        ))
+        self.db.execute(text(
             "CREATE INDEX IF NOT EXISTS idx_forex_trades_tenant_account ON forex_trades (tenant_id, account_id)"
-        )
+        ))
 
         if hasattr(self.db, "commit"):
             self.db.commit()
@@ -765,7 +765,7 @@ class ForexTradingEngine:
             return
 
         self.ensure_tables()
-        self.db.execute(
+        self.db.execute(text(
             """
             INSERT INTO forex_orders (
                 order_id, tenant_id, user_id, portfolio_id, account_id, pair, side,
@@ -809,7 +809,7 @@ class ForexTradingEngine:
                 "filled_at": _naive(order.filled_at),
                 "cancelled_at": _naive(order.cancelled_at),
             },
-        )
+        ))
         if hasattr(self.db, "commit"):
             self.db.commit()
 
@@ -847,7 +847,7 @@ class ForexTradingEngine:
 
         if self.db is not None:
             self.ensure_tables()
-            self.db.execute(
+            self.db.execute(text(
                 """
                 INSERT INTO forex_trades (
                     trade_id, order_id, tenant_id, user_id, portfolio_id, account_id,
@@ -874,7 +874,7 @@ class ForexTradingEngine:
                     "opened_at": _naive(trade.opened_at),
                     "closed_at": _naive(trade.closed_at),
                 },
-            )
+            ))
             if hasattr(self.db, "commit"):
                 self.db.commit()
 
@@ -885,7 +885,7 @@ class ForexTradingEngine:
             return
 
         self.ensure_tables()
-        self.db.execute(
+        self.db.execute(text(
             """
             INSERT INTO forex_trade_executions (
                 execution_id, order_id, trade_id, pair, side, units, price,
@@ -901,7 +901,7 @@ class ForexTradingEngine:
                 "raw_payload": _json(execution.raw),
                 "executed_at": _naive(execution.executed_at),
             },
-        )
+        ))
         if hasattr(self.db, "commit"):
             self.db.commit()
 
@@ -920,7 +920,7 @@ class ForexTradingEngine:
             return
 
         self.ensure_tables()
-        self.db.execute(
+        self.db.execute(text(
             """
             INSERT INTO forex_trade_audit_log (
                 tenant_id, user_id, portfolio_id, account_id, order_id, trade_id,
@@ -946,7 +946,7 @@ class ForexTradingEngine:
                 }),
                 "created_at": _naive(_utc_now()),
             },
-        )
+        ))
         if hasattr(self.db, "commit"):
             self.db.commit()
 
@@ -954,14 +954,14 @@ class ForexTradingEngine:
         if self.db is None:
             return None
 
-        row = self.db.execute(
+        row = self.db.execute(text(
             """
             SELECT *
             FROM forex_orders
             WHERE tenant_id = :tenant_id
               AND order_id = :order_id
             LIMIT 1
-            """,
+            """),
             {"tenant_id": self.tenant_id, "order_id": order_id},
         ).fetchone()
 
@@ -982,14 +982,14 @@ class ForexTradingEngine:
             where += " AND status = :status"
             params["status"] = status
 
-        rows = self.db.execute(
+        rows = self.db.execute(text(
             f"""
             SELECT *
             FROM forex_orders
             WHERE {where}
             ORDER BY created_at DESC
             LIMIT :limit
-            """,
+            """),
             params,
         ).fetchall()
 
@@ -999,14 +999,14 @@ class ForexTradingEngine:
         if self.db is None:
             return None
 
-        row = self.db.execute(
+        row = self.db.execute(text(
             """
             SELECT *
             FROM forex_trades
             WHERE tenant_id = :tenant_id
               AND trade_id = :trade_id
             LIMIT 1
-            """,
+            """),
             {"tenant_id": self.tenant_id, "trade_id": trade_id},
         ).fetchone()
 
@@ -1027,14 +1027,14 @@ class ForexTradingEngine:
             where += " AND status = :status"
             params["status"] = status
 
-        rows = self.db.execute(
+        rows = self.db.execute(text(
             f"""
             SELECT *
             FROM forex_trades
             WHERE {where}
             ORDER BY opened_at DESC
             LIMIT :limit
-            """,
+            """),
             params,
         ).fetchall()
 

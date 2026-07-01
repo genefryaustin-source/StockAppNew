@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-
+from sqlalchemy import text
 try:
     from modules.forex.forex_service import ForexService, get_forex_service, normalize_pair
     from modules.forex.forex_portfolio_engine import ForexPortfolioEngine, get_forex_portfolio_engine
@@ -104,7 +104,7 @@ class ForexTradeManagementEngine:
     def ensure_tables(self) -> None:
         if self.db is None:
             return
-        self.db.execute("""
+        self.db.execute(text("""
             CREATE TABLE IF NOT EXISTS forex_trade_management_alerts (
                 alert_id VARCHAR(80) PRIMARY KEY,
                 tenant_id VARCHAR(100),
@@ -123,8 +123,8 @@ class ForexTradeManagementEngine:
                 raw_payload JSONB,
                 created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
-        """)
-        self.db.execute("""
+        """))
+        self.db.execute(text("""
             CREATE TABLE IF NOT EXISTS forex_trade_management_events (
                 id SERIAL PRIMARY KEY,
                 tenant_id VARCHAR(100),
@@ -137,7 +137,7 @@ class ForexTradeManagementEngine:
                 payload JSONB,
                 created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """))
         if hasattr(self.db, "commit"):
             self.db.commit()
 
@@ -247,7 +247,7 @@ class ForexTradeManagementEngine:
         if self.db is None:
             return
         self.ensure_tables()
-        self.db.execute("""
+        self.db.execute(text("""
             INSERT INTO forex_trade_management_alerts (
                 alert_id, tenant_id, user_id, portfolio_id, account_id, position_id,
                 pair, alert_type, severity, message, current_price, stop_price,
@@ -259,7 +259,7 @@ class ForexTradeManagementEngine:
                 :target_price, :unrealized_pnl, :raw_payload, :created_at
             )
             ON CONFLICT (alert_id) DO NOTHING
-        """, {**alert.to_dict(), "raw_payload": _json(alert.raw), "created_at": _naive(alert.created_at)})
+        """, {**alert.to_dict(), "raw_payload": _json(alert.raw), "created_at": _naive(alert.created_at)}))
         if hasattr(self.db, "commit"):
             self.db.commit()
 
@@ -267,7 +267,7 @@ class ForexTradeManagementEngine:
         if self.db is None:
             return
         self.ensure_tables()
-        self.db.execute("""
+        self.db.execute(text("""
             INSERT INTO forex_trade_management_events (
                 tenant_id, user_id, portfolio_id, account_id, position_id, event_type, message, payload, created_at
             )
@@ -284,7 +284,7 @@ class ForexTradeManagementEngine:
             "message": message,
             "payload": _json(payload),
             "created_at": _naive(_utc_now()),
-        })
+        }))
         if hasattr(self.db, "commit"):
             self.db.commit()
 
@@ -292,12 +292,12 @@ class ForexTradeManagementEngine:
         if self.db is None:
             return []
         self.ensure_tables()
-        rows = self.db.execute("""
+        rows = self.db.execute(text("""
             SELECT * FROM forex_trade_management_alerts
             WHERE tenant_id = :tenant_id
             ORDER BY created_at DESC
             LIMIT :limit
-        """, {"tenant_id": self.tenant_id, "limit": int(limit)}).fetchall()
+        """), {"tenant_id": self.tenant_id, "limit": int(limit)}).fetchall()
         return [
             {
                 "alert_id": getattr(row, "alert_id", None),

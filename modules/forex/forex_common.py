@@ -72,7 +72,24 @@ def default_pairs() -> List[str]:
         "USD/CAD", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY",
         "AUD/JPY", "CAD/JPY", "EUR/CHF", "AUD/NZD", "GBP/CAD",
     ]
+def split_pair(pair: str) -> tuple[str, str]:
+    """
+    Split a forex pair into base and quote currencies.
 
+    Examples:
+        EUR/USD -> ("EUR", "USD")
+        EURUSD  -> ("EUR", "USD")
+    """
+    pair = normalize_pair(pair)
+
+    if "/" in pair:
+        base, quote = pair.split("/", 1)
+        return base, quote
+
+    if len(pair) == 6:
+        return pair[:3], pair[3:]
+
+    return "", ""
 
 def ensure_dir(path: str) -> str:
     os.makedirs(path, exist_ok=True)

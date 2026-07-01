@@ -14,22 +14,22 @@ try:
         ForexService,
         ForexQuote,
         get_forex_service,
-        normalize_pair,
-        split_pair,
-        MAJOR_PAIRS,
-        CROSS_PAIRS,
-    )
-except Exception:
-    from forex_service import (
-        ForexService,
-        ForexQuote,
-        get_forex_service,
-        normalize_pair,
-        split_pair,
         MAJOR_PAIRS,
         CROSS_PAIRS,
     )
 
+    from modules.forex.forex_common import (
+        normalize_pair,
+        split_pair,
+    )
+
+except Exception as e:
+    print("=" * 80)
+    print("FOREX_AI IMPORT FAILURE")
+    print(type(e).__name__)
+    print(e)
+    print("=" * 80)
+    raise
 
 logger = logging.getLogger(__name__)
 
