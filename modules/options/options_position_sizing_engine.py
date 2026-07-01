@@ -39,36 +39,21 @@ def calculate_position_size(
 
 def kelly_fraction(
     win_probability: float,
-    reward_risk_ratio: float,
+    average_win: float,
+    average_loss: float,
 ) -> float:
-    """
-    Kelly Criterion position sizing.
 
-    win_probability:
-        Probability of winning (0-1)
-
-    reward_risk_ratio:
-        Average reward divided by average risk
-
-    Returns:
-        Fraction of capital to allocate.
-    """
-
-    try:
-        p = float(win_probability)
-        b = float(reward_risk_ratio)
-
-        if b <= 0:
-            return 0.0
-
-        q = 1.0 - p
-
-        kelly = (b * p - q) / b
-
-        return round(max(0.0, kelly), 4)
-
-    except Exception:
+    if average_loss <= 0:
         return 0.0
+
+    if average_win <= 0:
+        return 0.0
+
+    b = average_win / average_loss
+
+    kelly = win_probability - ((1.0 - win_probability) / b)
+
+    return max(0.0, min(kelly, 1.0))
 
 def calculate_liquidity_score(chain_data):
     """

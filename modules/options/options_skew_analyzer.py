@@ -5,17 +5,32 @@ import pandas as pd
 
 
 def analyze_skew(surface_report: dict[str, Any], spot: float | None = None) -> dict[str, Any]:
-    rows = surface_report.get("surface") or []
-    if not rows:
+    rows = surface_report.get("surface")
+
+    if rows is None:
         return {"error": "No surface rows for skew analysis"}
-    df = pd.DataFrame(rows)
-    if df.empty or "iv" not in df.columns:
-        return {"error": "No IV rows for skew analysis"}
-    df["iv"] = pd.to_numeric(df["iv"], errors="coerce")
-    df["strike"] = pd.to_numeric(df.get("strike"), errors="coerce")
-    df = df.dropna(subset=["iv", "strike"])
+
+    # Support both DataFrame and legacy list-of-dicts
+    if isinstance(rows, pd.DataFrame):
+        df = rows.copy()
+    else:
+        df = pd.DataFrame(rows)
+
     if df.empty:
-        return {"error": "No valid skew data"}
+        return {"error": "No surface rows for skew analysis"}
+
+    required = {"iv", "strike"}
+    missing = required - set(df.columns)
+    if missing:
+        return {"error": f"Missing required columns: {', '.join(sorted(missing))}"}
+
+    df["iv"] = pd.to_numeric(df["iv"], errors="coerce")
+    df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
+
+    df = df.dropna(subset=["iv", "strike"])
+
+    if df.empty:
+        return {"error": "No valid IV rows after cleaning"}
     calls = df[df["type"].astype(str).str.lower() == "call"]
     puts = df[df["type"].astype(str).str.lower() == "put"]
     call_iv = float(calls["iv"].median()) if not calls.empty else 0.0

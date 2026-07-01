@@ -149,23 +149,84 @@ def render_options_volatility_dashboard(ticker: str):
         st.markdown("#### IV Rank & Percentile")
         st.json({"iv_rank": iv_rank, "iv_percentile": iv_pct})
 
-    with tabs[2]:
-        st.markdown("#### Volatility Surface")
-        surface_rows = report.get("surface", {}).get("surface", [])
-        if surface_rows:
-            df = pd.DataFrame(surface_rows)
-            show = [c for c in ["expiry", "dte", "strike", "type", "iv", "volume", "open_interest"] if c in df.columns]
-            st.dataframe(df[show].sort_values(["dte", "strike", "type"]).head(500), use_container_width=True, hide_index=True)
-            if PLOTLY and {"dte", "strike", "iv"}.issubset(df.columns):
-                try:
-                    piv = df.pivot_table(index="dte", columns="strike", values="iv", aggfunc="mean")
-                    fig = go.Figure(go.Surface(z=(piv.values * 100), x=[str(x) for x in piv.columns], y=[str(y) for y in piv.index]))
-                    fig.update_layout(height=430, title="IV Surface", scene=dict(xaxis_title="Strike", yaxis_title="DTE", zaxis_title="IV %"))
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception as exc:
-                    st.info(f"Surface chart unavailable: {exc}")
-        else:
-            st.info("No surface rows available.")
+    surface_rows = report.get("surface")
+
+    if surface_rows is None:
+        surface_df = pd.DataFrame()
+
+    elif isinstance(surface_rows, pd.DataFrame):
+        surface_df = surface_rows.copy()
+
+    elif isinstance(surface_rows, list):
+        surface_df = pd.DataFrame(surface_rows)
+
+    else:
+        st.error(f"Unexpected surface type: {type(surface_rows)}")
+        return
+
+    if not surface_df.empty:
+
+        df = surface_df.copy()
+
+        show = [
+            c
+            for c in [
+                "expiry",
+                "dte",
+                "strike",
+                "type",
+                "iv",
+                "volume",
+                "open_interest",
+            ]
+            if c in df.columns
+        ]
+
+        st.dataframe(
+            df[show]
+            .sort_values(["dte", "strike", "type"])
+            .head(500),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        if (
+                PLOTLY
+                and {"dte", "strike", "iv"}.issubset(df.columns)
+        ):
+            try:
+                piv = df.pivot_table(
+                    index="dte",
+                    columns="strike",
+                    values="iv",
+                    aggfunc="mean",
+                )
+
+                fig = go.Figure(
+                    go.Surface(
+                        z=piv.values * 100,
+                        x=[str(x) for x in piv.columns],
+                        y=[str(y) for y in piv.index],
+                    )
+                )
+
+                fig.update_layout(
+                    height=430,
+                    title="IV Surface",
+                    scene=dict(
+                        xaxis_title="Strike",
+                        yaxis_title="DTE",
+                        zaxis_title="IV %",
+                    ),
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+            except Exception as exc:
+                st.info(f"Surface chart unavailable: {exc}")
+
+    else:
+        st.info("No surface rows available.")
 
     with tabs[3]:
         st.markdown("#### Volatility Term Structure")
