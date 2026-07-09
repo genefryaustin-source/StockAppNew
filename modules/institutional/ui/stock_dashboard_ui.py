@@ -906,6 +906,10 @@ def _render_multi_timeframe_chart(db, symbol, snapshot=None):
             key=f"mtf_auto_patterns_{symbol}",
         )
 
+    show_signals = st.checkbox(
+        "🎯 AI Buy/Sell/TP signals", value=True, key=f"mtf_signals_{symbol}"
+    )
+
     enabled_patterns = []
     if auto_patterns:
         enabled_patterns = st.multiselect(
@@ -984,6 +988,14 @@ def _render_multi_timeframe_chart(db, symbol, snapshot=None):
     _add_level_lines(fig, levels)
     patterns = _detect_chart_patterns(chart_df, enabled_patterns) if auto_patterns else []
     _add_pattern_annotations(fig, chart_df, patterns)
+
+    if show_signals and len(chart_df) > 30:
+        try:
+            from modules.indicators.signal_suite import compute_signals, add_signal_overlay
+            sig_df = compute_signals(chart_df)
+            add_signal_overlay(fig, sig_df, row=None, col=None, show_ribbon=False)
+        except Exception:
+            pass
 
     fig.update_layout(
         title=f"{symbol} {timeframe_label} with Higher-Timeframe Levels & Auto Patterns",

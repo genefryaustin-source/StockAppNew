@@ -7,6 +7,11 @@ annotated-types==0.7.0
 anthropic>=0.30.0
 anyio==4.13.0
 attrs==26.1.0
+# --- Kronos candlestick foundation model (modules/forecasting/kronos_engine.py) ---
+torch>=2.0.0
+einops==0.8.1
+huggingface_hub==0.33.1
+safetensors==0.6.2
 beautifulsoup4==4.14.3
 blinker==1.9.0
 cachetools==5.5.2

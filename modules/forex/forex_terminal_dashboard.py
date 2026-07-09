@@ -768,6 +768,13 @@ def _demo_chart(pair: str = "EUR/USD"):
         open_.append(o); close.append(c); high.append(max(o,c)+0.00035); low.append(min(o,c)-0.00031)
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=x, open=open_, high=high, low=low, close=close, name=pair))
+    try:
+        import pandas as _pd
+        from modules.indicators.signal_suite import compute_signals, add_signal_overlay
+        sig_df = compute_signals(_pd.DataFrame({"Date": x, "Open": open_, "High": high, "Low": low, "Close": close}))
+        add_signal_overlay(fig, sig_df, row=None, col=None, show_ribbon=False)
+    except Exception:
+        pass
     fig.add_trace(go.Bar(x=x, y=[abs((i % 11)-5)*12+45 for i in x], name="Volume", yaxis="y2", opacity=0.22))
     fig.update_layout(template="plotly_dark", height=430, margin=dict(l=5,r=5,t=28,b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", title=f"{pair} · 1H · Institutional Flow", xaxis_rangeslider_visible=False, yaxis=dict(title="Price"), yaxis2=dict(overlaying="y", side="right", visible=False), legend=dict(orientation="h"))
     return fig

@@ -16,7 +16,13 @@ try:
 except Exception:
     text = None
 
+from modules.execution.execution_service import (
+    get_execution_service,
+)
 
+from modules.forex.forex_portfolio_engine import (
+    get_forex_portfolio_engine,
+)
 class ForexOrderManagementEngine:
 
     def __init__(self, db=None):
@@ -70,14 +76,24 @@ class ForexOrderManagementEngine:
         ).fetchall()
         return [dict(r._mapping) for r in rows]
 
-    def _ensure_table(self) -> None:
+    def _ensure_execution_tables(self) -> None:
+
         if self.db is None or text is None:
             return
+
         try:
-            from modules.forex.forex_terminal_execution_service import (
-                get_forex_terminal_execution_service,
+
+            portfolio_engine = get_forex_portfolio_engine(
+                db=self.db,
             )
-            get_forex_terminal_execution_service(db=self.db).ensure_order_tables()
+
+            execution = get_execution_service(
+                db=self.db,
+                portfolio_engine=portfolio_engine,
+            )
+
+            execution.ensure_order_tables()
+
         except Exception:
             pass
 

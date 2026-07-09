@@ -20,7 +20,23 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 import uuid
+import json
 
+from modules.execution.execution_context_validator import ExecutionContext
+from modules.execution.execution_models import AssetClass, ExecutionActor, ExecutionSource
+from modules.execution.execution_pipeline_factory import (
+    build_execution_pipeline,
+)
+from modules.execution.execution_service import (
+    get_execution_service,
+)
+from modules.execution.execution_service import (
+    get_execution_service,
+)
+
+from modules.forex.forex_portfolio_engine import (
+    get_forex_portfolio_engine,
+)
 try:
     from sqlalchemy import text
 except Exception:
@@ -51,6 +67,10 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     except Exception:
         return default
 
+def _optional_price(value: Any) -> Optional[float]:
+    price = _safe_float(value, default=0.0)
+    return price if price > 0 else None
+
 
 def _normalize_pair(pair: Any) -> str:
     value = str(pair or "").replace("-", "/").replace("_", "/").upper().strip()
@@ -77,8 +97,19 @@ def _now_iso() -> str:
 
 
 class ForexTerminalExecutionService:
-    def __init__(self, db: Optional[Any] = None):
+
+    def __init__(
+        self,
+        db=None,
+        tenant_id=None,
+        user_id=None,
+        portfolio_id=None,
+    ):
         self.db = db
+        self.tenant_id = tenant_id
+        self.user_id = user_id
+        self.portfolio_id = portfolio_id
+        self.execution_service = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -154,10 +185,27 @@ class ForexTerminalExecutionService:
                     user_id=user_id,
                     portfolio_id=portfolio_id,
                 )
+                print("=" * 80)
+                print("LOOKING UP ACCOUNT")
+                print("account_id :", account_id)
+                print("tenant_id  :", tenant_id)
+                print("user_id    :", user_id)
+                print("portfolio  :", portfolio_id)
+                print("=" * 80)
                 account = engine.get_account(account_id=account_id) if account_id else None
+                print("=" * 80)
+                print("GET_ACCOUNT RESULT")
+                print(account)
+                print("=" * 80)
                 if account is None:
                     account = engine.get_or_create_account(portfolio_id=portfolio_id)
-
+                    print("=" * 80)
+                    print("ACCOUNT CREATED/LOADED")
+                    print("tenant_id   :", engine.tenant_id)
+                    print("user_id     :", engine.user_id)
+                    print("portfolio_id:", engine.portfolio_id)
+                    print("account_id  :", account.id)
+                    print("=" * 80)
                 account_payload = account.to_dict() if hasattr(account, "to_dict") else {}
                 account_leverage = _safe_float(leverage or getattr(account, "leverage", 50) or 50, 50)
                 notional = order_units
@@ -234,9 +282,17 @@ class ForexTerminalExecutionService:
         validation = self.validate_order(**kwargs)
 
         if not validation["valid"]:
+            print("=" * 80)
+            print("ORDER VALIDATION")
+            print("VALID   :", validation.get("valid"))
+            print("ERRORS  :", validation.get("errors"))
+            print("WARNINGS:", validation.get("warnings"))
+            print("ACCOUNT :", validation.get("account"))
+            print("MARGIN  :", validation.get("margin"))
+            print("=" * 80)
             return {
                 "status": "REJECTED",
-                "message": "Order validation failed.",
+                "message": "A portfolio must be created or selected before submitting a Forex order.",
                 "validation": validation,
                 "timestamp": _now_iso(),
             }
@@ -257,68 +313,128 @@ class ForexTerminalExecutionService:
             user_id=user_id,
             portfolio_id=portfolio_id,
         )
-
+        print("=" * 80)
+        print("LOOKING UP ACCOUNT")
+        print("account_id :", account_id)
+        print("tenant_id  :", tenant_id)
+        print("user_id    :", user_id)
+        print("portfolio  :", portfolio_id)
+        print("=" * 80)
         account = engine.get_account(account_id=account_id) if account_id else None
+        print("=" * 80)
+        print("GET_ACCOUNT RESULT")
+        print(account)
+        print("=" * 80)
         if account is None:
             account = engine.get_or_create_account(portfolio_id=portfolio_id)
 
         broker_order_id = kwargs.get("broker_order_id") or f"FXP-{uuid.uuid4().hex[:12].upper()}"
 
-        if order_type_norm in {"MARKET", "MKT"}:
-            result = self._execute_market_order(
-                engine=engine,
-                account=account,
-                broker_order_id=broker_order_id,
-                pair=pair_norm,
-                side=side_norm,
-                units=order_units,
-                requested_price=(
-                    _safe_float(kwargs.get("limit_price"))
-                    or _safe_float(kwargs.get("price"))
-                    or _safe_float(kwargs.get("entry_price"))
-                    or None
-                ),
-                stop_price=kwargs.get("stop_price"),
-                target_price=kwargs.get("target_price") if kwargs.get("target_price") is not None else kwargs.get("take_profit"),
-                leverage=kwargs.get("leverage"),
-                broker=broker,
-                raw=kwargs,
-                validation=validation,
-            )
-        else:
-            result = self._persist_open_order(
-                engine=engine,
-                account=account,
-                broker_order_id=broker_order_id,
-                pair=pair_norm,
-                side=side_norm,
-                units=order_units,
-                order_type=order_type_norm,
-                limit_price=kwargs.get("limit_price"),
-                stop_price=kwargs.get("stop_price"),
-                target_price=kwargs.get("target_price") if kwargs.get("target_price") is not None else kwargs.get("take_profit"),
-                risk_pct=kwargs.get("risk_pct"),
-                broker=broker,
-                raw=kwargs,
-                validation=validation,
-            )
-
-        result["validation"] = validation
-        result["verification"] = self.verify_execution(
-            broker_order_id=result.get("broker_order_id"),
-            position_id=result.get("position_id"),
-            account_id=result.get("account_id"),
-            portfolio_id=result.get("portfolio_id"),
+        service = self._get_execution_service(
+            engine,
         )
+        print("=" * 80)
+        print("CONTEXT INPUT")
+        print("requested_price :", kwargs.get("price"))
+        print("stop_price      :", kwargs.get("stop_price"))
+        print("target_price    :", kwargs.get("target_price"))
+        print("take_profit     :", kwargs.get("take_profit"))
+        print("=" * 80)
+
+        requested_price = (
+                _safe_float(kwargs.get("limit_price"))
+                or _safe_float(kwargs.get("price"))
+                or _safe_float(kwargs.get("entry_price"))
+        )
+
+        stop_price = _optional_price(
+            kwargs.get("stop_price")
+        )
+
+        target_price = (
+            _optional_price(kwargs.get("target_price"))
+            if kwargs.get("target_price") is not None
+            else _optional_price(kwargs.get("take_profit"))
+        )
+        context = service.submit(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+            account_id=getattr(account, "id", None),
+            account=account,
+            asset_class="FOREX",
+            pair=pair_norm,
+            symbol=pair_norm.replace("/", ""),
+            side=side_norm,
+            units=order_units,
+            broker=broker,
+            broker_order_id=broker_order_id,
+            requested_price=requested_price,
+            stop_price=stop_price,
+            target_price=target_price,
+            leverage=kwargs.get("leverage"),
+            raw_request=kwargs,
+        )
+
+        context.validation = validation
+
+        result = self._context_to_result(context)
+
+        try:
+            verification = service.verify_execution(context)
+            if verification:
+                result["verification"] = verification
+        except Exception:
+            pass
+
         return result
 
     def verify_execution(
-        self,
-        *,
-        broker_order_id: Optional[str] = None,
-        position_id: Optional[str] = None,
-        account_id: Optional[str] = None,
-        portfolio_id: Optional[str] = None,
+            self,
+            *,
+            broker_order_id: Optional[str] = None,
+            position_id: Optional[str] = None,
+            account_id: Optional[str] = None,
+            portfolio_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Temporary compatibility wrapper.
+
+        Sprint 26:
+            Verification is owned by ExecutionSnapshotPipeline.
+
+        Sprint 27:
+            Remove the legacy implementation once all callers
+            provide an ExecutionContext.
+        """
+
+        pipeline = getattr(self, "execution_pipeline", None)
+
+        if (
+                pipeline is not None
+                and hasattr(pipeline, "snapshot_pipeline")
+                and hasattr(pipeline.snapshot_pipeline, "verify_execution")
+        ):
+            #
+            # We cannot delegate yet because this legacy API receives
+            # IDs instead of an ExecutionContext.
+            #
+            pass
+
+        return self._verify_execution_legacy(
+            broker_order_id=broker_order_id,
+            position_id=position_id,
+            account_id=account_id,
+            portfolio_id=portfolio_id,
+        )
+
+    def _verify_execution_legacy(
+            self,
+            *,
+            broker_order_id: Optional[str] = None,
+            position_id: Optional[str] = None,
+            account_id: Optional[str] = None,
+            portfolio_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         if self.db is None or text is None:
             return {"verified": False, "checks": {"db": False}, "errors": ["Database unavailable."]}
@@ -332,8 +448,21 @@ class ForexTerminalExecutionService:
         }
         errors: List[str] = []
 
+        portfolio_engine = get_forex_portfolio_engine(
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+            portfolio_id=self.portfolio_id,
+            db=self.db,
+        )
+
+        service = get_execution_service(
+            db=self.db,
+            portfolio_engine=portfolio_engine,
+        )
+
         try:
-            self.ensure_order_tables()
+
+            service.get_pipeline().order_repository.ensure_tables()
 
             if broker_order_id:
                 row = self.db.execute(
@@ -395,314 +524,56 @@ class ForexTerminalExecutionService:
         if self.db is None or text is None:
             return {"status": "ERROR", "message": "Database unavailable."}
 
-        self.ensure_order_tables()
-        self.db.execute(
-            text("""
-                UPDATE forex_trade_orders
-                SET status = 'cancelled',
-                    updated_at = :updated_at
-                WHERE broker_order_id = :broker_order_id
-                  AND lower(status) IN ('open','pending','submitted','new')
-            """),
-            {"broker_order_id": broker_order_id, "updated_at": _naive_now()},
+        pipeline = self._get_execution_pipeline(
+            self._portfolio_engine(
+                tenant_id=self.tenant_id,
+                user_id=self.user_id,
+                portfolio_id=self.portfolio_id,
+            )
         )
-        self._commit()
+
+        pipeline.order_repository.cancel_pending_order(
+            broker_order_id=broker_order_id,
+        )
         return {"status": "cancelled", "broker_order_id": broker_order_id, "timestamp": _now_iso()}
 
     # ------------------------------------------------------------------
     # Execution paths
     # ------------------------------------------------------------------
 
-    def _execute_market_order(
-        self,
-        *,
-        engine: Any,
-        account: Any,
-        broker_order_id: str,
-        pair: str,
-        side: str,
-        units: float,
-        requested_price: Optional[float],
-        stop_price: Optional[float],
-        target_price: Optional[float],
-        leverage: Optional[float],
-        broker: str,
-        raw: Dict[str, Any],
-        validation: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        position = engine.open_position(
-            account_id=account.id,
-            pair=pair,
-            side=side,
-            units=units,
-            entry_price=requested_price,
-            stop_price=stop_price,
-            target_price=target_price,
-            leverage=leverage,
-            raw={
-                "broker_order_id": broker_order_id,
-                "broker": broker,
-                "source": "forex_terminal_execution_service",
-                "validation": validation,
-                **(raw or {}),
-            },
-        )
 
-        order_row = {
-            "tenant_id": getattr(engine, "tenant_id", None),
-            "user_id": getattr(engine, "user_id", None),
-            "portfolio_id": position.portfolio_id,
-            "account_id": account.id,
-            "broker": broker,
-            "broker_order_id": broker_order_id,
-            "position_id": position.id,
-            "symbol": _compact_pair(pair),
-            "pair": pair,
-            "side": side,
-            "order_type": "MARKET",
-            "quantity": units,
-            "qty": units,
-            "units": units,
-            "lots": units / 100000.0,
-            "limit_price": requested_price,
-            "stop_price": stop_price,
-            "target_price": target_price,
-            "price": position.avg_entry_price,
-            "avg_fill_price": position.avg_entry_price,
-            "filled_qty": units,
-            "status": "filled",
-            "submitted_at": _naive_now(),
-            "filled_at": _naive_now(),
-            "created_at": _naive_now(),
-            "updated_at": _naive_now(),
-            "notes": "Paper Forex market order filled by terminal execution service.",
-            "raw_payload": {"position": position.to_dict(), "raw": raw, "validation": validation},
-        }
 
-        self._insert_trade_order(order_row)
 
-        snapshot = engine.get_terminal_snapshot(
-            account_id=account.id,
-            portfolio_id=position.portfolio_id,
-            refresh=True,
-            persist=True,
-            include_orders=True,
-            include_history=True,
-        )
-
-        snap_dict = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
-
-        return {
-            "status": "filled",
-            "message": "Paper Forex market order filled.",
-            "broker": broker,
-            "broker_order_id": broker_order_id,
-            "account_id": account.id,
-            "portfolio_id": position.portfolio_id,
-            "position_id": position.id,
-            "pair": pair,
-            "symbol": _compact_pair(pair),
-            "side": side,
-            "units": units,
-            "lots": units / 100000.0,
-            "avg_fill_price": position.avg_entry_price,
-            "filled_qty": units,
-            "submitted_at": _now_iso(),
-            "filled_at": _now_iso(),
-            "position": position.to_dict(),
-            "snapshot": snap_dict,
-            "last_execution": {
-                "broker_order_id": broker_order_id,
-                "pair": pair,
-                "side": side,
-                "units": units,
-                "lots": units / 100000.0,
-                "avg_fill_price": position.avg_entry_price,
-                "status": "filled",
-                "timestamp": _now_iso(),
-            },
-        }
-
-    def _persist_open_order(
-        self,
-        *,
-        engine: Any,
-        account: Any,
-        broker_order_id: str,
-        pair: str,
-        side: str,
-        units: float,
-        order_type: str,
-        limit_price: Optional[float],
-        stop_price: Optional[float],
-        target_price: Optional[float],
-        risk_pct: Optional[float],
-        broker: str,
-        raw: Dict[str, Any],
-        validation: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        row = {
-            "tenant_id": getattr(engine, "tenant_id", None),
-            "user_id": getattr(engine, "user_id", None),
-            "portfolio_id": account.portfolio_id,
-            "account_id": account.id,
-            "broker": broker,
-            "broker_order_id": broker_order_id,
-            "symbol": _compact_pair(pair),
-            "pair": pair,
-            "side": side,
-            "order_type": order_type,
-            "quantity": units,
-            "qty": units,
-            "units": units,
-            "lots": units / 100000.0,
-            "limit_price": limit_price,
-            "stop_price": stop_price,
-            "target_price": target_price,
-            "price": limit_price,
-            "status": "open",
-            "submitted_at": _naive_now(),
-            "created_at": _naive_now(),
-            "updated_at": _naive_now(),
-            "notes": "Paper Forex order staged by terminal execution service.",
-            "raw_payload": {"risk_pct": risk_pct, "raw": raw, "validation": validation},
-        }
-        self._insert_trade_order(row)
-
-        snapshot = engine.get_terminal_snapshot(
-            account_id=account.id,
-            portfolio_id=account.portfolio_id,
-            refresh=True,
-            persist=True,
-            include_orders=True,
-            include_history=True,
-        )
-        snap_dict = snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
-
-        return {
-            "status": "open",
-            "message": "Paper Forex order staged.",
-            "broker": broker,
-            "broker_order_id": broker_order_id,
-            "account_id": account.id,
-            "portfolio_id": account.portfolio_id,
-            "pair": pair,
-            "symbol": _compact_pair(pair),
-            "side": side,
-            "units": units,
-            "lots": units / 100000.0,
-            "order_type": order_type,
-            "snapshot": snap_dict,
-            "last_execution": {
-                "broker_order_id": broker_order_id,
-                "pair": pair,
-                "side": side,
-                "units": units,
-                "lots": units / 100000.0,
-                "status": "open",
-                "timestamp": _now_iso(),
-            },
-        }
 
     # ------------------------------------------------------------------
     # Persistence helpers
     # ------------------------------------------------------------------
 
-    def ensure_order_tables(self) -> None:
-        if self.db is None or text is None:
-            return
 
-        self.db.execute(text("""
-            CREATE TABLE IF NOT EXISTS forex_trade_orders (
-                id SERIAL PRIMARY KEY,
-                tenant_id VARCHAR(100),
-                user_id VARCHAR(100),
-                portfolio_id VARCHAR(100),
-                account_id VARCHAR(64),
-                broker VARCHAR(80),
-                broker_order_id VARCHAR(120),
-                position_id VARCHAR(64),
-                symbol VARCHAR(20),
-                pair VARCHAR(20),
-                side VARCHAR(20),
-                order_type VARCHAR(50),
-                quantity DOUBLE PRECISION,
-                qty DOUBLE PRECISION,
-                units DOUBLE PRECISION,
-                lots DOUBLE PRECISION,
-                limit_price DOUBLE PRECISION,
-                stop_price DOUBLE PRECISION,
-                target_price DOUBLE PRECISION,
-                price DOUBLE PRECISION,
-                avg_fill_price DOUBLE PRECISION,
-                filled_qty DOUBLE PRECISION,
-                status VARCHAR(50),
-                submitted_at TIMESTAMP WITHOUT TIME ZONE,
-                filled_at TIMESTAMP WITHOUT TIME ZONE,
-                cancelled_at TIMESTAMP WITHOUT TIME ZONE,
-                created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                notes TEXT,
-                raw_payload JSONB
-            )
-        """))
 
-        self.db.execute(text("""
-            CREATE INDEX IF NOT EXISTS idx_forex_trade_orders_portfolio_status
-            ON forex_trade_orders (portfolio_id, status)
-        """))
 
-        self.db.execute(text("""
-            CREATE INDEX IF NOT EXISTS idx_forex_trade_orders_broker_order_id
-            ON forex_trade_orders (broker_order_id)
-        """))
 
-        self._commit()
 
-    def _insert_trade_order(self, row: Dict[str, Any]) -> None:
-        if self.db is None or text is None:
-            return
 
-        self.ensure_order_tables()
-        columns = self._table_columns("forex_trade_orders")
-        if not columns:
-            return
 
-        payload = {key: self._coerce_value(value) for key, value in row.items() if key in columns}
-        if not payload:
-            return
 
-        names = list(payload.keys())
-        self.db.execute(
-            text(f"""
-                INSERT INTO forex_trade_orders ({", ".join(names)})
-                VALUES ({", ".join([f":{name}" for name in names])})
-            """),
-            payload,
-        )
-        self._commit()
 
-    def _table_columns(self, table: str) -> List[str]:
-        if self.db is None or text is None:
-            return []
-        try:
-            rows = self.db.execute(
-                text("""
-                    SELECT column_name
-                    FROM information_schema.columns
-                    WHERE table_schema = 'public'
-                      AND table_name = :table
-                """),
-                {"table": table},
-            ).fetchall()
-            return [str(row._mapping["column_name"]) for row in rows]
-        except Exception:
-            return []
 
-    def _coerce_value(self, value: Any) -> Any:
-        if isinstance(value, datetime):
-            return value
-        return value
+    def _context_to_result(
+            self,
+            context: ExecutionContext,
+    ) -> Dict[str, Any]:
+
+        if context is None:
+            return {
+                "status": "ERROR",
+                "message": "Execution context unavailable.",
+            }
+
+        if hasattr(context, "to_response"):
+            return context.to_response()
+
+        return context.to_dict()
 
     def _portfolio_engine(self, *, tenant_id: Optional[str], user_id: Optional[str], portfolio_id: Optional[str]) -> Any:
         from modules.forex.forex_portfolio_engine import get_forex_portfolio_engine
@@ -717,12 +588,58 @@ class ForexTerminalExecutionService:
             return _safe_float(lots) * 100000.0
         return 100000.0
 
+    def _get_execution_service(
+            self,
+            portfolio_engine,
+    ):
+
+        if self.execution_service is None:
+            self.execution_service = get_execution_service(
+
+                db=self.db,
+
+                portfolio_engine=portfolio_engine,
+
+                actor=self.actor,
+
+                source=self.source,
+
+            )
+
+        return self.execution_service
+
+    def _get_execution_pipeline(
+            self,
+            engine,
+    ):
+        """
+        Return the institutional execution pipeline for this
+        execution service.
+
+        The pipeline is created lazily and cached for reuse.
+        """
+
+        if getattr(self, "execution_pipeline", None) is None:
+            self.execution_service = build_execution_pipeline(
+                db=self.db,
+                portfolio_engine=engine,
+            )
+
+        return self.execution_service
+
+    
+    # ------------------------------------------------------------------
+    # Sprint 26 Phase 2A Event Recording
+    # ------------------------------------------------------------------
+
+
+
     def _commit(self) -> None:
-        try:
-            if hasattr(self.db, "commit"):
-                self.db.commit()
-        except Exception:
-            pass
+            try:
+                if hasattr(self.db, "commit"):
+                    self.db.commit()
+            except Exception:
+                pass
 
 
 _SERVICE = None

@@ -561,7 +561,7 @@ try:
             "Portfolio Construction","Portfolio Deployment","Market Overview",
             "Strategy Lab","Regime Engine","Strategy Discovery","Strategy Library",
             "IPO Intelligence","Pre-IPO Intelligence","Alerts","Admin",
-            "AI Rankings","AI Portfolio","AI Forecast","AI Scanner","AI Agent",
+            "AI Rankings","AI Portfolio","AI Forecast","Kronos AI Forecast","AI Scanner","AI Agent",
             "Options Flow","Options Trading","Analyst Consensus","Smart Money",
             "Export / Sheets","Research Reports","Social Sentiment",
             "Team Collaboration","Crypto","Investment Committee","Multi-Agent Research",
@@ -578,7 +578,7 @@ try:
                 "Universe","Indicator Builder",
             ]),
             ("🤖 AI Suite", [
-                "AI Rankings","AI Scanner","AI Agent","AI Portfolio","AI Forecast",
+                "AI Rankings","AI Scanner","AI Agent","AI Portfolio","AI Forecast","Kronos AI Forecast",
             ]),
             ("📈 Trading & Portfolio", [
                 "Portfolio","Portfolio Construction","Portfolio Deployment",
@@ -1008,6 +1008,18 @@ try:
         except Exception as e:
             safe_rollback(db)
             st.error("AI Forecast module failed to load.")
+            st.exception(e)
+
+    elif page == "Kronos AI Forecast":
+        if not check_page(user, "Kronos AI Forecast", db):
+            require_page(user, "Kronos AI Forecast", db)
+            st.stop()
+        try:
+            from modules.forecasting.kronos_ui import render_kronos_forecast_page
+            run_page("Kronos AI Forecast", render_kronos_forecast_page, db, user)
+        except Exception as e:
+            safe_rollback(db)
+            st.error("Kronos AI Forecast module failed to load.")
             st.exception(e)
 
     elif page == "AI Scanner":

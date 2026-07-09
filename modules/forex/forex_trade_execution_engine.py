@@ -151,44 +151,29 @@ class ForexTradeExecutionEngine:
             else None
         )
         self.cache = get_forex_portfolio_cache()
+
+        from modules.execution.execution_order_repository import (
+            ExecutionOrderRepository,
+        )
+
+        self.order_repository = ExecutionOrderRepository(
+            db,
+        )
     # ------------------------------------------------------------------
     # Database
     # ------------------------------------------------------------------
 
     def ensure_tables(self) -> None:
-        if self.db is None or text is None:
+        """
+        Compatibility wrapper.
+
+        Order schema is owned by ExecutionOrderRepository.
+        """
+
+        if self.order_repository is None:
             return
 
-        self.db.execute(text("""
-            CREATE TABLE IF NOT EXISTS forex_trade_orders (
-                id SERIAL PRIMARY KEY,
-                broker_order_id VARCHAR(100),
-                tenant_id VARCHAR(100),
-                portfolio_id VARCHAR(100),
-                user_id VARCHAR(100),
-                pair VARCHAR(20) NOT NULL,
-                side VARCHAR(20) NOT NULL,
-                order_type VARCHAR(30),
-                tif VARCHAR(20),
-                units DOUBLE PRECISION,
-                limit_price DOUBLE PRECISION,
-                stop_price DOUBLE PRECISION,
-                requested_price DOUBLE PRECISION,
-                filled_price DOUBLE PRECISION,
-                filled_units DOUBLE PRECISION,
-                status VARCHAR(50),
-                broker VARCHAR(50),
-                commission DOUBLE PRECISION,
-                slippage DOUBLE PRECISION,
-                notional DOUBLE PRECISION,
-                provider VARCHAR(100),
-                error TEXT,
-                notes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                filled_at TIMESTAMP
-            )
-        """))
-        self.db.commit()
+        self.order_repository.ensure_tables()
 
     def persist_execution(
         self,
@@ -203,86 +188,10 @@ class ForexTradeExecutionEngine:
         created = datetime.now(timezone.utc).replace(tzinfo=None)
         filled_at = created if result.get("status") == "filled" else None
 
-        self.db.execute(text("""
-            INSERT INTO forex_trade_orders (
-                broker_order_id,
-                tenant_id,
-                portfolio_id,
-                user_id,
-                pair,
-                side,
-                order_type,
-                tif,
-                units,
-                limit_price,
-                stop_price,
-                requested_price,
-                filled_price,
-                filled_units,
-                status,
-                broker,
-                commission,
-                slippage,
-                notional,
-                provider,
-                error,
-                notes,
-                created_at,
-                filled_at
-            )
-            VALUES (
-                :broker_order_id,
-                :tenant_id,
-                :portfolio_id,
-                :user_id,
-                :pair,
-                :side,
-                :order_type,
-                :tif,
-                :units,
-                :limit_price,
-                :stop_price,
-                :requested_price,
-                :filled_price,
-                :filled_units,
-                :status,
-                :broker,
-                :commission,
-                :slippage,
-                :notional,
-                :provider,
-                :error,
-                :notes,
-                :created_at,
-                :filled_at
-            )
-        """), {
-            "broker_order_id": result.get("broker_order_id"),
-            "tenant_id": request.tenant_id,
-            "portfolio_id": request.portfolio_id,
-            "user_id": request.user_id,
-            "pair": request.pair,
-            "side": request.side,
-            "order_type": request.order_type,
-            "tif": request.tif,
-            "units": request.units,
-            "limit_price": request.limit_price,
-            "stop_price": request.stop_price,
-            "requested_price": result.get("requested_price"),
-            "filled_price": result.get("filled_price"),
-            "filled_units": result.get("filled_units"),
-            "status": result.get("status"),
-            "broker": result.get("broker"),
-            "commission": result.get("commission"),
-            "slippage": result.get("slippage"),
-            "notional": result.get("notional"),
-            "provider": result.get("provider"),
-            "error": result.get("error"),
-            "notes": result.get("notes"),
-            "created_at": created,
-            "filled_at": filled_at,
-        })
-        self.db.commit()
+        self.order_repository.insert_execution_order(
+            request=request,
+            result=result,
+        )
 
         print("INVALIDATING PORTFOLIO CACHE")
 

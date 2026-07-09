@@ -336,6 +336,11 @@ def _render_coin_chart(df: pd.DataFrame, name: str, symbol: str, days: int):
             name="Price",
             increasing_line_color=GREEN, decreasing_line_color=RED,
         ), row=1, col=1)
+
+        if len(df) > 30:
+            from modules.indicators.signal_suite import compute_signals, add_signal_overlay
+            sig_df = compute_signals(df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"}))
+            add_signal_overlay(fig, sig_df, row=1, col=1, show_ribbon=False)
     else:
         fig.add_trace(go.Scatter(
             x=df[date_col], y=df["close"],

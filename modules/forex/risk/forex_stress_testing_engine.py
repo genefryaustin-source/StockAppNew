@@ -482,379 +482,382 @@ class ForexStressTestingEngine:
         # Stress Scenario Execution Engine
         # =============================================================================
 
-        # ------------------------------------------------------------------
-        # Portfolio Value
-        # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Portfolio Value
+    # ------------------------------------------------------------------
 
-        def portfolio_value(self):
+    def portfolio_value(self):
 
-            if self.portfolio is None:
-                return 0.0
+        if self.portfolio is None:
+            return 0.0
 
-            if hasattr(
+        if hasattr(
 
-                    self.portfolio,
+                self.portfolio,
 
-                    "total_market_value",
+                "total_market_value",
 
-            ):
-                return float(
-
-                    self.portfolio.total_market_value()
-
-                )
-
+        ):
             return float(
 
-                getattr(
-
-                    self.portfolio,
-
-                    "market_value",
-
-                    0.0,
-
-                )
+                self.portfolio.total_market_value()
 
             )
 
-        # ------------------------------------------------------------------
-        # Portfolio Volatility
-        # ------------------------------------------------------------------
+        return float(
 
-        def portfolio_volatility(self):
+            getattr(
 
-            if self.portfolio is None:
-                return 0.0
+                self.portfolio,
 
-            if hasattr(
-
-                    self.portfolio,
-
-                    "portfolio_volatility",
-
-            ):
-                return float(
-
-                    self.portfolio.portfolio_volatility()
-
-                )
-
-            if hasattr(
-
-                    self.portfolio,
-
-                    "volatility",
-
-            ):
-                return float(
-
-                    self.portfolio.volatility
-
-                )
-
-            return 0.15
-
-        # ------------------------------------------------------------------
-        # Survivability
-        # ------------------------------------------------------------------
-
-        def survivability_score(
-
-                self,
-
-                portfolio_after,
-
-        ):
-
-            before = self.portfolio_value()
-
-            if before <= 0:
-                return 0.0
-
-            ratio = portfolio_after / before
-
-            score = ratio * 100.0
-
-            score = max(
+                "market_value",
 
                 0.0,
 
-                min(
+            )
 
-                    100.0,
+        )
 
-                    score,
+    # ------------------------------------------------------------------
+    # Portfolio Volatility
+    # ------------------------------------------------------------------
 
-                ),
+    def portfolio_volatility(self):
+
+        if self.portfolio is None:
+            return 0.0
+
+        if hasattr(
+
+                self.portfolio,
+
+                "portfolio_volatility",
+
+        ):
+            return float(
+
+                self.portfolio.portfolio_volatility()
 
             )
 
-            return round4(score)
+        if hasattr(
 
-        # ------------------------------------------------------------------
-        # Apply Scenario
-        # ------------------------------------------------------------------
+                self.portfolio,
 
-        def apply_scenario(
+                "volatility",
 
-                self,
+        ):
+            return float(
 
-                definition: StressScenarioDefinition,
-
-        ) -> StressTestResult:
-
-            before = self.portfolio_value()
-
-            after = before * (
-
-                    1.0 +
-
-                    definition.shock_pct
+                self.portfolio.volatility
 
             )
 
-            pnl = after - before
+        return 0.15
 
-            pnl_pct = (
+    # ------------------------------------------------------------------
+    # Survivability
+    # ------------------------------------------------------------------
 
-                pnl / before
+    def survivability_score(
 
-                if before
+            self,
 
-                else 0.0
+            portfolio_after,
 
-            )
+    ):
 
-            vol_before = (
+        before = self.portfolio_value()
 
-                self.portfolio_volatility()
+        if before <= 0:
+            return 0.0
 
-            )
+        ratio = portfolio_after / before
 
-            vol_after = (
+        score = ratio * 100.0
 
-                    vol_before *
+        score = max(
 
-                    definition.volatility_multiplier
+            0.0,
 
-            )
+            min(
 
-            score = self.survivability_score(
+                100.0,
 
-                after
+                score,
 
-            )
+            ),
 
-            passed = score >= 60.0
+        )
 
-            result = StressTestResult(
+        return round4(score)
 
-                runtime_id=self.runtime_id,
+    # ------------------------------------------------------------------
+    # Apply Scenario
+    # ------------------------------------------------------------------
 
-                scenario=definition.scenario.value,
+    def apply_scenario(
 
-                portfolio_before=before,
+            self,
 
-                portfolio_after=after,
+            definition: StressScenarioDefinition,
 
-                pnl=pnl,
+    ) -> StressTestResult:
 
-                pnl_pct=pnl_pct,
+        before = self.portfolio_value()
 
-                volatility_before=vol_before,
+        after = before * (
 
-                volatility_after=vol_after,
+                1.0 +
 
-                survivability_score=score,
+                definition.shock_pct
 
-                passed=passed,
+        )
 
-                generated_at=utc_now_iso(),
+        pnl = after - before
 
-                metadata={
+        pnl_pct = (
 
-                    "title":
+            pnl / before
 
-                        definition.title,
+            if before
 
-                    "description":
+            else 0.0
 
-                        definition.description,
+        )
 
-                    "shock_pct":
+        vol_before = (
 
-                        definition.shock_pct,
+            self.portfolio_volatility()
 
-                    "liquidity_haircut":
+        )
 
-                        definition.liquidity_haircut,
+        vol_after = (
 
-                },
+                vol_before *
 
-            )
+                definition.volatility_multiplier
 
-            self.results.append(
+        )
 
-                result
+        score = self.survivability_score(
 
-            )
+            after
+
+        )
+
+        passed = score >= 60.0
+
+        result = StressTestResult(
+
+            runtime_id=self.runtime_id,
+
+            scenario=definition.scenario.value,
+
+            portfolio_before=before,
+
+            portfolio_after=after,
+
+            pnl=pnl,
+
+            pnl_pct=pnl_pct,
+
+            volatility_before=vol_before,
+
+            volatility_after=vol_after,
+
+            survivability_score=score,
+
+            passed=passed,
+
+            generated_at=utc_now_iso(),
+
+            metadata={
+
+                "title":
+
+                    definition.title,
+
+                "description":
+
+                    definition.description,
+
+                "shock_pct":
+
+                    definition.shock_pct,
+
+                "liquidity_haircut":
+
+                    definition.liquidity_haircut,
+
+            },
+
+        )
+
+        self.results.append(
+
+            result
+
+        )
+
+        self.statistics[
+
+            "runs"
+
+        ] += 1
+
+        if passed:
 
             self.statistics[
 
-                "runs"
+                "passed"
 
             ] += 1
 
-            if passed:
+        else:
+
+            self.statistics[
+
+                "failed"
+
+            ] += 1
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Execute Scenario
+    # ------------------------------------------------------------------
+
+    def execute(
+
+            self,
+
+            scenario_name: str,
+
+    ):
+
+        definition = self.get_scenario(
+
+            scenario_name
+
+        )
+
+        if definition is None:
+            raise ValueError(
+
+                f"Unknown scenario: {scenario_name}"
+
+            )
+
+        return self.apply_scenario(
+
+            definition
+
+        )
+
+    # ------------------------------------------------------------------
+    # Execute All
+    # ------------------------------------------------------------------
+
+    def execute_all(self):
+
+        results = []
+
+        for scenario in self.available_scenarios():
+            results.append(
+
+                self.execute(
+
+                    scenario
+
+                )
+
+            )
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Results
+    # ------------------------------------------------------------------
+
+    def latest_results(self):
+
+        if not self.results:
+            self.execute_all()
+
+        return [
+
+            r.to_dict()
+
+            for r in self.results
+
+        ]
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
+
+    def summary(self):
+
+        if not self.results:
+            self.execute_all()
+
+        worst = min(
+
+            self.results,
+
+            key=lambda x: x.pnl_pct,
+
+        )
+
+        best = max(
+
+            self.results,
+
+            key=lambda x: x.pnl_pct,
+
+        )
+
+        return {
+
+            "runtime_id":
+
+                self.runtime_id,
+
+            "scenario_count":
+
+                len(
+
+                    self.results
+
+                ),
+
+            "passed":
 
                 self.statistics[
 
                     "passed"
 
-                ] += 1
+                ],
 
-            else:
+            "failed":
 
                 self.statistics[
 
                     "failed"
 
-                ] += 1
+                ],
 
-            return result
+            "worst_case":
 
-        # ------------------------------------------------------------------
-        # Execute Scenario
-        # ------------------------------------------------------------------
+                worst.to_dict(),
 
-        def execute(
+            "best_case":
 
-                self,
+                best.to_dict(),
 
-                scenario_name: str,
+            "generated_at":
 
-        ):
+                utc_now_iso(),
 
-            definition = self.get_scenario(
-
-                scenario_name
-
-            )
-
-            if definition is None:
-                raise ValueError(
-
-                    f"Unknown scenario: {scenario_name}"
-
-                )
-
-            return self.apply_scenario(
-
-                definition
-
-            )
-
-        # ------------------------------------------------------------------
-        # Execute All
-        # ------------------------------------------------------------------
-
-        def execute_all(self):
-
-            results = []
-
-            for scenario in self.available_scenarios():
-                results.append(
-
-                    self.execute(
-
-                        scenario
-
-                    )
-
-                )
-
-            return results
-
-        # ------------------------------------------------------------------
-        # Results
-        # ------------------------------------------------------------------
-
-        def latest_results(self):
-
-            return [
-
-                r.to_dict()
-
-                for r in self.results
-
-            ]
-
-        # ------------------------------------------------------------------
-        # Summary
-        # ------------------------------------------------------------------
-
-        def summary(self):
-
-            if not self.results:
-                self.execute_all()
-
-            worst = min(
-
-                self.results,
-
-                key=lambda x: x.pnl_pct,
-
-            )
-
-            best = max(
-
-                self.results,
-
-                key=lambda x: x.pnl_pct,
-
-            )
-
-            return {
-
-                "runtime_id":
-
-                    self.runtime_id,
-
-                "scenario_count":
-
-                    len(
-
-                        self.results
-
-                    ),
-
-                "passed":
-
-                    self.statistics[
-
-                        "passed"
-
-                    ],
-
-                "failed":
-
-                    self.statistics[
-
-                        "failed"
-
-                    ],
-
-                "worst_case":
-
-                    worst.to_dict(),
-
-                "best_case":
-
-                    best.to_dict(),
-
-                "generated_at":
-
-                    utc_now_iso(),
-
-            }
+        }

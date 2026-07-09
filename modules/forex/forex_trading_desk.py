@@ -131,12 +131,13 @@ class ForexTradingDesk:
         # Build shared runtime context once.
         #
         runtime = build_forex_runtime_context(
-            tenant_id=self.tenant_id,
-            user_id=self.user_id,
-            portfolio_id=self.portfolio_id,
+            tenant_id=resolved_tenant_id,
+            user_id=resolved_user_id,
+            portfolio_id=resolved_portfolio_id,
             force_refresh=force_refresh,
             db=self.db,
         )
+
         print("=" * 80)
         print("FOREX RUNTIME IDENTITY")
         print("Tenant   :", runtime.tenant_id)
@@ -224,9 +225,10 @@ class ForexTradingDesk:
 
         if runtime is None:
             runtime = build_forex_runtime_context(
-                tenant_id=self.tenant_id,
-                user_id=self.user_id,
-                portfolio_id=self.portfolio_id,
+
+                tenant_id=resolved_tenant_id,
+                user_id=resolved_user_id,
+                portfolio_id=resolved_portfolio_id,
                 force_refresh=force_refresh,
                 db=self.db,
             )

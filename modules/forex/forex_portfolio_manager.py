@@ -34,7 +34,9 @@ try:
     from modules.forex.forex_alpha_model import get_forex_alpha_model
 except Exception:
     get_forex_alpha_model = None
-
+from modules.forex.forex_portfolio_crud_engine import (
+    get_forex_portfolio_crud_engine,
+)
 
 DEFAULT_ACCOUNT_CURRENCY = "USD"
 DEFAULT_STARTING_CASH = 100000.0
@@ -100,12 +102,22 @@ class ForexPosition:
 class ForexPortfolioManager:
 
     def __init__(
-        self,
-        db=None,
-        account_currency: str = DEFAULT_ACCOUNT_CURRENCY,
-        starting_cash: float = DEFAULT_STARTING_CASH,
+            self,
+            db=None,
+            tenant_id=None,
+            user_id=None,
+            portfolio_id=None,
+            account_currency: str = DEFAULT_ACCOUNT_CURRENCY,
+            starting_cash: float = DEFAULT_STARTING_CASH,
     ):
         self.db = db
+        self.tenant_id = tenant_id
+        self.user_id = user_id
+        self.portfolio_id = portfolio_id
+
+        self.portfolio_engine = get_forex_portfolio_crud_engine(
+            db=db,
+        )
         self.account_currency = str(account_currency or DEFAULT_ACCOUNT_CURRENCY).upper()
         self.starting_cash = float(starting_cash or DEFAULT_STARTING_CASH)
         self.price_service = get_forex_price_service() if get_forex_price_service else None
@@ -710,12 +722,213 @@ class ForexPortfolioManager:
             return (avg_price - current_price) * abs(units)
         return (current_price - avg_price) * abs(units)
 
+    # ------------------------------------------------------------------
+    # Portfolio CRUD
+    # ------------------------------------------------------------------
+
+    def portfolio_list(self):
+
+        return self.portfolio_engine.list_portfolios(
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+        )
+
+    def active_portfolio(self):
+
+        portfolio = self.portfolio_engine.get_default_portfolio(
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+        )
+
+        if portfolio is None:
+
+            portfolios = self.portfolio_list()
+
+            if portfolios:
+                portfolio = portfolios[0]
+
+        if portfolio:
+            self.portfolio_id = portfolio["id"]
+
+        return portfolio
+
+    def create_portfolio(self, **kwargs):
+
+        return self.portfolio_engine.create_portfolio(
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+            **kwargs,
+        )
+
+    def update_portfolio(self, **kwargs):
+
+        return self.portfolio_engine.update_portfolio(
+            **kwargs,
+        )
+
+    def delete_portfolio(self, portfolio_id):
+
+        return self.portfolio_engine.delete_portfolio(
+            portfolio_id,
+        )
+
+    def archive_portfolio(self, portfolio_id):
+
+        return self.portfolio_engine.archive_portfolio(
+            portfolio_id,
+        )
+
+    def restore_portfolio(self, portfolio_id):
+
+        return self.portfolio_engine.restore_portfolio(
+            portfolio_id,
+        )
+
+    def set_default_portfolio(self, portfolio_id):
+        self.portfolio_engine.set_default_portfolio(
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+            portfolio_id=portfolio_id,
+        )
+
+        self.portfolio_id = portfolio_id
+
+        return portfolio_id
+
+    # ============================================================
+    # Portfolio CRUD Wrappers
+    # ============================================================
+
+    def portfolio_statistics(self):
+
+        return self.portfolio_engine.portfolio_statistics(
+
+            tenant_id=self.tenant_id,
+
+            user_id=self.user_id,
+
+        )
+
+    def portfolio_list(self):
+
+        return self.portfolio_engine.list_portfolios(
+
+            tenant_id=self.tenant_id,
+
+            user_id=self.user_id,
+
+        )
+
+    def active_portfolio(self):
+
+        portfolio = self.portfolio_engine.get_default_portfolio(
+
+            tenant_id=self.tenant_id,
+
+            user_id=self.user_id,
+
+        )
+
+        if portfolio is None:
+
+            portfolios = self.portfolio_list()
+
+            if portfolios:
+                portfolio = portfolios[0]
+
+        if portfolio:
+            self.portfolio_id = portfolio["id"]
+
+        return portfolio
+
+    def create_portfolio(self, **kwargs):
+
+        return self.portfolio_engine.create_portfolio(
+
+            tenant_id=self.tenant_id,
+
+            user_id=self.user_id,
+
+            **kwargs,
+
+        )
+
+    def update_portfolio(self, **kwargs):
+
+        return self.portfolio_engine.update_portfolio(
+
+            **kwargs,
+
+        )
+
+    def delete_portfolio(self, portfolio_id):
+
+        return self.portfolio_engine.delete_portfolio(
+
+            portfolio_id,
+
+        )
+
+    def archive_portfolio(self, portfolio_id):
+
+        return self.portfolio_engine.archive_portfolio(
+
+            portfolio_id,
+
+        )
+
+    def restore_portfolio(self, portfolio_id):
+
+        return self.portfolio_engine.restore_portfolio(
+
+            portfolio_id,
+
+        )
+
+    def set_default_portfolio(self, portfolio_id):
+
+        self.portfolio_engine.set_default_portfolio(
+
+            tenant_id=self.tenant_id,
+
+            user_id=self.user_id,
+
+            portfolio_id=portfolio_id,
+
+        )
+
+        self.portfolio_id = portfolio_id
+
+        return portfolio_id
+
+# ------------------------------------------------------------------
+# Singleton
+# ------------------------------------------------------------------
 
 _MANAGER = None
 
-
-def get_forex_portfolio_manager(db=None) -> ForexPortfolioManager:
+def get_forex_portfolio_manager(
+        db=None,
+        tenant_id=None,
+        user_id=None,
+        portfolio_id=None,
+):
     global _MANAGER
-    if _MANAGER is None or (db is not None and _MANAGER.db is None):
-        _MANAGER = ForexPortfolioManager(db=db)
+
+    if (
+            _MANAGER is None
+            or _MANAGER.db is not db
+            or _MANAGER.tenant_id != tenant_id
+            or _MANAGER.user_id != user_id
+            or _MANAGER.portfolio_id != portfolio_id
+    ):
+        _MANAGER = ForexPortfolioManager(
+            db=db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+        )
+
     return _MANAGER
+
+

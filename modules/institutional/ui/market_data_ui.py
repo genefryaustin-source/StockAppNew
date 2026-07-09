@@ -71,6 +71,14 @@ def _render_chart(df: pd.DataFrame, symbol: str):
     if "SMA200" in df.columns:
         fig.add_trace(go.Scatter(x=df["Date"], y=df["SMA200"], name="SMA200"))
 
+    if len(df) > 30:
+        try:
+            from modules.indicators.signal_suite import compute_signals, add_signal_overlay
+            sig_df = compute_signals(df)
+            add_signal_overlay(fig, sig_df, row=None, col=None, show_ribbon=False)
+        except Exception:
+            pass
+
     fig.update_layout(
         title=f"{symbol} Price History",
         height=550,

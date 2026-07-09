@@ -8,15 +8,31 @@ class TenantService:
         self.db = db
 
     def list_tenants(self):
-        rows = self.db.execute(text("""
-            SELECT
-                id,
-                name,
-                is_active,
-                created_at
-            FROM tenants
-            ORDER BY name
-        """)).fetchall()
+        try:
+            rows = self.db.execute(text("""
+                SELECT
+                    id,
+                    name,
+                    is_active,
+                    created_at
+                FROM tenants
+                ORDER BY name
+            """)).fetchall()
+
+        except Exception:
+            pass
+
+        rows = self.db.execute(
+            text("""
+                   SELECT
+                       id,
+                       name,
+                       is_active,
+                       created_at
+                   FROM tenants
+                   ORDER BY name
+               """)
+        )
 
         return [
             {

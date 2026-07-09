@@ -274,7 +274,7 @@ class ForexRuntimeTelemetryEngine:
             ):
                 params[key] = json.dumps(record.get(key, {}))
 
-            self.db.execute(
+            db.execute(
                 text(
                     """
                     INSERT INTO forex_runtime_history (
@@ -308,12 +308,14 @@ class ForexRuntimeTelemetryEngine:
                 ),
                 params,
             )
-            self.db.commit()
+            db.commit()
+
 
 
         except Exception:
 
-            db.rollback()
+            if db is not None:
+                db.rollback()
 
             raise
 

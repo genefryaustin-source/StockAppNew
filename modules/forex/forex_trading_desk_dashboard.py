@@ -2,22 +2,32 @@
 """
 modules/forex/forex_trading_desk_dashboard.py
 """
-
+from modules.forex.forex_portfolio_manager import get_forex_portfolio_manager
+from modules.forex.forex_portfolio_engine import get_forex_portfolio_engine
+from modules.forex.forex_portfolio_manager import (
+    get_forex_portfolio_manager,
+)
 try:
     import streamlit as st
     import pandas as pd
     import plotly.express as px
+
 except Exception:
     st=None
     pd=None
+import logging
 
+logger = logging.getLogger(__name__)
 from modules.forex.forex_trading_desk import get_forex_trading_desk
 from modules.forex.forex_portfolio_engine import get_forex_portfolio_engine
-
+from modules.forex.forex_order_management_engine import (
+    get_forex_order_management_engine,
+)
 class ForexTradingDeskDashboard:
 
     def __init__(self, db=None):
-        self.desk=get_forex_trading_desk(db=db)
+        self.db = db
+        self.desk = get_forex_trading_desk(db=db)
 
     def _as_dict(self, value):
         if value is None:
@@ -118,20 +128,238 @@ class ForexTradingDeskDashboard:
             "system": terminal.get("system", {}),
         }
 
+    def _execute_close_position(self, portfolio_engine, payload):
+        try:
+            return portfolio_engine.close_position(
+                position_id=payload["position_id"],
+                close_price=payload.get("close_price"),
+            )
+        except Exception as e:
+            logger.exception("Close position failed: %s", e)
+            return None
+
+    def _execute_reverse_position(self, portfolio_engine, payload):
+        """
+        Reverse an existing position by:
+            1. Closing the selected position
+            2. Opening the opposite side using the same pair/units
+        """
+
+        try:
+
+            position = portfolio_engine.get_position(
+                position_id=payload["position_id"]
+            )
+
+            if position is None:
+                raise ValueError(
+                    f"Position {payload['position_id']} not found."
+                )
+
+            portfolio_engine.close_position(
+                position_id=position.id,
+                close_price=payload.get(
+                    "close_price",
+                    position.current_price,
+                ),
+            )
+
+            opposite_side = (
+                "SHORT"
+                if position.side.upper() == "LONG"
+                else "LONG"
+            )
+
+            return portfolio_engine.open_position(
+                account_id=position.account_id,
+                portfolio_id=position.portfolio_id,
+                pair=position.pair,
+                side=opposite_side,
+                units=position.units,
+                entry_price=payload.get(
+                    "close_price",
+                    position.current_price,
+                ),
+            )
+
+        except Exception as exc:
+            logger.exception(
+                "Reverse position failed: %s",
+                exc,
+            )
+            return None
+
+    def _execute_flatten_all(self, portfolio_engine, portfolio_id):
+        try:
+            positions = portfolio_engine.list_positions(
+                portfolio_id=portfolio_id,
+                status="OPEN",
+            )
+
+            results = []
+            for p in positions:
+                results.append(
+                    portfolio_engine.close_position(
+                        position_id=p.id if hasattr(p, "id") else p["id"],
+                        close_price=getattr(p, "current_price", None) if not isinstance(p, dict) else p.get(
+                            "current_price"),
+                    )
+                )
+
+            return results
+        except Exception as e:
+            logger.exception("Flatten failed: %s", e)
+            return []
+
+    def execute_trade_action(self, action: str, portfolio_engine, payload: dict):
+
+        from modules.forex.forex_execution_job import ForexExecutionJob
+        from modules.forex.forex_execution_queue import ForexExecutionQueue
+        from modules.forex.forex_execution_audit import ForexExecutionAudit
+
+        if not hasattr(self, "_exec_queue"):
+            self._exec_queue = ForexExecutionQueue()
+
+        if not hasattr(self, "_audit"):
+            self._audit = ForexExecutionAudit()
+
+        job = ForexExecutionJob(
+            action=action,
+            payload=payload
+        )
+
+        self._exec_queue.submit(job)
+
+        result = self._exec_queue.process_next(
+            executor=portfolio_engine
+        )
+
+        self._audit.log(
+            job.id,
+            action,
+            payload,
+            result,
+            job.status
+        )
+
+        return result
+
     def render(self, **kwargs):
 
-        data = self.desk.dashboard(**kwargs)
+        #data = self.desk.dashboard(**kwargs)
+        # ============================================================
+        # Active Portfolio
+        # ============================================================
 
+        portfolio_manager = get_forex_portfolio_manager(
+            db=self.desk.db,
+            tenant_id=kwargs.get("tenant_id"),
+            user_id=kwargs.get("user_id"),
+            portfolio_id=kwargs.get("portfolio_id"),
+        )
+
+        portfolios = portfolio_manager.portfolio_list()
+        logger.debug("Forex portfolio list loaded: %s", portfolios)
+        active = portfolio_manager.active_portfolio()
+
+        if active:
+            st.session_state.setdefault(
+                "fx_active_portfolio_id",
+                active["id"],
+            )
+            if portfolios:
+
+                names = {
+                    p["name"]: p["id"]
+                    for p in portfolios
+                }
+
+                current_name = next(
+                    (
+                        p["name"]
+                        for p in portfolios
+                        if p["id"] ==
+                           st.session_state["fx_active_portfolio_id"]
+                    ),
+                    list(names.keys())[0],
+                )
+
+
+                selected_name = st.selectbox(
+                    "Trading Portfolio",
+                    list(names.keys()),
+                    index=list(names.keys()).index(current_name),
+                    key="fx_active_portfolio_selector",
+                )
+
+                selected_id = names[selected_name]
+
+                if (
+                        selected_id !=
+                        st.session_state["fx_active_portfolio_id"]
+                ):
+                    st.session_state[
+                        "fx_active_portfolio_id"
+                    ] = selected_id
+
+                    portfolio_manager.set_default_portfolio(
+                        selected_id
+                    )
+                    print("=" * 80)
+                    print("TOP OF CLOSE DIALOG")
+                    print("close_position_selected_id =",
+                          st.session_state.get("close_position_selected_id"))
+                    print("widget =",
+                          st.session_state.get("close_position_selector_widget"))
+                    print("=" * 80)
+                    st.rerun()
+
+                kwargs["portfolio_id"] = selected_id
+
+            else:
+
+                st.warning(
+                    "No Forex portfolio exists. Please create one from the Portfolio workspace before trading."
+                )
+
+                st.stop()
+        # =====================================================================
+        # Sprint 26 Refactor
+        # Single live portfolio packet for the render cycle.
+        # Do NOT call self.desk.dashboard() here; it performs duplicate DB reads
+        # and can trigger SQLAlchemy session provisioning conflicts.
+        # =====================================================================
         live = self._build_live_portfolio_packet(**kwargs)
 
-        data["portfolio"] = live.get("portfolio", {})
-        data["risk"] = live.get("risk", data.get("risk", {}))
-        data["performance"] = live.get("performance", data.get("performance", {}))
-        data["open_orders"] = live.get("open_orders", data.get("open_orders", []))
-        data["filled_orders"] = live.get("filled_orders", data.get("filled_orders", []))
-        data["execution_history"] = live.get("execution_history", [])
-        data["cash_ledger"] = live.get("cash_ledger", [])
-        data["system"] = live.get("system", {})
+        data = dict(live or {})
+        data.setdefault("portfolio", {})
+        data.setdefault("risk", {})
+        data.setdefault("performance", {})
+        data.setdefault("open_orders", [])
+        data.setdefault("filled_orders", [])
+        data.setdefault("execution_history", [])
+        data.setdefault("cash_ledger", [])
+        data.setdefault("system", {})
+        data.setdefault("execution", {})
+        data.setdefault("executive_ai", {})
+        data.setdefault("strategy_lab", {})
+        data.setdefault("provider_health", {})
+        data.setdefault("watchlist", [])
+        data.setdefault(
+            "generated_at",
+            data.get("system", {}).get("generated_at", "--"),
+        )
+
+        order_engine = get_forex_order_management_engine(
+            db=self.desk.db,
+        )
+
+        portfolio_engine = get_forex_portfolio_engine(
+            db=self.desk.db,
+            tenant_id=kwargs.get("tenant_id"),
+            user_id=kwargs.get("user_id"),
+            portfolio_id=kwargs.get("portfolio_id"),
+        )
 
         portfolio = data.get("portfolio", {})
         summary = portfolio.get("summary", {})
@@ -864,12 +1092,20 @@ class ForexTradingDeskDashboard:
 
                 )
 
-                orders = data.get(
+                orders = (
+                        data.get("filled_orders", [])
+                        + data.get("open_orders", [])
+                )
 
-                    "open_orders",
-
-                    [],
-
+                orders = sorted(
+                    orders,
+                    key=lambda x: (
+                            x.get("filled_at")
+                            or x.get("submitted_at")
+                            or x.get("created_at")
+                            or ""
+                    ),
+                    reverse=True,
                 )
 
                 if orders:
@@ -905,11 +1141,18 @@ class ForexTradingDeskDashboard:
                 )
 
                 activity = portfolio.get(
-
-                    "activity",
-
+                    "execution_history",
                     [],
+                )
 
+                activity = sorted(
+                    activity,
+                    key=lambda x: (
+                            x.get("executed_at")
+                            or x.get("created_at")
+                            or ""
+                    ),
+                    reverse=True,
                 )
 
                 if activity:
@@ -948,49 +1191,684 @@ class ForexTradingDeskDashboard:
 
             a, b, c, d, e, f = st.columns(6)
 
-            a.button(
+            # ==========================================================
+            # New Order
+            # ==========================================================
 
-                "New Order",
+            if a.button(
 
-                use_container_width=True,
+                    "New Order",
+
+                    key="portfolio_new_order_btn",
+
+                    use_container_width=True,
+
+            ):
+                st.session_state["forex_show_order_ticket"] = True
+
+                print("=" * 80)
+                print("TOP OF CLOSE DIALOG")
+                print("close_position_selected_id =",
+                      st.session_state.get("close_position_selected_id"))
+                print("widget =",
+                      st.session_state.get("close_position_selector_widget"))
+                print("=" * 80)
+                st.rerun()
+
+            # ==========================================================
+            # Close Position
+            # ==========================================================
+
+            if b.button(
+
+                    "Close Position",
+
+                    key="portfolio_close_position_btn",
+
+                    use_container_width=True,
+
+            ):
+                st.session_state["forex_close_position"] = True
+                print("=" * 80)
+                print("TOP OF CLOSE DIALOG")
+                print("close_position_selected_id =",
+                      st.session_state.get("close_position_selected_id"))
+                print("widget =",
+                      st.session_state.get("close_position_selector_widget"))
+                print("=" * 80)
+                st.rerun()
+
+            # ==========================================================
+            # Reverse Position
+            # ==========================================================
+
+            if c.button("Reverse", key="portfolio_reverse_btn", use_container_width=True):
+
+                positions = portfolio.get("positions", [])
+
+                if positions:
+                    result = self.execute_trade_action(
+                        "REVERSE_POSITION",
+                        portfolio_engine,
+                        {
+                            "position": positions[0],
+                        },
+                    )
+
+                    if result:
+                        st.success("Position reversed")
+                        print("=" * 80)
+                        print("TOP OF CLOSE DIALOG")
+                        print("close_position_selected_id =",
+                              st.session_state.get("close_position_selected_id"))
+                        print("widget =",
+                              st.session_state.get("close_position_selector_widget"))
+                        print("=" * 80)
+                        st.rerun()
+                    else:
+                        st.error("Reverse failed")
+
+            # ==========================================================
+            # Flatten Portfolio
+            # ==========================================================
+
+            if d.button("Flatten", key="portfolio_flatten_btn", use_container_width=True):
+
+                result = self.execute_trade_action(
+                    "FLATTEN",
+                    portfolio_engine,
+                    {
+                        "portfolio_id": kwargs.get("portfolio_id"),
+                    },
+                )
+
+                if result is not None:
+                    st.success("Portfolio flattened")
+                    print("=" * 80)
+                    print("TOP OF CLOSE DIALOG")
+                    print("close_position_selected_id =",
+                          st.session_state.get("close_position_selected_id"))
+                    print("widget =",
+                          st.session_state.get("close_position_selector_widget"))
+                    print("=" * 80)
+                    st.rerun()
+                else:
+                    st.error("Flatten failed")
+
+            # ==========================================================
+            # AI Trade
+            # ==========================================================
+
+            if e.button(
+
+                    "AI Trade",
+
+                    key="portfolio_ai_trade_btn",
+
+                    use_container_width=True,
+
+            ):
+                st.session_state["ai_trade_new_order"] = True
+                print("=" * 80)
+                print("TOP OF CLOSE DIALOG")
+                print("close_position_selected_id =",
+                      st.session_state.get("close_position_selected_id"))
+                print("widget =",
+                      st.session_state.get("close_position_selector_widget"))
+                print("=" * 80)
+                st.rerun()
+
+            # ==========================================================
+            # Refresh
+            # ==========================================================
+
+            if f.button(
+
+                    "Refresh",
+
+                    key="portfolio_refresh_btn",
+
+                    use_container_width=True,
+
+            ):
+                print("=" * 80)
+                print("TOP OF CLOSE DIALOG")
+                print("close_position_selected_id =",
+                      st.session_state.get("close_position_selected_id"))
+                print("widget =",
+                      st.session_state.get("close_position_selector_widget"))
+                print("=" * 80)
+                st.rerun()
+
+            action = st.session_state.pop(
+
+                "forex_trade_action",
+
+                None,
 
             )
+            if st.session_state.get(
+                    "forex_show_order_ticket",
+                    False,
+            ):
+                # ==========================================================
+                # Institutional Order Ticket
+                # ==========================================================
 
-            b.button(
+                st.divider()
 
-                "Close Position",
+                with st.container(border=True):
 
-                use_container_width=True,
+                    st.subheader(
+                        "Institutional Forex Order Ticket"
+                    )
 
-            )
+                    c1, c2, c3 = st.columns(3)
 
-            c.button(
+                    pair = c1.selectbox(
 
-                "Reverse",
+                        "Currency Pair",
 
-                use_container_width=True,
+                        [
 
-            )
+                            "EUR/USD",
+                            "GBP/USD",
+                            "USD/JPY",
+                            "USD/CHF",
+                            "AUD/USD",
+                            "NZD/USD",
+                            "USD/CAD",
 
-            d.button(
+                        ],
 
-                "Flatten",
+                        key="ticket_pair",
 
-                use_container_width=True,
+                    )
 
-            )
+                    side = c2.radio(
 
-            e.button(
-                "AI Trade",
-                key="performance_export_btn",
-                use_container_width=True,
-            )
+                        "Side",
 
-            f.button(
-                "Refresh",
-                key="portfolio_refresh_btn",
-                use_container_width=True,
-            )
+                        [
+
+                            "BUY",
+                            "SELL",
+
+                        ],
+
+                        horizontal=True,
+
+                        key="ticket_side",
+
+                    )
+
+                    order_type = c3.selectbox(
+
+                        "Order Type",
+
+                        [
+
+                            "MARKET",
+                            "LIMIT",
+                            "STOP",
+
+                        ],
+
+                        key="ticket_type",
+
+                    )
+
+                    st.divider()
+
+                    c1, c2, c3 = st.columns(3)
+
+                    quantity = c1.number_input(
+
+                        "Units",
+
+                        min_value=1000,
+
+                        value=10000,
+
+                        step=1000,
+
+                        key="ticket_units",
+
+                    )
+
+                    limit_price = c2.number_input(
+
+                        "Limit Price",
+
+                        value=0.0,
+
+                        format="%.5f",
+
+                        key="ticket_limit",
+
+                    )
+
+                    stop_price = c3.number_input(
+
+                        "Stop Loss",
+
+                        value=0.0,
+
+                        format="%.5f",
+
+                        key="ticket_stop",
+
+                    )
+
+                    c1, c2 = st.columns(2)
+
+                    take_profit = c1.number_input(
+
+                        "Take Profit",
+
+                        value=0.0,
+
+                        format="%.5f",
+
+                        key="ticket_tp",
+
+                    )
+
+                    account = c2.text_input(
+
+                        "Account",
+
+                        value="PAPER",
+
+                        disabled=True,
+
+                    )
+
+                    st.divider()
+
+                    preview = st.columns(4)
+
+                    preview[0].metric(
+                        "Units",
+                        f"{quantity:,.0f}",
+                    )
+
+                    preview[1].metric(
+                        "Side",
+                        side,
+                    )
+
+                    preview[2].metric(
+                        "Order",
+                        order_type,
+                    )
+
+                    preview[3].metric(
+                        "Portfolio",
+                        kwargs.get(
+                            "portfolio_id",
+                            "--",
+                        ),
+                    )
+
+                    st.divider()
+
+                    left, right = st.columns(2)
+
+                    submit = left.button(
+
+                        "Submit Order",
+
+                        key="ticket_submit",
+
+                        use_container_width=True,
+
+                    )
+
+                    cancel = right.button(
+
+                        "Cancel",
+
+                        key="ticket_cancel",
+
+                        use_container_width=True,
+
+                    )
+
+                    if cancel:
+                        st.session_state[
+                            "forex_show_order_ticket"
+                        ] = False
+                        print("=" * 80)
+                        print("TOP OF CLOSE DIALOG")
+                        print("close_position_selected_id =",
+                              st.session_state.get("close_position_selected_id"))
+                        print("widget =",
+                              st.session_state.get("close_position_selector_widget"))
+                        print("=" * 80)
+                        print("=" * 80)
+                        print("TOP OF CLOSE DIALOG")
+                        print("close_position_selected_id =",
+                              st.session_state.get("close_position_selected_id"))
+                        print("widget =",
+                              st.session_state.get("close_position_selector_widget"))
+                        print("=" * 80)
+                        st.rerun()
+
+                    if submit:
+
+                        with st.spinner(
+
+                                "Submitting order..."
+
+                        ):
+
+                            result = order_engine.submit(
+                                pair=pair,
+                                side=side,
+                                units=quantity,
+                                order_type=order_type,
+                                limit_price=(
+                                    limit_price
+                                    if order_type == "LIMIT"
+                                    else None
+                                ),
+                                stop_price=stop_price,
+                                take_profit=take_profit,
+
+                                tenant_id=kwargs.get("tenant_id"),
+                                user_id=kwargs.get("user_id"),
+                                portfolio_id=kwargs.get("portfolio_id"),
+                                account_id=kwargs.get("account_id"),
+                            )
+
+
+                        if str(result.get("status", "")).upper() in (
+
+                                "FILLED",
+
+                                "SUBMITTED",
+
+                                "ACCEPTED",
+
+                        ):
+
+                            st.success(
+
+                                result.get(
+
+                                    "message",
+
+                                    "Order submitted.",
+
+                                )
+
+                            )
+
+                            st.session_state[
+                                "forex_show_order_ticket"
+                            ] = False
+                            print("=" * 80)
+                            print("TOP OF CLOSE DIALOG")
+                            print("close_position_selected_id =",
+                                  st.session_state.get("close_position_selected_id"))
+                            print("widget =",
+                                  st.session_state.get("close_position_selector_widget"))
+                            print("=" * 80)
+                            st.rerun()
+
+                        else:
+
+                            st.error(
+
+                                result.get(
+
+                                    "message",
+
+                                    "Order failed.",
+
+                                )
+
+                            )
+            if st.session_state.get("forex_close_position", False):
+
+                st.divider()
+                st.subheader("Close Position")
+
+                positions = portfolio.get("positions", [])
+
+                print("=" * 80)
+                print("CLOSE DIALOG POSITIONS")
+                for i, p in enumerate(positions):
+                    print(
+                        i,
+                        p.get("id"),
+                        p.get("pair"),
+                        p.get("status"),
+                        p.get("units"),
+                    )
+                print("=" * 80)
+
+                if not positions:
+                    st.info("No open positions.")
+
+                else:
+
+                    position_df = pd.DataFrame(positions)
+
+                    display = position_df[
+                        [
+                            c
+                            for c in [
+                            "id",
+                            "pair",
+                            "side",
+                            "units",
+                            "avg_entry_price",
+                            "current_price",
+                            "unrealized_pnl",
+                        ]
+                            if c in position_df.columns
+                        ]
+                    ]
+
+                    st.dataframe(
+                        display,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    # ==========================================================
+                    # Build stable lookup keyed ONLY by position id
+                    # ==========================================================
+
+                    position_rows = sorted(
+                        [row.to_dict() for _, row in position_df.iterrows()],
+                        key=lambda r: (
+                            str(r["pair"]),
+                            str(r["id"]),
+                        ),
+                    )
+
+                    position_lookup = {
+                        row["id"]: row
+                        for row in position_rows
+                    }
+
+                    position_ids = list(position_lookup.keys())
+
+                    print("=" * 80)
+                    print("SELECTBOX OPTIONS")
+                    for i, pid in enumerate(position_ids):
+                        p = position_lookup[pid]
+                        print(
+                            i,
+                            pid,
+                            p["pair"],
+                            p["side"],
+                            p["units"],
+                        )
+                    print("=" * 80)
+
+                    # ==========================================================
+                    # Initialize persistent selected id
+                    # ==========================================================
+
+                    if (
+                            "close_position_selected_id"
+                            not in st.session_state
+                            or st.session_state["close_position_selected_id"]
+                            not in position_lookup
+                    ):
+                        st.session_state["close_position_selected_id"] = position_ids[0]
+
+                    # ==========================================================
+                    # Sync callback
+                    # ==========================================================
+
+                    def _close_position_changed():
+                        st.session_state["close_position_selected_id"] = (
+                            st.session_state["close_position_selector_widget"]
+                        )
+
+                        print("=" * 80)
+                        print("CALLBACK")
+                        print(
+                            "selected:",
+                            st.session_state["close_position_selected_id"],
+                        )
+                        print("=" * 80)
+
+                    # ==========================================================
+                    # Selectbox
+                    # ==========================================================
+                    print("=" * 80)
+                    print("POSITION_DF")
+                    print(position_df[["pair", "id"]])
+                    print("=" * 80)
+
+                    print("=" * 80)
+                    print("LOOKUP KEYS")
+                    print(list(position_lookup.keys()))
+                    print("=" * 80)
+
+                    print("=" * 80)
+                    print("POSITION_IDS")
+                    print(position_ids)
+                    print("=" * 80)
+                    selected_position_id = st.selectbox(
+                        "Position",
+                        options=position_ids,
+                        index=position_ids.index(
+                            st.session_state["close_position_selected_id"]
+                        ),
+                        key="close_position_selector_widget",
+                        on_change=_close_position_changed,
+                        format_func=lambda pid: (
+                            f"{position_lookup[pid]['pair']} | "
+                            f"{position_lookup[pid]['side']} | "
+                            f"{position_lookup[pid]['units']:,.0f} units | "
+                            f"{pid}"
+                        ),
+                    )
+
+                    # Always trust the session copy
+                    selected_position_id = st.session_state[
+                        "close_position_selected_id"
+                    ]
+
+                    selected_position = position_lookup[selected_position_id]
+
+                    st.write("Widget value:", selected_position_id)
+
+                    print("=" * 80)
+                    print("SESSION")
+                    print(st.session_state["close_position_selected_id"])
+                    print("=" * 80)
+
+                    print("=" * 80)
+                    print("SELECTBOX RETURNED")
+                    print(selected_position_id)
+                    print("=" * 80)
+
+                    print("=" * 80)
+                    print("SELECTED FROM UI")
+                    print("id   :", selected_position["id"])
+                    print("pair :", selected_position["pair"])
+                    print("side :", selected_position["side"])
+                    print("=" * 80)
+
+                    print("=" * 80)
+                    print("BUTTON PRESS STATE")
+                    print("selected_id   :", selected_position_id)
+                    print(
+                        "session value :",
+                        st.session_state["close_position_selected_id"],
+                    )
+                    print("=" * 80)
+
+                    if st.button(
+                            "Close Selected Position",
+                            key="close_execute_btn",
+                    ):
+
+                        print("=" * 80)
+                        print("BUTTON CLICKED")
+                        print("selected_id   :", selected_position_id)
+                        print(
+                            "session value :",
+                            st.session_state["close_position_selected_id"],
+                        )
+                        print("=" * 80)
+
+                        payload = {
+                            "position_id": selected_position_id,
+                            "close_price": selected_position.get("current_price"),
+                        }
+
+                        print("=" * 80)
+                        print("PAYLOAD GOING TO QUEUE")
+                        print(payload)
+                        print("=" * 80)
+
+                        result = self.execute_trade_action(
+                            "CLOSE_POSITION",
+                            portfolio_engine,
+                            payload,
+                        )
+
+                        if result:
+
+                            st.success("Position closed successfully.")
+
+                            # Remove stale widget state
+                            st.session_state.pop(
+                                "close_position_selector_widget",
+                                None,
+                            )
+
+                            st.session_state.pop(
+                                "close_position_selected_id",
+                                None,
+                            )
+
+                            st.session_state["forex_close_position"] = False
+                            print("=" * 80)
+                            print("TOP OF CLOSE DIALOG")
+                            print("close_position_selected_id =",
+                                  st.session_state.get("close_position_selected_id"))
+                            print("widget =",
+                                  st.session_state.get("close_position_selector_widget"))
+                            print("=" * 80)
+                            st.rerun()
+
+                        else:
+                            st.error("Close position failed.")
+
+
+
+
+
             # ==========================================================
             # Performance Attribution
             # ==========================================================
@@ -1460,15 +2338,39 @@ class ForexTradingDeskDashboard:
 
         elif ws == "Orders":
 
+            portfolio = data.get("portfolio", {})
+
             open_orders = data.get("open_orders", [])
 
             filled_orders = data.get("filled_orders", [])
 
-            pending_orders = data.get("pending_orders", [])
+            execution_history = data.get("execution_history", [])
 
-            cancelled_orders = data.get("cancelled_orders", [])
+            cash_ledger = data.get("cash_ledger", [])
 
             execution = data.get("execution", {})
+
+            system = data.get("system", {})
+
+            pending_orders = data.get(
+                "pending_orders",
+                [],
+            )
+
+            cancelled_orders = data.get(
+                "cancelled_orders",
+                [],
+            )
+
+            broker_status = system.get(
+                "broker",
+                {},
+            )
+
+            snapshot_time = system.get(
+                "generated_at",
+                "--",
+            )
 
             st.subheader("Institutional Order Management")
 
@@ -1479,67 +2381,46 @@ class ForexTradingDeskDashboard:
             row = st.columns(8)
 
             row[0].metric(
-
-                "Open",
-
+                "Open Orders",
                 len(open_orders),
-
             )
 
             row[1].metric(
-
-                "Pending",
-
-                len(pending_orders),
-
+                "Filled",
+                len(filled_orders),
             )
 
             row[2].metric(
-
-                "Filled",
-
-                len(filled_orders),
-
+                "Executions",
+                len(execution_history),
             )
 
             row[3].metric(
-
-                "Cancelled",
-
-                len(cancelled_orders),
-
+                "Pending",
+                len(pending_orders),
             )
 
             row[4].metric(
-
                 "Fill Rate",
-
-                f"{execution.get('fill_rate', 0):.1f}%",
-
+                f"{execution.get('fill_rate', 0):.1f}%"
             )
 
             row[5].metric(
-
-                "Avg Fill",
-
-                f"{execution.get('avg_fill_time', 0):.2f}s",
-
+                "Latency",
+                f"{execution.get('latency_ms', 0):,.0f} ms"
             )
 
             row[6].metric(
-
-                "Avg Slippage",
-
-                f"{execution.get('avg_slippage', 0):.4f}",
-
+                "Slippage",
+                f"{execution.get('avg_slippage', 0):.4f}"
             )
 
             row[7].metric(
-
-                "Latency",
-
-                f"{execution.get('latency_ms', 0):,.0f} ms",
-
+                "Broker",
+                broker_status.get(
+                    "name",
+                    "Paper",
+                ),
             )
 
             st.divider()
@@ -1930,13 +2811,7 @@ class ForexTradingDeskDashboard:
 
                 )
 
-                feed = execution.get(
-
-                    "execution_feed",
-
-                    [],
-
-                )
+                feed = execution_history
 
                 if feed:
 
@@ -2380,13 +3255,7 @@ class ForexTradingDeskDashboard:
 
             )
 
-            executions = execution.get(
-
-                "recent_executions",
-
-                [],
-
-            )
+            executions = execution_history
 
             if executions:
 
@@ -2446,6 +3315,35 @@ class ForexTradingDeskDashboard:
                     "No executions available."
 
                 )
+            st.divider()
+
+            st.subheader(
+                "Cash Ledger"
+            )
+
+            if cash_ledger:
+
+                ledger_df = pd.DataFrame(
+                    cash_ledger
+                )
+
+                st.dataframe(
+
+                    ledger_df,
+
+                    use_container_width=True,
+
+                    hide_index=True,
+
+                    height=250,
+
+                )
+
+            else:
+
+                st.info(
+                    "No cash ledger activity."
+                )
 
             # ==========================================================
             # Execution Timeline
@@ -2459,13 +3357,7 @@ class ForexTradingDeskDashboard:
 
             )
 
-            timeline = execution.get(
-
-                "timeline",
-
-                [],
-
-            )
+            timeline = execution_history
 
             if timeline:
 
@@ -2506,6 +3398,56 @@ class ForexTradingDeskDashboard:
 
             st.divider()
 
+            st.divider()
+
+            st.subheader(
+                "Broker Status"
+            )
+
+            left, right = st.columns(2)
+
+            with left:
+
+                st.metric(
+
+                    "Broker",
+
+                    broker_status.get(
+                        "name",
+                        "Paper",
+                    ),
+
+                )
+
+                st.metric(
+
+                    "Connection",
+
+                    broker_status.get(
+                        "status",
+                        "Connected",
+                    ),
+
+                )
+
+            with right:
+
+                st.metric(
+
+                    "Snapshot",
+
+                    snapshot_time,
+
+                )
+
+                st.metric(
+
+                    "Orders",
+
+                    len(open_orders),
+
+                )
+
             st.success(
 
                 "Institutional Order Analytics Loaded"
@@ -2514,6 +3456,189 @@ class ForexTradingDeskDashboard:
         elif ws == "Risk":
 
             risk = data.get("risk", {})
+
+            # ==========================================================
+            # Live Risk Engines
+            # ==========================================================
+
+            try:
+
+                from modules.forex.risk.forex_var_engine import (
+                    get_forex_var_engine,
+                )
+
+                var_engine = get_forex_var_engine(
+                    db=self.desk.db,
+                )
+
+                var_report = var_engine.calculate_portfolio_var(
+
+                    portfolio_id=kwargs.get(
+                        "portfolio_id"
+                    ),
+
+                    confidence_levels=[95, 99],
+
+                )
+
+                if isinstance(var_report, dict):
+                    risk.update(var_report)
+
+            except Exception:
+
+                pass
+
+            try:
+
+                from modules.forex.forex_runtime_history_engine import (
+                    get_forex_runtime_history_engine,
+                )
+
+                runtime_history = get_forex_runtime_history_engine(
+
+                    db=self.desk.db,
+
+                    tenant_id=kwargs.get("tenant_id"),
+
+                    user_id=kwargs.get("user_id"),
+
+                    portfolio_id=kwargs.get("portfolio_id"),
+
+                )
+
+                history = runtime_history.build_dashboard_packet()
+
+            except Exception:
+
+                history = {}
+
+                if history:
+                    risk["var_history"] = history.get(
+                        "var_history",
+                        [],
+                    )
+
+                    risk["drawdown_history"] = history.get(
+                        "drawdown_history",
+                        [],
+                    )
+
+            except Exception:
+
+                pass
+
+            # ==========================================================
+            # Live Risk Alerts
+            # ==========================================================
+
+            alerts = []
+
+            risk_score = risk.get("risk_score", 0)
+
+            if risk_score >= 90:
+
+                alerts.append({
+
+                    "severity": "CRITICAL",
+
+                    "category": "Portfolio",
+
+                    "message": "Portfolio risk score exceeds critical threshold.",
+
+                })
+
+            elif risk_score >= 75:
+
+                alerts.append({
+
+                    "severity": "WARNING",
+
+                    "category": "Portfolio",
+
+                    "message": "Portfolio risk score is elevated.",
+
+                })
+
+            margin_used = summary.get("margin_used", 0)
+            buying_power = summary.get("buying_power", 0)
+
+            if buying_power > 0:
+
+                utilization = margin_used / buying_power
+
+                if utilization >= 0.90:
+
+                    alerts.append({
+
+                        "severity": "CRITICAL",
+
+                        "category": "Margin",
+
+                        "message": "Margin utilization exceeds 90%.",
+
+                    })
+
+                elif utilization >= 0.75:
+
+                    alerts.append({
+
+                        "severity": "WARNING",
+
+                        "category": "Margin",
+
+                        "message": "Margin utilization exceeds 75%.",
+
+                    })
+
+            leverage = summary.get("leverage", 0)
+
+            if leverage >= 10:
+                alerts.append({
+
+                    "severity": "WARNING",
+
+                    "category": "Leverage",
+
+                    "message": f"Leverage is {leverage:.2f}x.",
+
+                })
+
+            risk["alerts"] = alerts
+
+            try:
+
+                from modules.forex.risk.forex_stress_testing_engine import (
+                    get_forex_stress_testing_engine,
+                )
+
+                stress_engine = get_forex_stress_testing_engine(
+
+                    db=self.desk.db,
+
+                    portfolio=portfolio,
+
+                    tenant_id=kwargs.get("tenant_id"),
+
+                    user_id=kwargs.get("user_id"),
+
+                    portfolio_id=kwargs.get("portfolio_id"),
+
+                )
+
+                risk["stress_tests"] = stress_engine.latest_results()
+
+                risk["stress_summary"] = stress_engine.summary()
+
+            except Exception as e:
+
+                risk["stress_tests"] = []
+
+                risk["stress_summary"] = {}
+
+                logger.exception(
+                    "Stress engine failed: %s",
+                    e,
+                )
 
             portfolio = data.get("portfolio", {})
 
@@ -2862,6 +3987,36 @@ class ForexTradingDeskDashboard:
                     "VaR history unavailable."
 
                 )
+            st.divider()
+
+            st.subheader(
+                "Stress Testing"
+            )
+
+            stress = risk.get(
+                "stress_tests",
+                [],
+            )
+
+            if stress:
+
+                stress_df = pd.DataFrame(stress)
+
+                st.dataframe(
+
+                    stress_df,
+
+                    use_container_width=True,
+
+                    hide_index=True,
+
+                )
+
+            else:
+
+                st.info(
+                    "No stress tests available."
+                )
 
             st.divider()
 
@@ -3023,6 +4178,39 @@ class ForexTradingDeskDashboard:
 
             st.divider()
 
+            st.subheader(
+                "Scenario Analysis"
+            )
+
+            scenario = risk.get(
+                "scenario_analysis",
+                [],
+            )
+
+            if scenario:
+
+                scenario_df = pd.DataFrame(
+                    scenario
+                )
+
+                st.dataframe(
+
+                    scenario_df,
+
+                    use_container_width=True,
+
+                    hide_index=True,
+
+                )
+
+            else:
+
+                st.info(
+                    "No scenario analysis."
+                )
+
+            st.divider()
+
             # ==========================================================
             # Position Risk
             # ==========================================================
@@ -3033,12 +4221,9 @@ class ForexTradingDeskDashboard:
 
             )
 
-            positions = risk.get(
-
-                "position_risk",
-
-                [],
-
+            positions = portfolio.get(
+                "positions",
+                []
             )
 
             if positions:
@@ -3067,8 +4252,37 @@ class ForexTradingDeskDashboard:
 
                 )
 
+
+
             st.divider()
 
+            st.subheader(
+                "Risk Heat Map"
+            )
+
+            pair_risk = portfolio.get(
+                "pair_exposure",
+                [],
+            )
+
+            if pair_risk:
+
+                df = pd.DataFrame(pair_risk)
+
+                if {
+                    "pair",
+                    "gross_exposure",
+                }.issubset(df.columns):
+                    st.bar_chart(
+
+                        df.set_index(
+                            "pair"
+                        )[[
+                            "gross_exposure"
+                        ]]
+
+                    )
+                st.divider()
             # ==========================================================
             # Quick Actions
             # ==========================================================
@@ -3131,6 +4345,34 @@ class ForexTradingDeskDashboard:
             portfolio = data.get("portfolio", {})
 
             summary = portfolio.get("summary", {})
+
+            # ==========================================================
+            # Runtime History
+            # ==========================================================
+
+            try:
+
+                from modules.forex.forex_runtime_history_engine import (
+                    get_forex_runtime_history_engine,
+                )
+
+                runtime = get_forex_runtime_history_engine(
+
+                    db=self.desk.db,
+
+                    tenant_id=kwargs.get("tenant_id"),
+
+                    user_id=kwargs.get("user_id"),
+
+                    portfolio_id=kwargs.get("portfolio_id"),
+
+                )
+
+                history = runtime.build_dashboard_packet()
+
+            except Exception:
+
+                history = {}
 
             st.subheader("Institutional Performance Analytics")
 
@@ -3216,12 +4458,14 @@ class ForexTradingDeskDashboard:
 
                 st.subheader("Equity Curve")
 
-                equity = performance.get(
+                portfolio_trends = history.get(
+                    "portfolio_trends",
+                    {}
+                )
 
-                    "equity_curve",
-
-                    [],
-
+                equity = portfolio_trends.get(
+                    "series",
+                    []
                 )
 
                 if equity:
@@ -3229,28 +4473,24 @@ class ForexTradingDeskDashboard:
                     df = pd.DataFrame(equity)
 
                     if {
-
-                        "date",
-
+                        "created_at",
                         "equity",
-
                     }.issubset(df.columns):
-
-                        df = df.set_index(
-
-                            "date"
-
-                        )
 
                         st.line_chart(
 
-                            df["equity"]
+                            df.set_index(
+                                "created_at"
+                            )[["equity"]]
 
                         )
 
                     else:
 
-                        st.line_chart(df)
+                        st.dataframe(
+                            df,
+                            use_container_width=True,
+                        )
 
                 else:
 
@@ -3322,21 +4562,19 @@ class ForexTradingDeskDashboard:
 
                 )
 
-                returns = performance.get(
+                returns = []
 
-                    "daily_returns",
+                if equity:
 
-                    [],
+                    df = pd.DataFrame(equity)
 
-                )
+                    if "equity" in df.columns:
+                        df["daily_return"] = df["equity"].pct_change()
 
-                if returns:
+                        returns = df["daily_return"].fillna(0)
+                        st.bar_chart(returns)
 
-                    st.bar_chart(
 
-                        returns
-
-                    )
 
                 else:
 
@@ -3354,29 +4592,35 @@ class ForexTradingDeskDashboard:
 
                 )
 
-                monthly = performance.get(
+                monthly = []
 
-                    "monthly_returns",
+                if equity:
 
-                    [],
+                    df = pd.DataFrame(equity)
 
-                )
+                    if {
+                        "created_at",
+                        "equity",
+                    }.issubset(df.columns):
+                        df["created_at"] = pd.to_datetime(df["created_at"])
 
-                if monthly:
+                        monthly = (
 
-                    st.line_chart(
+                            df
 
-                        monthly
+                            .set_index("created_at")
 
-                    )
+                            .resample("M")
 
-                else:
+                            .last()["equity"]
 
-                    st.info(
+                            .pct_change()
 
-                        "No monthly returns."
+                            .fillna(0)
 
-                    )
+                        )
+
+                st.line_chart(monthly)
 
             st.divider()
 
@@ -3502,10 +4746,37 @@ class ForexTradingDeskDashboard:
                 "Portfolio Allocation"
             )
 
-            allocation = portfolio.get(
-                "allocation",
-                [],
+            positions = portfolio.get(
+                "positions",
+                []
             )
+
+            allocation = []
+
+            total = summary.get(
+                "total_market_value",
+                0,
+            )
+
+            for pos in positions:
+                mv = pos.get(
+                    "market_value",
+                    0,
+                )
+
+                allocation.append({
+
+                    "pair": pos.get("pair"),
+
+                    "allocation_pct":
+
+                        (mv / total * 100)
+
+                        if total
+
+                        else 0,
+
+                })
 
             if allocation:
 
@@ -3553,13 +4824,7 @@ class ForexTradingDeskDashboard:
 
             )
 
-            timeline = performance.get(
-
-                "timeline",
-
-                [],
-
-            )
+            timeline = equity
 
             if timeline:
 
@@ -3607,46 +4872,38 @@ class ForexTradingDeskDashboard:
             a, b, c, d, e, f = st.columns(6)
 
             a.button(
-
                 "Performance Report",
-
+                key="performance_report_btn",
                 use_container_width=True,
-
             )
 
             b.button(
-
                 "Trade Attribution",
-
+                key="performance_attribution_btn",
                 use_container_width=True,
-
             )
 
             c.button(
-
                 "Export CSV",
-
+                key="performance_export_csv_btn",
                 use_container_width=True,
-
             )
 
             d.button(
-
                 "Export PDF",
-
+                key="performance_export_pdf_btn",
                 use_container_width=True,
-
             )
 
             e.button(
                 "Refresh",
-                key="analytics_export_btn",
+                key="performance_refresh_btn",
                 use_container_width=True,
             )
 
             f.button(
                 "Analytics",
-                key="analytics_action_refresh_btn",
+                key="performance_analytics_btn",
                 use_container_width=True,
             )
 
@@ -3660,6 +4917,62 @@ class ForexTradingDeskDashboard:
             strategy = data.get("strategy_lab", {})
 
             ai = data.get("executive_ai", {})
+
+            # ==========================================================
+            # Live Strategy Engines
+            # ==========================================================
+
+            try:
+
+                from modules.forex.forex_ai import (
+                    get_forex_ai,
+                )
+
+                ai_engine = get_forex_ai(
+                    db=self.desk.db,
+                )
+
+                ai = ai_engine.dashboard_packet(
+                    portfolio_id=kwargs.get("portfolio_id"),
+                )
+
+            except Exception:
+                pass
+
+            try:
+
+                from modules.forex.forex_alpha_model import (
+                    get_forex_alpha_model,
+                )
+
+                alpha_engine = get_forex_alpha_model(
+                    db=self.desk.db,
+                )
+
+                alpha = alpha_engine.dashboard_packet(
+                    portfolio_id=kwargs.get("portfolio_id"),
+                )
+
+            except Exception:
+
+                alpha = {}
+
+            try:
+
+                from modules.forex.forex_strategy_lab import (
+                    get_forex_strategy_lab,
+                )
+
+                strategy_engine = get_forex_strategy_lab(
+                    db=self.desk.db,
+                )
+
+                strategy = strategy_engine.dashboard_packet(
+                    portfolio_id=kwargs.get("portfolio_id"),
+                )
+
+            except Exception:
+                pass
 
             recommendations = strategy.get(
 
@@ -3759,13 +5072,19 @@ class ForexTradingDeskDashboard:
 
             cards[6].metric(
 
-                "AI Score",
+                "Alpha Score",
 
-                ai.get(
+                alpha.get(
 
-                    "score",
+                    "alpha_score",
 
-                    0,
+                    ai.get(
+
+                        "score",
+
+                        0,
+
+                    ),
 
                 ),
 
@@ -3775,11 +5094,17 @@ class ForexTradingDeskDashboard:
 
                 "Market Regime",
 
-                ai.get(
+                alpha.get(
 
                     "regime",
 
-                    "UNKNOWN",
+                    ai.get(
+
+                        "regime",
+
+                        "UNKNOWN",
+
+                    ),
 
                 ),
 
@@ -3801,11 +5126,17 @@ class ForexTradingDeskDashboard:
 
                 )
 
-                summary = ai.get(
+                summary = alpha.get(
 
-                    "summary",
+                    "executive_summary",
 
-                    "No AI summary available."
+                    ai.get(
+
+                        "summary",
+
+                        "No AI summary available.",
+
+                    ),
 
                 )
 
@@ -3827,11 +5158,17 @@ class ForexTradingDeskDashboard:
 
                     "Bias",
 
-                    ai.get(
+                    alpha.get(
 
                         "bias",
 
-                        "Neutral",
+                        ai.get(
+
+                            "bias",
+
+                            "Neutral",
+
+                        ),
 
                     ),
 
@@ -3841,19 +5178,37 @@ class ForexTradingDeskDashboard:
 
                     "Confidence",
 
-                    f"{ai.get('confidence', 0):.1f}%",
+                    f"{alpha.get(
+
+                        'confidence',
+
+                        ai.get(
+
+                            'confidence',
+
+                            0,
+
+                        ),
+
+                    ):.1f}%",
 
                 )
 
                 st.metric(
 
-                    "Volatility",
+                    "Market Regime",
 
-                    ai.get(
+                    alpha.get(
 
-                        "volatility",
+                        "market_regime",
 
-                        "Normal",
+                        ai.get(
+
+                            "regime",
+
+                            "UNKNOWN",
+
+                        ),
 
                     ),
 
@@ -3875,7 +5230,10 @@ class ForexTradingDeskDashboard:
 
                 rec_df = pd.DataFrame(
 
-                    recommendations
+                    alpha.get(
+                        "recommendations",
+                        recommendations,
+                    )
 
                 )
 
@@ -3952,7 +5310,10 @@ class ForexTradingDeskDashboard:
 
                     strategy_df = pd.DataFrame(
 
-                        strategies
+                        alpha.get(
+                            "strategy_rankings",
+                            strategies,
+                        )
 
                     )
 
@@ -4001,7 +5362,10 @@ class ForexTradingDeskDashboard:
 
                     opp_df = pd.DataFrame(
 
-                        opportunities
+                        alpha.get(
+                            "opportunities",
+                            opportunities,
+                        )
 
                     )
 
@@ -4030,64 +5394,65 @@ class ForexTradingDeskDashboard:
             # ==========================================================
 
             st.subheader(
-
                 "Signal Distribution"
-
             )
 
-            signal_counts = {
+            # ==========================================================
+            # Build Signal Counts From Live Recommendations
+            # ==========================================================
 
-                "BUY":
+            live_recommendations = alpha.get(
+                "recommendations",
+                recommendations,
+            )
 
-                    strategy.get(
+            buy_count = 0
+            sell_count = 0
+            hold_count = 0
 
-                        "buy_signals",
+            for rec in live_recommendations:
 
-                        0,
+                direction = str(
+                    rec.get(
+                        "direction",
+                        rec.get(
+                            "signal",
+                            "HOLD",
+                        ),
+                    )
+                ).upper()
 
-                    ),
+                if direction == "BUY":
 
-                "SELL":
+                    buy_count += 1
 
-                    strategy.get(
+                elif direction == "SELL":
 
-                        "sell_signals",
+                    sell_count += 1
 
-                        0,
+                else:
 
-                    ),
-
-                "HOLD":
-
-                    strategy.get(
-
-                        "hold_signals",
-
-                        0,
-
-                    ),
-
-            }
+                    hold_count += 1
 
             signal_df = pd.DataFrame(
 
                 {
 
-                    "Signal":
+                    "Signal": [
 
-                        list(
+                        "BUY",
+                        "SELL",
+                        "HOLD",
 
-                            signal_counts.keys()
+                    ],
 
-                        ),
+                    "Count": [
 
-                    "Count":
+                        buy_count,
+                        sell_count,
+                        hold_count,
 
-                        list(
-
-                            signal_counts.values()
-
-                        ),
+                    ],
 
                 }
 
@@ -4096,9 +5461,7 @@ class ForexTradingDeskDashboard:
             st.bar_chart(
 
                 signal_df.set_index(
-
                     "Signal"
-
                 )
 
             )
@@ -4114,6 +5477,55 @@ class ForexTradingDeskDashboard:
             )
 
             st.divider()
+            st.divider()
+
+            st.subheader(
+                "Market Regime"
+            )
+
+            regime = alpha.get(
+                "market_regime",
+                {},
+            )
+
+            if regime:
+
+                st.json(regime)
+
+            else:
+
+                st.info(
+                    "No market regime available."
+                )
+
+            st.subheader(
+                "AI Consensus"
+            )
+
+            consensus = ai.get(
+                "consensus",
+                [],
+            )
+
+            if consensus:
+
+                consensus_df = pd.DataFrame(consensus)
+
+                st.dataframe(
+
+                    consensus_df,
+
+                    use_container_width=True,
+
+                    hide_index=True,
+
+                )
+
+            else:
+
+                st.info(
+                    "No AI consensus available."
+                )
 
             # ==========================================================
             # Strategy History
@@ -4168,35 +5580,27 @@ class ForexTradingDeskDashboard:
             a, b, c, d, e, f = st.columns(6)
 
             a.button(
-
                 "Run AI",
-
+                key="strategy_run_ai_btn",
                 use_container_width=True,
-
             )
 
             b.button(
-
                 "Generate Signals",
-
+                key="strategy_generate_signals_btn",
                 use_container_width=True,
-
             )
 
             c.button(
-
                 "Scan Market",
-
+                key="strategy_scan_market_btn",
                 use_container_width=True,
-
             )
 
             d.button(
-
                 "Optimize",
-
+                key="strategy_optimize_btn",
                 use_container_width=True,
-
             )
 
             e.button(
@@ -4207,7 +5611,7 @@ class ForexTradingDeskDashboard:
 
             f.button(
                 "Refresh",
-                key="strategy_history_refresh_btn",
+                key="strategy_refresh_btn",
                 use_container_width=True,
             )
 
@@ -4220,21 +5624,67 @@ class ForexTradingDeskDashboard:
 
             journal = data.get("journal", {})
 
-            trades = journal.get(
+            # ==========================================================
+            # Live Journal Engines
+            # ==========================================================
 
-                "trades",
+            # ==========================================================
+            # Live Trade Journal
+            # ==========================================================
 
+            try:
+
+                from modules.forex.forex_trade_journal import (
+                    get_forex_trade_journal,
+                )
+
+                journal_engine = get_forex_trade_journal(
+                    db=self.desk.db,
+                )
+
+                journal_data = journal_engine.entries(
+                    limit=250,
+                )
+
+                journal = {
+
+                    "entries": journal_data.get(
+                        "entries",
+                        [],
+                    ),
+
+                    "count": journal_data.get(
+                        "count",
+                        0,
+                    ),
+
+                    "status": journal_data.get(
+                        "status",
+                        "READY",
+                    ),
+
+                }
+
+            except Exception:
+
+                journal = {
+
+                    "entries": [],
+
+                    "count": 0,
+
+                    "status": "ERROR",
+
+                }
+
+            entries = journal.get(
+                "entries",
                 [],
-
             )
 
-            notes = journal.get(
+            trades = entries
 
-                "notes",
-
-                [],
-
-            )
+            notes = entries
 
             mistakes = journal.get(
 
@@ -4257,79 +5707,55 @@ class ForexTradingDeskDashboard:
             cards = st.columns(8)
 
             cards[0].metric(
-
                 "Journal Entries",
-
-                len(notes),
-
+                journal.get(
+                    "count",
+                    len(entries),
+                ),
             )
 
             cards[1].metric(
-
-                "Trades",
-
-                len(trades),
-
+                "Recorded Trades",
+                len(entries),
             )
 
             cards[2].metric(
-
-                "Winning Trades",
-
+                "Closed Trades",
                 journal.get(
-
-                    "winning_trades",
-
-                    0,
-
+                    "closed_trades",
+                    len(trades),
                 ),
-
             )
 
             cards[3].metric(
-
                 "Win Rate",
-
-                f"{journal.get('win_rate', 0):.1f}%",
-
+                f"{journal.get('win_rate', 0):.1f}%"
             )
 
             cards[4].metric(
-
                 "Average Hold",
-
                 journal.get(
-
-                    "average_hold",
-
-                    "0h",
-
+                    "average_hold_time",
+                    journal.get(
+                        "average_hold",
+                        "0h",
+                    ),
                 ),
-
             )
 
             cards[5].metric(
-
-                "Average Gain",
-
-                f"${journal.get('average_gain', 0):,.2f}",
-
+                "Realized P&L",
+                f"${journal.get('realized_pnl', 0):,.2f}"
             )
 
             cards[6].metric(
-
-                "Average Loss",
-
-                f"${journal.get('average_loss', 0):,.2f}",
-
+                "Average R-Multiple",
+                f"{journal.get('avg_r_multiple', 0):.2f}"
             )
 
             cards[7].metric(
-
                 "Expectancy",
-
-                f"{journal.get('expectancy', 0):.2f}",
-
+                f"{journal.get('expectancy', 0):.2f}"
             )
 
             st.divider()
@@ -4496,11 +5922,11 @@ class ForexTradingDeskDashboard:
             )
 
             emotions = journal.get(
-
-                "emotion_summary",
-
-                {},
-
+                "emotion_distribution",
+                journal.get(
+                    "emotion_summary",
+                    {},
+                ),
             )
 
             if emotions:
@@ -4570,11 +5996,11 @@ class ForexTradingDeskDashboard:
             )
 
             review = journal.get(
-
-                "strategy_review",
-
-                [],
-
+                "trade_review",
+                journal.get(
+                    "strategy_review",
+                    [],
+                ),
             )
 
             if review:
@@ -4616,11 +6042,11 @@ class ForexTradingDeskDashboard:
             )
 
             improvements = journal.get(
-
-                "improvements",
-
-                [],
-
+                "improvement_tracker",
+                journal.get(
+                    "improvements",
+                    [],
+                ),
             )
 
             if improvements:
@@ -4651,6 +6077,88 @@ class ForexTradingDeskDashboard:
 
             st.divider()
 
+            st.divider()
+
+            st.subheader(
+                "Trade Distribution"
+            )
+
+            if trades:
+
+                trade_df = pd.DataFrame(trades)
+
+                if "strategy" in trade_df.columns:
+                    dist = (
+
+                        trade_df["strategy"]
+
+                        .value_counts()
+
+                        .rename_axis("Strategy")
+
+                        .reset_index(name="Trades")
+
+                    )
+
+                    st.bar_chart(
+
+                        dist.set_index(
+                            "Strategy"
+                        )
+
+                    )
+
+                    st.dataframe(
+
+                        dist,
+
+                        use_container_width=True,
+
+                        hide_index=True,
+
+                    )
+
+            else:
+
+                st.info(
+                    "No trade distribution available."
+                )
+
+            st.divider()
+
+            st.subheader(
+                "Journal Activity"
+            )
+
+            if trades:
+
+                trade_df = pd.DataFrame(trades)
+
+                if "date" in trade_df.columns:
+                    trade_df["date"] = pd.to_datetime(
+                        trade_df["date"]
+                    )
+
+                    monthly = (
+
+                        trade_df
+
+                        .set_index("date")
+
+                        .resample("M")
+
+                        .size()
+
+                    )
+
+                    st.line_chart(monthly)
+
+            else:
+
+                st.info(
+                    "No journal activity."
+                )
+
             # ==========================================================
             # Quick Actions
             # ==========================================================
@@ -4658,47 +6166,38 @@ class ForexTradingDeskDashboard:
             a, b, c, d, e, f = st.columns(6)
 
             a.button(
-
                 "New Journal Entry",
-
+                key="journal_new_entry_btn",
                 use_container_width=True,
-
             )
 
             b.button(
-
                 "Review Trades",
-
+                key="journal_review_trades_btn",
                 use_container_width=True,
-
             )
 
             c.button(
-
                 "Export Journal",
-
+                key="journal_export_btn",
                 use_container_width=True,
-
             )
 
             d.button(
-
                 "Performance Review",
-
+                key="journal_performance_review_btn",
                 use_container_width=True,
-
             )
+
             e.button(
                 "Psychology Report",
-                key="improvement_export_btn",
+                key="journal_psychology_btn",
                 use_container_width=True,
             )
-
-
 
             f.button(
                 "Refresh",
-                key="imporovement_refresh_btn",
+                key="journal_refresh_btn",
                 use_container_width=True,
             )
 
@@ -5299,8 +6798,8 @@ class ForexTradingDeskDashboard:
 _INSTANCE=None
 def get_forex_trading_desk_dashboard(db=None):
     global _INSTANCE
-    if _INSTANCE is None:
-        _INSTANCE=ForexTradingDeskDashboard(db=db)
+    if _INSTANCE is None or getattr(_INSTANCE, "db", None) is not db:
+        _INSTANCE = ForexTradingDeskDashboard(db=db)
     return _INSTANCE
 
 def render_forex_trading_desk_dashboard(db=None, **kwargs):

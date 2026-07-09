@@ -216,7 +216,12 @@ class ForexInstitutionalTradeTicket:
     def _default_account_snapshot(self) -> Dict[str, Any]:
         try:
             from modules.forex.forex_portfolio_engine import get_forex_portfolio_engine
-            engine = get_forex_portfolio_engine(db=self.db)
+            engine = get_forex_portfolio_engine(
+                db=self.db,
+                tenant_id=self.tenant_id,
+                user_id=self.user_id,
+                portfolio_id=self.portfolio_id,
+            )
             account = engine.get_or_create_account()
             return account.to_dict() if hasattr(account, "to_dict") else {}
         except Exception:

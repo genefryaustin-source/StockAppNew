@@ -268,6 +268,10 @@ class ForexPortfolioEngine:
         self.user_id = user_id
         self.portfolio_id = portfolio_id
         self.db = db
+        self.db_engine = None
+        from modules.forex.forex_db_session_manager import ForexDBSessionManager
+
+        #self.db_engine = ForexDBSessionManager(db)
         self.account_currency = str(account_currency or DEFAULT_ACCOUNT_CURRENCY).upper()
 
         self.forex_service = forex_service or get_forex_service(
@@ -281,6 +285,31 @@ class ForexPortfolioEngine:
             db=db,
             forex_service=self.forex_service,
         )
+
+    def _db(self):
+        """
+        Safe DB accessor.
+        Keeps backward compatibility while we migrate.
+        """
+        return self.db
+    # ==========================================================
+    # Database Helpers
+    # ==========================================================
+
+    def _execute(self, stmt, params=None):
+        if self.db_engine is not None:
+            return self.db_engine.execute(stmt, params)
+        return self.db.execute(stmt, params or {})
+
+    def _fetchone(self, stmt, params=None):
+        if self.db_engine is not None:
+            return self.db_engine.fetchone(stmt, params)
+        return self.db.execute(stmt, params or {}).fetchone()
+
+    def _fetchall(self, stmt, params=None):
+        if self.db_engine is not None:
+            return self.db_engine.fetchall(stmt, params)
+        return self.db.execute(stmt, params or {}).fetchall()
 
     def ensure_tables(self) -> None:
         if self.db is None:
@@ -500,15 +529,49 @@ class ForexPortfolioEngine:
         try:
             self.ensure_tables()
 
-            params: Dict[str, Any] = {"tenant_id": self.tenant_id}
+            params: Dict[str, Any] = {
+                "tenant_id": self.tenant_id,
+            }
             where = "tenant_id = :tenant_id"
 
+            # ---------------------------------------------------------
+            # Lookup by account id
+            # ---------------------------------------------------------
+
             if account_id:
-                where += " AND id = :account_id"
-                params["account_id"] = account_id
+
+                params = {
+                    "account_id": account_id,
+                }
+
+                where = "id = :account_id"
+
             else:
-                where += " AND portfolio_id = :portfolio_id"
-                params["portfolio_id"] = portfolio_id or self.portfolio_id
+
+                params = {
+                    "tenant_id": self.tenant_id,
+                }
+
+                where = "tenant_id = :tenant_id"
+
+                resolved_portfolio = portfolio_id or self.portfolio_id
+
+                if resolved_portfolio is None:
+
+                    where += " AND portfolio_id IS NULL"
+
+                else:
+
+                    where += " AND portfolio_id = :portfolio_id"
+
+                    params["portfolio_id"] = resolved_portfolio
+                    print("=" * 80)
+                    print("ACCOUNT LOOKUP")
+                    print("tenant    :", self.tenant_id)
+                    print("portfolio :", portfolio_id or self.portfolio_id)
+                    print("where     :", where)
+                    print("params    :", params)
+                    print("=" * 80)
 
             row = self.db.execute(text(
                 f"""
@@ -609,6 +672,13 @@ class ForexPortfolioEngine:
         leverage: Optional[float] = None,
         raw: Optional[Dict[str, Any]] = None,
     ) -> ForexPosition:
+        print("=" * 80)
+        print("OPEN POSITION")
+        print("tenant_id   :", self.tenant_id)
+        print("user_id     :", self.user_id)
+        print("portfolio_id:", self.portfolio_id)
+        print("account_id  :", account_id)
+        print("=" * 80)
         account = self.get_account(account_id=account_id)
         if not account:
             raise ValueError(f"Forex account not found: {account_id}")
@@ -630,7 +700,26 @@ class ForexPortfolioEngine:
             raise ValueError("Forex units must be positive.")
 
         quote = self.forex_service.get_quote(normalized_pair)
+
+        print("=" * 80)
+        print("FOREX QUOTE")
+        print("pair :", normalized_pair)
+        print("quote:", quote)
+
+        if quote is not None:
+            print("price :", getattr(quote, "price", None))
+            print("bid   :", getattr(quote, "bid", None))
+            print("ask   :", getattr(quote, "ask", None))
+
+        print("=" * 80)
         price = _safe_float(entry_price, quote.price)
+        print("=" * 80)
+        print("PRICE DEBUG")
+        print("entry_price :", entry_price)
+        print("quote.price :", quote.price)
+        print("computed    :", price)
+        print("type        :", type(price))
+        print("=" * 80)
         if price <= 0:
             raise ValueError("Entry price must be positive.")
 
@@ -671,18 +760,37 @@ class ForexPortfolioEngine:
         )
 
         self._persist_position(position)
+        print("POSITION PERSISTED")
         self.recalculate_account(account.id)
+        print("ACCOUNT RECALCULATED")
+        print("RETURNING POSITION")
         return position
 
     def close_position(
-        self,
-        *,
-        position_id: str,
-        close_price: Optional[float] = None,
-        close_units: Optional[float] = None,
-        notes: str = "Position closed.",
+
+            self,
+            *,
+            position_id: str,
+            close_price: Optional[float] = None,
+            close_units: Optional[float] = None,
+            notes: str = "Position closed.",
     ) -> Optional[ForexPosition]:
+
+        # -----------------------------
+        # SAFE ISOLATION START
+        # -----------------------------
+        print("=" * 80)
+        print("ENTER close_position")
+        print("position_id :", position_id)
+        print("close_price :", close_price)
+        print("close_units :", close_units)
+        print("=" * 80)
         position = self.get_position(position_id=position_id)
+        print("POSITION FOUND:", position is not None)
+
+        if position:
+            print("status :", position.status)
+            print("units  :", position.units)
         if not position:
             return None
 
@@ -705,12 +813,14 @@ class ForexPortfolioEngine:
             current_price=exit_price,
         )
 
+        # update position state
         position.realized_pnl += pnl
         position.units -= units_to_close
         position.current_price = exit_price
         position.updated_at = _utc_now()
 
-        if position.units <= 0.0000001:
+        # fully close detection
+        if position.units <= 1e-8:
             position.units = 0.0
             position.status = "CLOSED"
             position.unrealized_pnl = 0.0
@@ -728,14 +838,23 @@ class ForexPortfolioEngine:
             )
             position.margin_required = position.notional_value / max(position.leverage, 1.0)
 
+        # -----------------------------
+        # CRITICAL FIX: persist FIRST
+        # -----------------------------
+        print("Persisting updated position...")
         self._persist_position(position)
-
+        print("Position persisted.")
+        # account update MUST be isolated
+        print("Looking up account:", position.account_id)
         account = self.get_account(account_id=position.account_id)
+        print("ACCOUNT FOUND:", account is not None)
         if account:
             account.cash_balance += pnl
             account.realized_pnl += pnl
             account.updated_at = _utc_now()
+
             self._persist_account(account)
+
             self._record_cash_event(
                 account_id=account.id,
                 event_type="POSITION_CLOSED",
@@ -745,9 +864,227 @@ class ForexPortfolioEngine:
                 notes=notes,
                 raw={"position_id": position.id, "pair": position.pair},
             )
-            self.recalculate_account(account.id)
+
+            # IMPORTANT: recalculation OUTSIDE DB transaction chain
+            try:
+                self.recalculate_account(account.id)
+            except Exception as e:
+                logger.warning("recalculate_account failed: %s", e)
 
         return position
+
+    def reverse_position(
+        self,
+        *,
+        position_id: str,
+        account_id: Optional[str] = None,
+        leverage: Optional[float] = None,
+        notes: str = "Position reversed.",
+    ) -> Dict[str, Any]:
+        """
+        Close an open position and immediately open the opposite side.
+
+        This method is intentionally portfolio/account logic, not UI logic.
+        The dashboard should call this once, then refresh the terminal snapshot
+        after the method returns.
+        """
+        position = self.get_position(position_id=position_id)
+
+        if not position:
+            return {
+                "status": "ERROR",
+                "message": "Position not found.",
+                "position_id": position_id,
+            }
+
+        if str(position.status).upper() != "OPEN":
+            return {
+                "status": "ERROR",
+                "message": "Position is not open.",
+                "position_id": position.id,
+                "position_status": position.status,
+            }
+
+        original_units = _safe_float(position.units)
+        original_pair = position.pair
+        original_side = str(position.side or "").upper()
+        original_account_id = account_id or position.account_id
+        original_leverage = _safe_float(leverage, position.leverage)
+
+        reverse_side = "SHORT" if original_side in {"LONG", "BUY"} else "LONG"
+
+        quote = self.forex_service.get_quote(original_pair)
+        reverse_price = _safe_float(getattr(quote, "price", None), position.current_price)
+
+        closed_position = self.close_position(
+            position_id=position.id,
+            close_units=original_units,
+            close_price=reverse_price,
+            notes=f"{notes} Close leg.",
+        )
+
+        if not closed_position:
+            return {
+                "status": "ERROR",
+                "message": "Failed to close the original position.",
+                "position_id": position.id,
+            }
+
+        try:
+            new_position = self.open_position(
+                account_id=original_account_id,
+                pair=original_pair,
+                side=reverse_side,
+                units=original_units,
+                entry_price=reverse_price,
+                leverage=original_leverage,
+                raw={
+                    "source": "reverse_position",
+                    "original_position_id": position.id,
+                    "closed_position_id": closed_position.id,
+                    "notes": notes,
+                },
+            )
+
+            self.recalculate_account(original_account_id)
+
+            return {
+                "status": "SUCCESS",
+                "action": "REVERSED",
+                "message": "Position reversed successfully.",
+                "account_id": original_account_id,
+                "closed_position_id": closed_position.id,
+                "new_position_id": new_position.id,
+                "pair": original_pair,
+                "old_side": original_side,
+                "new_side": reverse_side,
+                "units": original_units,
+                "price": reverse_price,
+                "closed_position": closed_position.to_dict(),
+                "new_position": new_position.to_dict(),
+                "refresh_required": True,
+            }
+
+        except Exception as exc:
+            logger.exception("Failed to open reverse forex position: %s", exc)
+            return {
+                "status": "ERROR",
+                "message": f"Original position was closed, but reverse open failed: {exc}",
+                "account_id": original_account_id,
+                "closed_position_id": closed_position.id,
+                "pair": original_pair,
+                "old_side": original_side,
+                "new_side": reverse_side,
+                "units": original_units,
+                "refresh_required": True,
+            }
+
+    def flatten_account(
+        self,
+        *,
+        account_id: str,
+        notes: str = "Flatten account.",
+    ) -> Dict[str, Any]:
+        """Close every open position for an account."""
+        positions = self.list_positions(account_id=account_id, status="OPEN")
+
+        closed: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+
+        for position in positions:
+            try:
+                result = self.close_position(
+                    position_id=position.id,
+                    close_units=position.units,
+                    close_price=position.current_price,
+                    notes=notes,
+                )
+                if result:
+                    closed.append(result.to_dict())
+            except Exception as exc:
+                logger.warning("Flatten account failed for %s: %s", position.id, exc)
+                errors.append({
+                    "position_id": position.id,
+                    "pair": position.pair,
+                    "error": str(exc),
+                })
+
+        self.recalculate_account(account_id)
+
+        return {
+            "status": "SUCCESS" if not errors else "PARTIAL_SUCCESS",
+            "action": "FLATTEN_ACCOUNT",
+            "account_id": account_id,
+            "requested_count": len(positions),
+            "closed_count": len(closed),
+            "error_count": len(errors),
+            "closed_positions": closed,
+            "errors": errors,
+            "refresh_required": True,
+        }
+
+    def flatten_pair(
+        self,
+        *,
+        account_id: str,
+        pair: str,
+        notes: str = "Flatten pair.",
+    ) -> Dict[str, Any]:
+        """Close every open position for a specific pair in an account."""
+        normalized_pair = normalize_pair(pair)
+        positions = [
+            position
+            for position in self.list_positions(account_id=account_id, status="OPEN")
+            if normalize_pair(position.pair) == normalized_pair
+        ]
+
+        closed: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+
+        for position in positions:
+            try:
+                result = self.close_position(
+                    position_id=position.id,
+                    close_units=position.units,
+                    close_price=position.current_price,
+                    notes=notes,
+                )
+                if result:
+                    closed.append(result.to_dict())
+            except Exception as exc:
+                logger.warning("Flatten pair failed for %s: %s", position.id, exc)
+                errors.append({
+                    "position_id": position.id,
+                    "pair": position.pair,
+                    "error": str(exc),
+                })
+
+        self.recalculate_account(account_id)
+
+        return {
+            "status": "SUCCESS" if not errors else "PARTIAL_SUCCESS",
+            "action": "FLATTEN_PAIR",
+            "account_id": account_id,
+            "pair": normalized_pair,
+            "requested_count": len(positions),
+            "closed_count": len(closed),
+            "error_count": len(errors),
+            "closed_positions": closed,
+            "errors": errors,
+            "refresh_required": True,
+        }
+
+    def close_all_positions(
+        self,
+        *,
+        account_id: str,
+        notes: str = "Close all positions.",
+    ) -> Dict[str, Any]:
+        """Alias for flatten_account used by dashboards and command handlers."""
+        return self.flatten_account(
+            account_id=account_id,
+            notes=notes,
+        )
 
     def get_position(
         self,
@@ -764,12 +1101,10 @@ class ForexPortfolioEngine:
                 """
                 SELECT *
                 FROM forex_positions
-                WHERE tenant_id = :tenant_id
-                  AND id = :position_id
+                WHERE id = :position_id
                 LIMIT 1
                 """),
                 {
-                    "tenant_id": self.tenant_id,
                     "position_id": position_id,
                 },
             ).fetchone()
@@ -777,18 +1112,26 @@ class ForexPortfolioEngine:
             if not row:
                 return None
 
+            row_dict = dict(row._mapping)
+
+            row_tenant = row_dict.get("tenant_id")
+            if self.tenant_id is not None and row_tenant is not None and str(row_tenant) != str(self.tenant_id):
+                return None
+
             return self._position_from_row(row)
 
         except Exception as exc:
             logger.warning("Failed to get forex position: %s", exc)
+            self._rollback_quietly()
             return None
 
     def list_positions(
-        self,
-        *,
-        account_id: Optional[str] = None,
-        status: str = "OPEN",
+            self,
+            *,
+            account_id: Optional[str] = None,
+            status: str = "OPEN",
     ) -> List[ForexPosition]:
+
         if self.db is None:
             return []
 
@@ -809,20 +1152,31 @@ class ForexPortfolioEngine:
             if status and status.upper() != "ALL":
                 where += " AND status = :status"
 
-            rows = self.db.execute(text(
-                f"""
-                SELECT *
-                FROM forex_positions
-                WHERE {where}
-                ORDER BY updated_at DESC
-                """),
+            rows = self.db.execute(
+                text(
+                    f"""
+                    SELECT *
+                    FROM forex_positions
+                    WHERE {where}
+                    ORDER BY
+                        pair ASC,
+                        opened_at ASC,
+                        id ASC
+                    """
+                ),
                 params,
             ).fetchall()
 
-            return [self._position_from_row(row) for row in rows]
+            return [
+                self._position_from_row(row)
+                for row in rows
+            ]
 
         except Exception as exc:
-            logger.warning("Failed to list forex positions: %s", exc)
+            logger.warning(
+                "Failed to list forex positions: %s",
+                exc,
+            )
             return []
 
     def refresh_positions(self, *, account_id: str) -> List[ForexPosition]:
@@ -878,7 +1232,7 @@ class ForexPortfolioEngine:
         self,
         *,
         account_id: str,
-        persist: bool = True,
+        persist: bool = False,
         refresh: bool = True,
     ) -> Optional[ForexPortfolioSnapshot]:
         if refresh:
@@ -1108,7 +1462,7 @@ class ForexPortfolioEngine:
         *,
         account_id: Optional[str] = None,
         portfolio_id: Optional[str] = None,
-        persist: bool = True,
+        persist: bool = False,
         refresh: bool = True,
         include_orders: bool = True,
         include_history: bool = True,
@@ -1131,7 +1485,12 @@ class ForexPortfolioEngine:
             )
 
         if refresh:
+            print("=" * 80)
+            print("REFRESH POSITIONS")
+            print("account:", account.id)
+            print("=" * 80)
             self.refresh_positions(account_id=account.id)
+            print("REFRESH COMPLETE")
 
         account = self.recalculate_account(account.id) or account
 
@@ -1149,7 +1508,16 @@ class ForexPortfolioEngine:
             account_id=account.id,
             status="CLOSED",
         )
-
+        print("=" * 80)
+        print("CLOSED POSITIONS")
+        for p in closed_positions:
+            print(
+                p.id,
+                p.status,
+                p.units,
+                p.pair,
+            )
+        print("=" * 80)
         position_rows = [position.to_dict() for position in positions]
         closed_position_rows = [position.to_dict() for position in closed_positions]
 
@@ -1283,7 +1651,16 @@ class ForexPortfolioEngine:
                 account_id=(account.id if account else account_id),
                 status="OPEN",
             )
-
+            print("=" * 80)
+            print("OPEN POSITIONS")
+            for p in positions:
+                print(
+                    p.id,
+                    p.status,
+                    p.units,
+                    p.pair,
+                )
+            print("=" * 80)
         equity = _safe_float(account.equity if account else 0.0)
         exposures: Dict[str, Dict[str, float]] = {}
 
@@ -2313,7 +2690,7 @@ def get_forex_terminal_snapshot(
     portfolio_id: Optional[str] = None,
     account_id: Optional[str] = None,
     db: Any = None,
-    persist: bool = True,
+    persist: bool = False,
     refresh: bool = True,
     include_orders: bool = True,
     include_history: bool = True,
@@ -2365,7 +2742,7 @@ def get_forex_portfolio_snapshot(
     portfolio_id: Optional[str] = None,
     account_id: str,
     db: Any = None,
-    persist: bool = True,
+    persist: bool = False,
     refresh: bool = True,
 ) -> Optional[Dict[str, Any]]:
     engine = get_forex_portfolio_engine(
@@ -2403,6 +2780,10 @@ def open_forex_position(
         portfolio_id=portfolio_id,
         db=db,
     )
+    print("=" * 80)
+    print("ENTER open_position")
+    print("account_id param  :", account_id)
+    print("=" * 80)
     return engine.open_position(
         account_id=account_id,
         pair=pair,

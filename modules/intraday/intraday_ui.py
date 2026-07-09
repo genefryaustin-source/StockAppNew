@@ -104,6 +104,7 @@ def _build_chart(
     show_bb: bool = False,
     show_rsi: bool = True,
     show_macd: bool = False,
+    show_signals: bool = True,
 ) -> go.Figure:
 
     ema_periods = ema_periods or [9, 21, 50]
@@ -153,7 +154,11 @@ def _build_chart(
         line=dict(width=1),
     ), row=1, col=1)
 
-    # ── EMAs ─────────────────────────────────────────────────
+    # ── AI Buy/Sell/TP signal overlay ──────────────────────────
+    if show_signals and len(df) > 30:
+        from modules.indicators.signal_suite import compute_signals, add_signal_overlay
+        sig_df = compute_signals(df.rename(columns={"Date": "Date", "Open": "Open", "High": "High", "Low": "Low", "Close": "Close"}))
+        add_signal_overlay(fig, sig_df, row=1, col=1, show_ribbon=False)
     ema_colors = ["#FFC107", "#2196F3", "#9C27B0"]
     if show_ema:
         for period, color in zip(ema_periods, ema_colors):
@@ -342,7 +347,7 @@ def render_intraday_page(db, user: dict):
 
     # ── Indicator toggles ─────────────────────────────────────
     with st.expander("📐 Indicators", expanded=False):
-        col_i1, col_i2, col_i3, col_i4, col_i5 = st.columns(5)
+        col_i1, col_i2, col_i3, col_i4, col_i5, col_i6 = st.columns(6)
         with col_i1:
             show_ema  = st.checkbox("EMA 9/21/50", value=True, key="ind_ema")
         with col_i2:
@@ -353,6 +358,8 @@ def render_intraday_page(db, user: dict):
             show_rsi  = st.checkbox("RSI", value=True, key="ind_rsi")
         with col_i5:
             show_macd = st.checkbox("MACD", value=False, key="ind_macd")
+        with col_i6:
+            show_signals = st.checkbox("🎯 Buy/Sell/TP", value=True, key="ind_signals")
 
     if not ticker:
         st.info("Enter a ticker symbol to load the chart.")
@@ -412,6 +419,7 @@ def render_intraday_page(db, user: dict):
         show_bb=show_bb,
         show_rsi=show_rsi,
         show_macd=show_macd,
+        show_signals=show_signals,
     )
     st.plotly_chart(fig, use_container_width=True, config={
         "displayModeBar": True,
@@ -524,6 +532,7 @@ def render_intraday_chart(db, user: dict, ticker: str,
         df, ticker, sel, source,
         show_ema=True, show_vwap=(sel not in ("1d","1w")),
         show_bb=False, show_rsi=False, show_macd=False,
+        show_signals=True,
     )
     fig.update_layout(height=height, margin=dict(l=0, r=30, t=20, b=10))
     st.plotly_chart(fig, use_container_width=True,

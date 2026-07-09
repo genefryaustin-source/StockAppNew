@@ -17,6 +17,31 @@ except Exception:
     from forex_portfolio_engine import ForexPortfolioEngine, get_forex_portfolio_engine
     from forex_trading_engine import ForexTradingEngine, get_forex_trading_engine
 
+from modules.forex.forex_position_management_engine import (
+    ForexPositionManagementEngine,
+    get_forex_position_management_engine,
+)
+
+from modules.execution.execution_service import (
+    ExecutionService,
+    get_execution_service,
+)
+
+from modules.execution.execution_snapshot_pipeline import (
+    ExecutionSnapshotPipeline,
+)
+
+from modules.execution.execution_event_recorder import (
+    ExecutionEventRecorder,
+)
+
+
+
+
+
+
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -93,12 +118,36 @@ class ForexTradeManagementEngine:
         self.portfolio_id = portfolio_id
         self.db = db
         self.forex_service = forex_service or get_forex_service(tenant_id=tenant_id, user_id=user_id, db=db)
-        self.forex_portfolio_engine = forex_portfolio_engine or get_forex_portfolio_engine(
-            tenant_id=tenant_id, user_id=user_id, portfolio_id=portfolio_id, db=db, forex_service=self.forex_service
+        self.position_manager = (
+            get_forex_position_management_engine(
+                db=db,
+                portfolio_engine=forex_portfolio_engine,
+                actor="trade_manager",
+                source="FOREX",
+            )
         )
-        self.forex_trading_engine = forex_trading_engine or get_forex_trading_engine(
-            tenant_id=tenant_id, user_id=user_id, portfolio_id=portfolio_id, db=db,
-            forex_service=self.forex_service, forex_portfolio_engine=self.forex_portfolio_engine
+
+        self.execution_service = (
+            get_execution_service(
+                db=db,
+                portfolio_engine=forex_portfolio_engine,
+                actor="trade_manager",
+                source="FOREX",
+            )
+        )
+
+        self.snapshot_pipeline = (
+            ExecutionSnapshotPipeline(
+                db=db,
+            )
+        )
+
+        self.recorder = (
+            ExecutionEventRecorder(
+                db=db,
+                actor="trade_manager",
+                source="FOREX",
+            )
         )
 
     def ensure_tables(self) -> None:
@@ -147,7 +196,10 @@ class ForexTradeManagementEngine:
         account_id: str,
         auto_close: bool = False,
     ) -> List[ForexTradeManagementAlert]:
-        positions = self.forex_portfolio_engine.refresh_positions(account_id=account_id)
+        positions = self.position_manager.refresh_positions(
+
+            account_id=account_id,
+        )
         alerts: List[ForexTradeManagementAlert] = []
 
         for position in positions:
@@ -174,17 +226,84 @@ class ForexTradeManagementEngine:
                 alerts.append(alert)
                 self.save_alert(alert)
                 if auto_close and alert.alert_type in {"STOP_HIT", "TARGET_HIT"}:
+
                     try:
-                        self.forex_trading_engine.close_position(position.id)
-                        self.record_event(
-                            account_id=position.account_id,
-                            position_id=position.id,
-                            event_type="AUTO_CLOSE",
-                            message=f"Auto-closed {position.pair} after {alert.alert_type}.",
-                            payload=alert.to_dict(),
+
+                        #
+                        # Close through the Position Manager.
+                        #
+                        # This automatically routes through:
+                        #
+                        # Position Manager
+                        #      ↓
+                        # Execution Service
+                        #      ↓
+                        # Execution Pipeline
+                        #      ↓
+                        # Immutable Events
+                        #
+
+                        context = self.position_manager.close_position(
+
+                            position.id,
+
                         )
+
+                        #
+                        # Refresh execution snapshot
+                        #
+
+                        try:
+
+                            self.snapshot_pipeline.refresh(
+                                context,
+                            )
+
+                        except Exception as exc:
+
+                            context.add_warning(
+                                f"Snapshot refresh failed: {exc}"
+                            )
+
+                        #
+                        # Verify execution
+                        #
+
+                        try:
+
+                            context.verified = (
+
+                                self.execution_service.verify_execution(
+                                    context,
+                                )
+
+                            )
+
+                        except Exception:
+
+                            context.verified = False
+
+                        logger.info(
+
+                            "Automatically closed %s after %s.",
+
+                            position.id,
+
+                            alert.alert_type,
+
+                        )
+
                     except Exception as exc:
-                        logger.warning("Auto-close failed for %s: %s", position.id, exc)
+
+                        logger.warning(
+
+                            "Auto-close failed for %s: %s",
+
+                            position.id,
+
+                            exc,
+
+                        )
 
         return alerts
 
@@ -194,7 +313,10 @@ class ForexTradeManagementEngine:
         position_id: str,
         trailing_pct: float = 0.01,
     ) -> Optional[Dict[str, Any]]:
-        position = self.forex_portfolio_engine.get_position(position_id=position_id)
+        position = self.position_manager.load_position(
+
+            position_id,
+        )
         if not position:
             return None
 
@@ -202,26 +324,97 @@ class ForexTradeManagementEngine:
         current_price = _safe_float(quote.price)
         trail = abs(current_price * trailing_pct)
 
-        if position.side == "LONG":
-            new_stop = current_price - trail
-            if position.stop_price is None or new_stop > position.stop_price:
-                position.stop_price = new_stop
-        else:
-            new_stop = current_price + trail
-            if position.stop_price is None or new_stop < position.stop_price:
-                position.stop_price = new_stop
+        #
+        # Determine the new trailing stop
+        #
 
-        position.current_price = current_price
-        position.updated_at = _utc_now()
-        self.forex_portfolio_engine._persist_position(position)
-        self.record_event(
-            account_id=position.account_id,
-            position_id=position.id,
-            event_type="TRAILING_STOP_UPDATED",
-            message=f"Trailing stop updated for {position.pair}.",
-            payload=position.to_dict(),
-        )
+        if position.side == "LONG":
+
+            new_stop = current_price - trail
+
+            should_update = (
+
+                    position.stop_price is None
+
+                    or
+
+                    new_stop > position.stop_price
+
+            )
+
+        else:
+
+            new_stop = current_price + trail
+
+            should_update = (
+
+                    position.stop_price is None
+
+                    or
+
+                    new_stop < position.stop_price
+
+            )
+
+        #
+        # Apply the modification through the Position Manager
+        #
+
+        if should_update:
+
+            context = self.position_manager.modify_position(
+
+                position.id,
+
+                stop_price=new_stop,
+
+            )
+            return context.to_dict() if hasattr(context, "to_dict") else dict(context.__dict__)
+            #
+            # Refresh execution snapshot
+            #
+
+            try:
+
+                self.snapshot_pipeline.refresh(
+                    context,
+                )
+                self.execution_service.verify_execution(
+                    context,
+                )
+
+            except Exception as exc:
+
+                context.add_warning(
+                    f"Snapshot refresh failed: {exc}"
+                )
+
+            #
+            # Verify execution
+            #
+
+            try:
+
+                context.verified = (
+
+                    self.execution_service.verify_execution(
+                        context,
+                    )
+
+                )
+
+            except Exception:
+
+                context.verified = False
+
+            return context.to_dict()
+
+        #
+        # No trailing stop adjustment required
+        #
+
         return position.to_dict()
+
 
     def _build_alert(self, position: Any, alert_type: str, severity: str, message: str) -> ForexTradeManagementAlert:
         return ForexTradeManagementAlert(
@@ -288,6 +481,15 @@ class ForexTradeManagementEngine:
         if hasattr(self.db, "commit"):
             self.db.commit()
 
+    def health(self) -> Dict[str, Any]:
+        return {
+            "engine": "ForexTradeManagementEngine",
+            "status": "healthy",
+            "position_manager": self.position_manager is not None,
+            "execution_service": self.execution_service is not None,
+            "snapshot_pipeline": self.snapshot_pipeline is not None,
+            "recorder": self.recorder is not None,
+        }
     def load_alerts(self, limit: int = 100) -> List[Dict[str, Any]]:
         if self.db is None:
             return []
