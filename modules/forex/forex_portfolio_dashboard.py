@@ -60,6 +60,7 @@ class ForexPortfolioDashboard:
             ):
                 st.session_state["fx_new_portfolio"] = True
                 st.rerun()
+                return
 
         # ------------------------------------------------------------------
         # Create Portfolio
@@ -125,6 +126,7 @@ class ForexPortfolioDashboard:
                 st.session_state["fx_new_portfolio"] = False
 
                 st.rerun()
+                return
 
             if create_clicked:
 
@@ -159,6 +161,7 @@ class ForexPortfolioDashboard:
                     )
 
                     st.rerun()
+                    return
 
 
 
@@ -226,6 +229,7 @@ class ForexPortfolioDashboard:
                 ] = selected["id"]
 
                 st.rerun()
+                return
 
             # ------------------------------------------------------------------
             # Portfolio Details
@@ -376,6 +380,7 @@ class ForexPortfolioDashboard:
                         st.session_state["fx_edit_portfolio"] = False
 
                         st.rerun()
+                        return
 
                     if save:
                         self.manager.update_portfolio(
@@ -397,6 +402,7 @@ class ForexPortfolioDashboard:
                         st.success("Portfolio updated.")
 
                         st.rerun()
+                        return
 
                     if (
                             active
@@ -420,6 +426,7 @@ class ForexPortfolioDashboard:
                             st.session_state["fx_archive_portfolio"] = False
 
                             st.rerun()
+                            return
 
                         if c2.button(
                                 "Cancel",
@@ -428,6 +435,7 @@ class ForexPortfolioDashboard:
                             st.session_state["fx_archive_portfolio"] = False
 
                             st.rerun()
+                            return
                     if (
                             active
                             and st.session_state.get("fx_delete_portfolio", False)
@@ -454,6 +462,7 @@ class ForexPortfolioDashboard:
                             st.session_state["fx_delete_portfolio"] = False
 
                             st.rerun()
+                            return
 
                         if c2.button(
                                 "Cancel",
@@ -462,10 +471,21 @@ class ForexPortfolioDashboard:
                             st.session_state["fx_delete_portfolio"] = False
 
                             st.rerun()
+                            return
 
         # ------------------------------------------------------------------
         # Portfolio Workspace
         # ------------------------------------------------------------------
+
+        # Every workspace tab below assumes an active portfolio (they all
+        # read active["id"]) but this section previously ran unconditionally
+        # - with zero portfolios, or portfolios existing but none yet marked
+        # active, this crashed with TypeError: 'NoneType' object is not
+        # subscriptable instead of showing the empty-state message the rest
+        # of render() already has a pattern for.
+        if not active:
+            st.info("Select or create a portfolio above to view this workspace.")
+            return
 
         workspace = st.radio(
             "Portfolio Workspace",
@@ -661,6 +681,7 @@ class ForexPortfolioDashboard:
                     use_container_width=True,
             ):
                 st.rerun()
+                return
 
 
 

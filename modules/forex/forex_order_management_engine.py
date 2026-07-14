@@ -47,34 +47,24 @@ class ForexOrderManagementEngine:
         return self._orders_by_status({"filled", "complete", "completed", "closed"})
 
     def order_status(self, broker_order_id: str) -> Optional[Dict[str, Any]]:
-        if self.db is None or text is None:
+        if self.db is None:
             return None
-        self._ensure_table()
-        row = self.db.execute(
-            text("""
-                SELECT *
-                FROM forex_trade_orders
-                WHERE broker_order_id = :id
-                LIMIT 1
-            """),
-            {"id": broker_order_id},
-        ).fetchone()
-        return dict(row._mapping) if row else None
+        return self._order_repository().get_order(broker_order_id=broker_order_id)
 
     def _orders_by_status(self, statuses) -> List[Dict[str, Any]]:
-        if self.db is None or text is None:
+        if self.db is None:
             return []
-        self._ensure_table()
-        rows = self.db.execute(
-            text("""
-                SELECT *
-                FROM forex_trade_orders
-                WHERE lower(status) = ANY(:statuses)
-                ORDER BY COALESCE(filled_at, submitted_at, created_at) DESC
-            """),
-            {"statuses": list(statuses)},
-        ).fetchall()
-        return [dict(r._mapping) for r in rows]
+        # Delegate to ExecutionOrderRepository instead of hand-rolling raw
+        # SQL here: it already owns the forex_trade_orders schema, handles
+        # Postgres vs SQLite differences, and is the single source of truth
+        # every other part of the execution pipeline writes through.
+        return self._order_repository().list_orders(statuses=list(statuses))
+
+    def _order_repository(self):
+        from modules.execution.execution_order_repository import (
+            ExecutionOrderRepository,
+        )
+        return ExecutionOrderRepository(self.db)
 
     def _ensure_execution_tables(self) -> None:
 

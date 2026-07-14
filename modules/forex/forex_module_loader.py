@@ -67,3 +67,50 @@ def module_status():
         "registry":_REGISTRY.health_summary() if _REGISTRY else {},
         "health":_SERVICE.health(),
     }
+
+
+# ==============================================================================
+# OOP wrapper
+# ==============================================================================
+#
+# forex_platform_controller.py expects a loader *object* (get_forex_module_loader()
+# then self.loader.render()), but this module only ever exposed free functions.
+# Thin wrapper so both styles work off the same load/unload/status functions.
+
+
+class ForexModuleLoader:
+    def __init__(self, db=None):
+        self.db = db
+
+    def load(self):
+        return load_forex_module(db=self.db)
+
+    def unload(self):
+        return unload_forex_module()
+
+    def reload(self):
+        return reload_forex_module(db=self.db)
+
+    def status(self):
+        return module_status()
+
+    def render(self):
+        """
+        forex_platform_controller.py calls this with no return value used;
+        it's a status snapshot, not a Streamlit UI render. Ensures the
+        module is loaded, then returns current status for callers that do
+        use the return value.
+        """
+        if _SERVICE is None:
+            self.load()
+        return self.status()
+
+
+_LOADER = None
+
+
+def get_forex_module_loader(db=None) -> ForexModuleLoader:
+    global _LOADER
+    if _LOADER is None or (db is not None and _LOADER.db is None):
+        _LOADER = ForexModuleLoader(db=db)
+    return _LOADER

@@ -167,3 +167,29 @@ class RiskAnalyticsService:
             "annualized_vol": ann_vol,
             "regime": regime,
         }
+
+    # -----------------------------
+    # Advanced cross-check (optional: arch GARCH + Riskfolio-Lib EVaR/CVaR)
+    # -----------------------------
+    def advanced_risk_cross_check(self, confidence: float = 0.95) -> dict:
+        """
+        Runs GARCH(1,1) volatility forecasting (arch) and EVaR/CVaR tail
+        risk (Riskfolio-Lib) as a cross-check alongside historical_var(),
+        expected_shortfall(), and volatility_regime() above -- never
+        replaces them, degrades to {"available": False, "reason": ...}
+        per-component if the packages aren't installed or there isn't
+        enough history, so callers can always show both side by side.
+        """
+        from modules.portfolio.advanced_risk_engine import (
+            garch_volatility_forecast, riskfolio_tail_risk,
+        )
+
+        if self.returns_df.empty or "Return" not in self.returns_df.columns:
+            unavailable = {"available": False, "reason": "No return series available."}
+            return {"garch": unavailable, "riskfolio": unavailable}
+
+        rets = self.returns_df["Return"].dropna()
+        return {
+            "garch": garch_volatility_forecast(rets),
+            "riskfolio": riskfolio_tail_risk(rets, confidence=confidence),
+        }

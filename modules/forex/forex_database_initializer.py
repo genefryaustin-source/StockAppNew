@@ -470,11 +470,18 @@ def get_forex_database_initializer(db=None):
 
     global _INITIALIZER
 
+    # Previously only rebuilt when upgrading from no-db to some-db; a
+    # second call with a *different* non-None db session (fresh
+    # request-scoped session, reconnect, a different test database, ...)
+    # kept reusing the first instance - same stale-singleton-vs-swapped-db
+    # class of bug found in forex_portfolio_crud_engine.py's
+    # get_forex_portfolio_crud_engine(), just with a different trigger
+    # condition (there it never rebuilt at all; here it only rebuilds once).
     if (
         _INITIALIZER is None
         or (
             db is not None
-            and getattr(_INITIALIZER, "db", None) is None
+            and getattr(_INITIALIZER, "db", None) is not db
         )
     ):
         _INITIALIZER = ForexDatabaseInitializer(db=db)

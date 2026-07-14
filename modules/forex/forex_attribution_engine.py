@@ -44,7 +44,7 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-
+_INITIALIZED = False
 @dataclass
 class ForexAttributionRecord:
     attribution_id: str
@@ -207,8 +207,22 @@ class ForexAttributionEngine:
             portfolio_id=portfolio_id,
             db=db,
         )
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        self._tables_ready = True
 
     def ensure_tables(self) -> None:
+
+        global _INITIALIZED
+
+        if _INITIALIZED:
+            return
+
+        if self._tables_ready:
+            return
+
         if self.db is None:
             return
 
@@ -290,6 +304,9 @@ class ForexAttributionEngine:
 
         if hasattr(self.db, "commit"):
             self.db.commit()
+
+        self._tables_ready = True
+        _INITIALIZED = True
 
     def attribute_recommendation(
         self,
@@ -551,7 +568,7 @@ class ForexAttributionEngine:
         if self.db is None:
             return
 
-        self.ensure_tables()
+        #self.ensure_tables()
 
         self.db.execute(
             """
@@ -648,7 +665,7 @@ class ForexAttributionEngine:
         if self.db is None:
             return
 
-        self.ensure_tables()
+        #self.ensure_tables()
 
         self.db.execute(
             """
@@ -716,7 +733,7 @@ class ForexAttributionEngine:
         if self.db is None:
             return []
 
-        self.ensure_tables()
+        #self.ensure_tables()
 
         params: Dict[str, Any] = {
             "tenant_id": self.tenant_id,
@@ -756,7 +773,7 @@ class ForexAttributionEngine:
         if self.db is None:
             return []
 
-        self.ensure_tables()
+        #self.ensure_tables()
 
         rows = self.db.execute(
             """

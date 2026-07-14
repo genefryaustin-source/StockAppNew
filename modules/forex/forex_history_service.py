@@ -12,10 +12,10 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Optional
 
 import pandas as pd
-
+import logging
 from modules.forex.forex_history_repository import ForexHistoryRepository, normalize_pair
 
-
+logger = logging.getLogger(__name__)
 DEFAULT_HISTORY_DAYS = 365 * 3
 DEFAULT_INTERVAL = "1day"
 
@@ -47,7 +47,12 @@ class ForexHistoryService:
             except Exception:
                 router = None
         self.router = router
-        self._tables_ready = False
+
+        #
+        # Repository schema is initialized during
+        # Forex bootstrap.
+        #
+        self._tables_ready = True
 
     def ensure_tables(self) -> None:
         if self._tables_ready:
@@ -65,28 +70,218 @@ class ForexHistoryService:
         return datetime.now(timezone.utc).date()
 
     def fetch_from_router(
-        self,
-        pair: str,
-        *,
-        start_date: Any = None,
-        end_date: Any = None,
-        interval: str = DEFAULT_INTERVAL,
-        force_refresh: bool = False,
-        allowed_providers: Optional[list[str]] = None,
+            self,
+            pair: str,
+            *,
+            start_date: Any = None,
+            end_date: Any = None,
+            interval: str = DEFAULT_INTERVAL,
+            force_refresh: bool = False,
+            allowed_providers: Optional[list[str]] = None,
     ) -> dict[str, Any]:
+
         if self.router is None:
-            return {"status": "ERROR", "pair": pair, "error": "Forex provider router unavailable", "rows": []}
+            return {
+                "status": "ERROR",
+                "pair": pair,
+                "error": "Forex provider router unavailable",
+                "rows": [],
+            }
+
+        #
+        # Resolve defaults
+        #
+
+        start_date = start_date or self.default_start()
+        end_date = end_date or self.default_end()
+
+        #
+        # Normalize request for provider limitations.
+        #
+
+        start_date, end_date = self._normalize_history_window(
+            interval=interval,
+            start=start_date,
+            end=end_date,
+        )
+
         if hasattr(self.router, "get_history"):
             return self.router.get_history(
                 pair,
-                start_date=start_date or self.default_start(),
-                end_date=end_date or self.default_end(),
+                start_date=start_date,
+                end_date=end_date,
                 interval=interval,
                 force_refresh=force_refresh,
                 allowed_providers=allowed_providers,
             )
-        return {"status": "ERROR", "pair": pair, "error": "Forex provider router does not expose get_history(). Apply the updated router file from Phase 4.5.", "rows": []}
 
+        return {
+            "status": "ERROR",
+            "pair": pair,
+            "error": (
+                "Forex provider router does not expose "
+                "get_history(). Apply the updated router "
+                "file from Phase 4.5."
+            ),
+            "rows": [],
+        }
+
+    @staticmethod
+    def _normalize_history_window(
+            *,
+            interval: str,
+            start=None,
+            end=None,
+            backfill_days: Optional[int] = None,
+    ):
+        """
+        Normalize a historical data request so it stays within the limits
+        supported by the underlying market data provider.
+
+        Yahoo Finance intraday history limitations:
+
+            1m   ->   7 days
+            2m   ->  60 days
+            5m   ->  60 days
+            15m  ->  60 days
+            30m  ->  60 days
+            60m  -> 729 days
+            1h   -> 729 days
+            90m  ->  60 days
+
+        Daily and higher intervals are not restricted here.
+        """
+
+        from datetime import datetime
+        from datetime import timedelta
+        from datetime import timezone
+
+        #
+        # Normalize interval
+        #
+
+        normalized_interval = str(
+            interval or "1d"
+        ).strip().lower()
+
+        #
+        # Current UTC time
+        #
+
+        now = datetime.now(timezone.utc)
+
+        #
+        # Resolve end date
+        #
+
+        resolved_end = end or now
+
+        #
+        # Resolve start date
+        #
+
+        resolved_start = start
+
+        if resolved_start is None:
+            days = int(
+                backfill_days or 30
+            )
+
+            resolved_start = (
+                    resolved_end
+                    - timedelta(days=days)
+            )
+
+        #
+        # Ensure timezone awareness
+        #
+
+        if isinstance(resolved_start, datetime):
+
+            if resolved_start.tzinfo is None:
+                resolved_start = resolved_start.replace(
+                    tzinfo=timezone.utc
+                )
+
+        if isinstance(resolved_end, datetime):
+
+            if resolved_end.tzinfo is None:
+                resolved_end = resolved_end.replace(
+                    tzinfo=timezone.utc
+                )
+
+        #
+        # Provider limitations
+        #
+
+        interval_limits = {
+
+            #
+            # Intraday
+            #
+
+            "1m": 7,
+            "2m": 60,
+            "5m": 60,
+            "15m": 60,
+            "30m": 60,
+            "60m": 729,
+            "1h": 729,
+            "90m": 60,
+
+            #
+            # Daily+
+            #
+
+            "1d": None,
+            "5d": None,
+            "1wk": None,
+            "1mo": None,
+            "3mo": None,
+
+        }
+
+        limit = interval_limits.get(
+            normalized_interval
+        )
+
+        #
+        # Clamp request if needed
+        #
+
+        if limit is not None:
+
+            earliest_allowed = (
+                    resolved_end
+                    - timedelta(days=limit)
+            )
+
+            if resolved_start < earliest_allowed:
+                logger.info(
+                    "Adjusting %s history request "
+                    "from %s to %s "
+                    "to satisfy provider limits.",
+                    normalized_interval,
+                    resolved_start,
+                    earliest_allowed,
+                )
+
+                resolved_start = earliest_allowed
+
+        #
+        # Prevent inverted ranges
+        #
+
+        if resolved_start > resolved_end:
+            resolved_start = (
+                    resolved_end
+                    - timedelta(days=30)
+            )
+
+        return (
+            resolved_start,
+            resolved_end,
+        )
     def get_market_data(
             self,
             *,
@@ -124,7 +319,8 @@ class ForexHistoryService:
             #
             if not df.empty:
                 try:
-                    self.ensure_tables()
+                    # self.ensure_tables()
+
                     self.repository.upsert_history(
                         df.to_dict("records")
                     )
@@ -212,8 +408,10 @@ class ForexHistoryService:
         force_refresh: bool = False,
         allowed_providers: Optional[list[str]] = None,
     ) -> dict[str, Any]:
-        if not self._tables_ready:
-            self.ensure_tables()
+        #
+        # Tables are initialized during application bootstrap.
+        #
+
         started = datetime.now(timezone.utc).replace(tzinfo=None)
         pair = normalize_pair(pair)
         start_date = start_date or self.default_start()

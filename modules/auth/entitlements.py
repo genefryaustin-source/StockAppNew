@@ -62,6 +62,8 @@ FEATURE_PLANS: dict[str, str] = {
     "AI Rankings":         "pro",
     "AI Forecast":         "pro",
     "Kronos AI Forecast":  "pro",
+    "Risk Layer":          "pro",
+    "Signal Backtester":   "pro",
     "AI Scanner":          "pro",
     "AI Agent":            "pro",
     "AI Portfolio":        "pro",

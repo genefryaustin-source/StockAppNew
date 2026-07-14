@@ -104,12 +104,17 @@ class ForexTerminalExecutionService:
         tenant_id=None,
         user_id=None,
         portfolio_id=None,
+        actor=None,
+        source=None,
     ):
         self.db = db
         self.tenant_id = tenant_id
         self.user_id = user_id
         self.portfolio_id = portfolio_id
+        self.actor = actor
+        self.source = source
         self.execution_service = None
+        self.execution_pipeline = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -367,6 +372,11 @@ class ForexTerminalExecutionService:
             symbol=pair_norm.replace("/", ""),
             side=side_norm,
             units=order_units,
+            # order_type was previously never forwarded here, so every
+            # order (including LIMIT/STOP/STOP_LIMIT) defaulted to
+            # ExecutionContext's "MARKET" and filled immediately instead
+            # of resting as a pending order.
+            order_type=order_type_norm,
             broker=broker,
             broker_order_id=broker_order_id,
             requested_price=requested_price,
@@ -616,16 +626,22 @@ class ForexTerminalExecutionService:
         Return the institutional execution pipeline for this
         execution service.
 
-        The pipeline is created lazily and cached for reuse.
+        The pipeline is created lazily and cached for reuse. This used to
+        clobber self.execution_service with a raw ExecutionPipeline object
+        (missing .submit()/.verify_execution() etc.), which broke any
+        subsequent call that expected the ExecutionService facade. It is now
+        cached separately as self.execution_pipeline.
         """
 
-        if getattr(self, "execution_pipeline", None) is None:
-            self.execution_service = build_execution_pipeline(
+        if self.execution_pipeline is None:
+            self.execution_pipeline = build_execution_pipeline(
                 db=self.db,
                 portfolio_engine=engine,
+                actor=self.actor,
+                source=self.source,
             )
 
-        return self.execution_service
+        return self.execution_pipeline
 
     
     # ------------------------------------------------------------------

@@ -51,6 +51,16 @@ class ForexSystemTestHarness:
         path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
         return str(path)
 
+    def run_all(self, **kwargs) -> Dict[str, Any]:
+        """
+        Alias expected by forex_validation_center.py's generic dispatcher
+        (_run_callable(..., method_name="run_all")), which every other
+        validator class already implements - this one only had run_full()
+        and friends, so run_health_monitor()-style calls always fell
+        through to the "unavailable" branch instead of actually running.
+        """
+        return self.run_full()
+
     def run_and_save_full(self) -> Dict[str, Any]:
         report = self.run_full()
         report["report_path"] = self.save_report(report)

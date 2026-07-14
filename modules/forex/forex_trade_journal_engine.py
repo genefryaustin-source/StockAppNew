@@ -25,7 +25,7 @@ try:
     )
 except Exception:
     get_forex_performance_analytics_engine = None
-
+_INITIALIZED = False
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -87,17 +87,34 @@ class ForexTradeJournalEngine:
 
     def __init__(self, db=None):
         self.db = db
+
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        self._tables_ready = True
+
         self.performance = (
             get_forex_performance_analytics_engine(db=db)
             if get_forex_performance_analytics_engine
             else None
         )
 
+
     # ------------------------------------------------------------------
     # Database
     # ------------------------------------------------------------------
 
     def ensure_tables(self) -> None:
+
+        global _INITIALIZED
+
+        if _INITIALIZED:
+            return
+
+        if self._tables_ready:
+            return
+
         if self.db is None or text is None:
             return
 
@@ -138,6 +155,9 @@ class ForexTradeJournalEngine:
 
         self.db.commit()
 
+        self._tables_ready = True
+        _INITIALIZED = True
+
     # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
@@ -177,7 +197,7 @@ class ForexTradeJournalEngine:
         )
 
         if self.db is not None and text is not None:
-            self.ensure_tables()
+            #self.ensure_tables()
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             result = self.db.execute(text("""
                 INSERT INTO forex_trade_journal (
@@ -250,7 +270,7 @@ class ForexTradeJournalEngine:
             updates["status"] = "not_persisted"
             return updates
 
-        self.ensure_tables()
+        #self.ensure_tables()
 
         allowed = {
             "setup",
@@ -315,7 +335,7 @@ class ForexTradeJournalEngine:
         if self.db is None or text is None:
             return None
 
-        self.ensure_tables()
+        #self.ensure_tables()
 
         row = self.db.execute(text("""
             SELECT *
@@ -339,7 +359,7 @@ class ForexTradeJournalEngine:
         if self.db is None or text is None:
             return []
 
-        self.ensure_tables()
+        #self.ensure_tables()
 
         where = ["1=1"]
         params: Dict[str, Any] = {"limit": int(limit)}
@@ -467,7 +487,7 @@ class ForexTradeJournalEngine:
         if self.db is None or text is None:
             return []
 
-        self.ensure_tables()
+        #self.ensure_tables()
 
         q = f"%{query}%"
         rows = self.db.execute(text("""

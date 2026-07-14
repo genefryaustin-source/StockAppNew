@@ -20,6 +20,14 @@ from modules.admin.api_keys_ui import (
     render_api_keys_tab,
 )
 
+from modules.admin.broker_settings_ui import (
+    render_broker_settings_tab,
+)
+
+from modules.admin.risk_provider_settings_ui import (
+    render_risk_provider_settings_tab,
+)
+
 from modules.universe.universe_cleanup_ui import (
     render_universe_cleanup_ui,
 )
@@ -140,6 +148,8 @@ def render_admin_panel(db, user):
         tab_plan,
         tab_tenants,
         api_keys_tab,
+        broker_settings_tab,
+        risk_provider_settings_tab,
         tab_cleanup,
         provider_health_tab,
         provider_operations_tab,
@@ -152,6 +162,8 @@ def render_admin_panel(db, user):
         "💳 Plan Management",
         "🏢 Tenants",
         "🔑 API Keys",
+        "🏦 Brokers",
+        "🧮 Risk Providers",
         "🧹 Universe Cleanup",
         "🔌 Provider Health",
         "🚀 Provider Operations",
@@ -459,6 +471,20 @@ def render_admin_panel(db, user):
     with api_keys_tab:
 
         render_api_keys_tab(db, user)
+
+    # =========================================================
+    # BROKERS TAB
+    # =========================================================
+    with broker_settings_tab:
+
+        render_broker_settings_tab(db, user)
+
+    # =========================================================
+    # RISK PROVIDERS TAB
+    # =========================================================
+    with risk_provider_settings_tab:
+
+        render_risk_provider_settings_tab(db, user)
 
     # =========================================================
     # UNIVERSE CLEANUP TAB

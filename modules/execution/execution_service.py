@@ -76,14 +76,16 @@ class ExecutionService:
         self,
         **kwargs,
     ) -> ExecutionContext:
-
-        context = self.pipeline.submit_request(
+        # NOTE: pipeline.submit_request() already runs the order through
+        # order_pipeline.execute() internally (validate -> accept -> fill).
+        # Calling pipeline.submit(context) again here re-submitted an
+        # already-FILLED context back into the state machine, which
+        # correctly raises "Illegal order transition FILLED -> VALIDATED"
+        # since FILLED is a terminal state. submit_request() is the whole
+        # submission; do not call submit() a second time on its result.
+        return self.pipeline.submit_request(
             order_type="MARKET",
             **kwargs,
-        )
-
-        return self.pipeline.submit(
-            context,
         )
 
     # ------------------------------------------------------------------
@@ -94,14 +96,9 @@ class ExecutionService:
         self,
         **kwargs,
     ) -> ExecutionContext:
-
-        context = self.pipeline.submit_request(
+        return self.pipeline.submit_request(
             order_type="LIMIT",
             **kwargs,
-        )
-
-        return self.pipeline.submit(
-            context,
         )
 
     # ------------------------------------------------------------------
@@ -112,14 +109,9 @@ class ExecutionService:
         self,
         **kwargs,
     ) -> ExecutionContext:
-
-        context = self.pipeline.submit_request(
+        return self.pipeline.submit_request(
             order_type="STOP",
             **kwargs,
-        )
-
-        return self.pipeline.submit(
-            context,
         )
 
     # ------------------------------------------------------------------
@@ -130,13 +122,8 @@ class ExecutionService:
         self,
         **kwargs,
     ) -> ExecutionContext:
-
-        context = self.pipeline.submit_request(
+        return self.pipeline.submit_request(
             **kwargs,
-        )
-
-        return self.pipeline.submit(
-            context,
         )
 
     # ------------------------------------------------------------------

@@ -82,6 +82,14 @@ def _tick(max_jobs: int = 100) -> Dict[str, Any]:
 class ForexStressFramework:
     """Stress framework for exercising scheduler, queue, registry, and runtime under load."""
 
+    def run_stress_test(self, jobs: int = 1000, **kwargs) -> Dict[str, Any]:
+        """
+        Alias expected by forex_validation_center.py's run_stress_test(),
+        which calls this with jobs=<n>; the class only exposed stress()
+        (and its stress_100/1000/5000 convenience wrappers).
+        """
+        return self.stress(job_count=jobs)
+
     def stress(self, job_count: int = 1000, batch_size: int = 250, drain: bool = True) -> Dict[str, Any]:
         started = time.perf_counter()
         batches: List[Dict[str, Any]] = []

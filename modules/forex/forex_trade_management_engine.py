@@ -8,6 +8,9 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from sqlalchemy import text
+
+
+
 try:
     from modules.forex.forex_service import ForexService, get_forex_service, normalize_pair
     from modules.forex.forex_portfolio_engine import ForexPortfolioEngine, get_forex_portfolio_engine
@@ -35,15 +38,24 @@ from modules.execution.execution_event_recorder import (
     ExecutionEventRecorder,
 )
 
+from modules.forex.forex_break_even_manager import (
+        ForexBreakEvenManager,
+        get_forex_break_even_manager,
+    )
 
-
-
+from modules.forex.forex_trailing_stop_manager import (
+    ForexTrailingStopManager,
+    get_forex_trailing_stop_manager,
+)
+from modules.forex.forex_trade_alert_manager import (
+    get_forex_trade_alert_manager,
+)
 
 
 
 
 logger = logging.getLogger(__name__)
-
+_INITIALIZED = False
 
 @dataclass
 class ForexTradeManagementAlert:
@@ -149,8 +161,52 @@ class ForexTradeManagementEngine:
                 source="FOREX",
             )
         )
+        self.break_even_manager = get_forex_break_even_manager(
+            db=db,
+            portfolio_engine=forex_portfolio_engine,
+        )
+
+        self.trailing_stop_manager = (
+            get_forex_trailing_stop_manager(
+                db=db,
+                portfolio_engine=forex_portfolio_engine,
+            )
+        )
+        self.trade_alert_manager = get_forex_trade_alert_manager()
+
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        self._tables_ready = True
+
+
+    @staticmethod
+    def _position_value(
+            position: Any,
+            key: str,
+            default: Any = None,
+    ) -> Any:
+        """
+        Supports both dictionary-based positions and
+        object-based position models.
+        """
+
+        if isinstance(position, dict):
+            return position.get(key, default)
+
+        return getattr(position, key, default)
 
     def ensure_tables(self) -> None:
+
+        global _INITIALIZED
+
+        if _INITIALIZED:
+            return
+
+        if self._tables_ready:
+            return
+
         if self.db is None:
             return
         self.db.execute(text("""
@@ -189,157 +245,235 @@ class ForexTradeManagementEngine:
         """))
         if hasattr(self.db, "commit"):
             self.db.commit()
+            self._tables_ready = True
+            _INITIALIZED = True
 
     def monitor_positions(
-        self,
-        *,
-        account_id: str,
-        auto_close: bool = False,
+            self,
+            *,
+            account_id: str,
+            auto_close: bool = False,
     ) -> List[ForexTradeManagementAlert]:
-        positions = self.position_manager.refresh_positions(
 
+        positions = self.position_manager.refresh_positions(
             account_id=account_id,
         )
+
         alerts: List[ForexTradeManagementAlert] = []
 
         for position in positions:
-            current_price = _safe_float(position.current_price)
-            alert = None
 
-            if position.stop_price is not None:
-                stop_hit = current_price <= position.stop_price if position.side == "LONG" else current_price >= position.stop_price
-                if stop_hit:
-                    alert = self._build_alert(position, "STOP_HIT", "HIGH", "Stop price reached.")
+            #
+            # ----------------------------------------------------------
+            # Stage 1
+            # Break-Even Manager
+            # ----------------------------------------------------------
+            #
 
-            if alert is None and position.target_price is not None:
-                target_hit = current_price >= position.target_price if position.side == "LONG" else current_price <= position.target_price
-                if target_hit:
-                    alert = self._build_alert(position, "TARGET_HIT", "MEDIUM", "Target price reached.")
+            try:
 
-            if alert is None and position.unrealized_pnl < 0:
-                notional = max(_safe_float(position.notional_value), 1.0)
-                drawdown = abs(position.unrealized_pnl) / notional
-                if drawdown >= 0.03:
-                    alert = self._build_alert(position, "DRAWDOWN_WARNING", "MEDIUM", "Position drawdown exceeds 3% of notional.")
+                break_even_context = (
+
+                    self.break_even_manager.manage_position(
+                        position,
+                    )
+
+                )
+
+            except Exception as exc:
+
+                logger.exception(exc)
+
+                break_even_context = None
+
+            #
+            # Reload position if Break-Even changed it.
+            #
+
+            if break_even_context is not None:
+                position = self.position_manager.load_position(
+                    position_id,
+                )
+
+            #
+            # ----------------------------------------------------------
+            # Stage 2
+            # Trailing Stop Manager
+            # ----------------------------------------------------------
+            #
+
+            try:
+
+                trailing_context = (
+
+                    self.trailing_stop_manager.manage_position(
+                        position,
+                    )
+
+                )
+
+            except Exception as exc:
+
+                logger.exception(exc)
+
+                trailing_context = None
+
+            alert = self.trade_alert_manager.evaluate_position(position)
 
             if alert:
                 alerts.append(alert)
                 self.save_alert(alert)
+
                 if auto_close and alert.alert_type in {"STOP_HIT", "TARGET_HIT"}:
+                    context = self.position_manager.close_position(position_id)
 
+            #
+            # Reload position if Trailing Stop changed it.
+            #
+
+            if trailing_context is not None:
+                position = self.position_manager.load_position(
+                    position_id,
+                )
+
+            position_id = (
+                position.get("position_id")
+                or position.get("id")
+                if isinstance(position, dict)
+                else getattr(position, "id", None)
+            )
+
+            current_price = _safe_float(
+                position.get("current_price")
+                if isinstance(position, dict)
+                else position.current_price
+            )
+
+            stop_price = (
+                position.get("stop_price")
+                if isinstance(position, dict)
+                else position.stop_price
+            )
+
+            target_price = (
+                position.get("target_price")
+                if isinstance(position, dict)
+                else position.target_price
+            )
+
+            side = str(
+                position.get("side")
+                if isinstance(position, dict)
+                else position.side
+            ).upper()
+
+            unrealized_pnl = _safe_float(
+                position.get("unrealized_pnl")
+                if isinstance(position, dict)
+                else position.unrealized_pnl
+            )
+
+            notional_value = _safe_float(
+                position.get("notional_value")
+                if isinstance(position, dict)
+                else position.notional_value
+            )
+
+            alert = None
+
+            if stop_price is not None:
+                stop_hit = (
+                    current_price <= stop_price
+                    if side in {"LONG", "BUY"}
+                    else current_price >= stop_price
+                )
+                if stop_hit:
+                    alert = self._build_alert(
+                        position,
+                        "STOP_HIT",
+                        "HIGH",
+                        "Stop price reached.",
+                    )
+
+            if alert is None and target_price is not None:
+                target_hit = (
+                    current_price >= target_price
+                    if side in {"LONG", "BUY"}
+                    else current_price <= target_price
+                )
+                if target_hit:
+                    alert = self._build_alert(
+                        position,
+                        "TARGET_HIT",
+                        "MEDIUM",
+                        "Target price reached.",
+                    )
+
+            if alert is None and unrealized_pnl < 0:
+                notional = max(notional_value, 1.0)
+                drawdown = abs(unrealized_pnl) / notional
+                if drawdown >= 0.03:
+                    alert = self._build_alert(
+                        position,
+                        "DRAWDOWN_WARNING",
+                        "MEDIUM",
+                        "Position drawdown exceeds 3% of notional.",
+                    )
+
+            if alert:
+                alerts.append(alert)
+                self.save_alert(alert)
+
+                if auto_close and alert.alert_type in {"STOP_HIT", "TARGET_HIT"}:
                     try:
-
-                        #
-                        # Close through the Position Manager.
-                        #
-                        # This automatically routes through:
-                        #
-                        # Position Manager
-                        #      ↓
-                        # Execution Service
-                        #      ↓
-                        # Execution Pipeline
-                        #      ↓
-                        # Immutable Events
-                        #
-
-                        context = self.position_manager.close_position(
-
-                            position.id,
-
-                        )
-
-                        #
-                        # Refresh execution snapshot
-                        #
-
-                        try:
-
-                            self.snapshot_pipeline.refresh(
-                                context,
-                            )
-
-                        except Exception as exc:
-
-                            context.add_warning(
-                                f"Snapshot refresh failed: {exc}"
-                            )
-
-                        #
-                        # Verify execution
-                        #
-
-                        try:
-
-                            context.verified = (
-
-                                self.execution_service.verify_execution(
-                                    context,
-                                )
-
-                            )
-
-                        except Exception:
-
-                            context.verified = False
-
+                        context = self.position_manager.close_position(position_id)
                         logger.info(
-
                             "Automatically closed %s after %s.",
-
-                            position.id,
-
+                            position_id,
                             alert.alert_type,
-
                         )
-
                     except Exception as exc:
-
                         logger.warning(
-
                             "Auto-close failed for %s: %s",
-
-                            position.id,
-
+                            position_id,
                             exc,
-
                         )
 
         return alerts
 
     def apply_trailing_stop(
-        self,
-        *,
-        position_id: str,
-        trailing_pct: float = 0.01,
+            self,
+            *,
+            position_id: str,
+            trailing_pct: float = 0.01,
     ) -> Optional[Dict[str, Any]]:
-        position = self.position_manager.load_position(
 
-            position_id,
-        )
-        if not position:
+        position = self.position_manager.load_position(position_id)
+
+        if position is None:
             return None
 
-        quote = self.forex_service.get_quote(position.pair)
+        side = self._position_value(position, "side", "").upper()
+        pair = self._position_value(position, "pair")
+
+        quote = self.forex_service.get_quote(pair)
+
+        if quote is None:
+            return None
+
         current_price = _safe_float(quote.price)
+
         trail = abs(current_price * trailing_pct)
 
-        #
-        # Determine the new trailing stop
-        #
+        stop_price = self._position_value(position, "stop_price")
 
-        if position.side == "LONG":
+        if side in {"BUY", "LONG"}:
 
             new_stop = current_price - trail
 
             should_update = (
-
-                    position.stop_price is None
-
-                    or
-
-                    new_stop > position.stop_price
-
+                    stop_price is None
+                    or new_stop > stop_price
             )
 
         else:
@@ -347,99 +481,97 @@ class ForexTradeManagementEngine:
             new_stop = current_price + trail
 
             should_update = (
-
-                    position.stop_price is None
-
-                    or
-
-                    new_stop < position.stop_price
-
+                    stop_price is None
+                    or new_stop < stop_price
             )
 
-        #
-        # Apply the modification through the Position Manager
-        #
-
-        if should_update:
-
-            context = self.position_manager.modify_position(
-
-                position.id,
-
-                stop_price=new_stop,
-
+        if not should_update:
+            return (
+                dict(position)
+                if isinstance(position, dict)
+                else position.to_dict()
             )
-            return context.to_dict() if hasattr(context, "to_dict") else dict(context.__dict__)
-            #
-            # Refresh execution snapshot
-            #
 
-            try:
+        context = self.position_manager.modify_position(
 
-                self.snapshot_pipeline.refresh(
-                    context,
-                )
-                self.execution_service.verify_execution(
-                    context,
-                )
+            self._position_value(position, "id"),
 
-            except Exception as exc:
+            stop_price=new_stop,
 
-                context.add_warning(
-                    f"Snapshot refresh failed: {exc}"
-                )
+        )
 
-            #
-            # Verify execution
-            #
+        return (
+            context.to_dict()
+            if hasattr(context, "to_dict")
+            else dict(context.__dict__)
+        )
 
-            try:
+    def _build_alert(
+            self,
+            position: Any,
+            alert_type: str,
+            severity: str,
+            message: str,
+    ) -> ForexTradeManagementAlert:
 
-                context.verified = (
+        account_id = self._position_value(position, "account_id")
+        position_id = (
+                self._position_value(position, "position_id")
+                or self._position_value(position, "id")
+        )
 
-                    self.execution_service.verify_execution(
-                        context,
-                    )
+        raw = (
+            dict(position)
+            if isinstance(position, dict)
+            else position.to_dict()
+            if hasattr(position, "to_dict")
+            else {}
+        )
 
-                )
-
-            except Exception:
-
-                context.verified = False
-
-            return context.to_dict()
-
-        #
-        # No trailing stop adjustment required
-        #
-
-        return position.to_dict()
-
-
-    def _build_alert(self, position: Any, alert_type: str, severity: str, message: str) -> ForexTradeManagementAlert:
         return ForexTradeManagementAlert(
+
             alert_id=str(uuid.uuid4()),
+
             tenant_id=self.tenant_id,
+
             user_id=self.user_id,
+
             portfolio_id=self.portfolio_id,
-            account_id=position.account_id,
-            position_id=position.id,
-            pair=position.pair,
+
+            account_id=account_id,
+
+            position_id=position_id,
+
+            pair=self._position_value(position, "pair"),
+
             alert_type=alert_type,
+
             severity=severity,
+
             message=message,
-            current_price=_safe_float(position.current_price),
-            stop_price=position.stop_price,
-            target_price=position.target_price,
-            unrealized_pnl=_safe_float(position.unrealized_pnl),
+
+            current_price=_safe_float(
+                self._position_value(position, "current_price")
+            ),
+
+            stop_price=self._position_value(position, "stop_price"),
+
+            target_price=self._position_value(position, "target_price"),
+
+            unrealized_pnl=_safe_float(
+                self._position_value(position, "unrealized_pnl")
+            ),
+
             created_at=_utc_now(),
-            raw=position.to_dict(),
+
+            raw=raw,
+
         )
 
     def save_alert(self, alert: ForexTradeManagementAlert) -> None:
         if self.db is None:
             return
-        self.ensure_tables()
+        #self.ensure_tables()
         self.db.execute(text("""
             INSERT INTO forex_trade_management_alerts (
                 alert_id, tenant_id, user_id, portfolio_id, account_id, position_id,
@@ -459,7 +591,7 @@ class ForexTradeManagementEngine:
     def record_event(self, *, account_id: str, position_id: Optional[str], event_type: str, message: str, payload: Optional[Dict[str, Any]] = None) -> None:
         if self.db is None:
             return
-        self.ensure_tables()
+        #self.ensure_tables()
         self.db.execute(text("""
             INSERT INTO forex_trade_management_events (
                 tenant_id, user_id, portfolio_id, account_id, position_id, event_type, message, payload, created_at
@@ -489,11 +621,14 @@ class ForexTradeManagementEngine:
             "execution_service": self.execution_service is not None,
             "snapshot_pipeline": self.snapshot_pipeline is not None,
             "recorder": self.recorder is not None,
+            "break_even_manager":
+
+                self.break_even_manager.health(),
         }
     def load_alerts(self, limit: int = 100) -> List[Dict[str, Any]]:
         if self.db is None:
             return []
-        self.ensure_tables()
+        #self.ensure_tables()
         rows = self.db.execute(text("""
             SELECT * FROM forex_trade_management_alerts
             WHERE tenant_id = :tenant_id

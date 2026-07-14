@@ -1,7 +1,16 @@
 # modules/forex/forex_portfolio_engine.py
 
 from __future__ import annotations
-from psycopg2.extras import Json
+
+try:
+    # Only available (and only needed) when actually running against
+    # Postgres. Importing this unconditionally made the whole module -
+    # and therefore the whole trading desk - fail to import on any
+    # environment that doesn't have psycopg2 installed, including a
+    # plain SQLite/local setup.
+    from psycopg2.extras import Json as _PgJson
+except Exception:
+    _PgJson = None
 import json
 import math
 import logging
@@ -36,7 +45,11 @@ except Exception as e:
 
 
 logger = logging.getLogger(__name__)
-
+#
+# Sprint 26
+# Prevent repeated DDL execution.
+#
+_INITIALIZED = False
 
 DEFAULT_ACCOUNT_CURRENCY = "USD"
 DEFAULT_STARTING_CASH = 100000.0
@@ -218,11 +231,65 @@ def _round(value: Any, places: int = 6) -> float:
     return round(_safe_float(value), places)
 
 
+def _coerce_datetime(value: Any) -> datetime:
+    """
+    Normalize a value read back from the DB into an aware UTC datetime.
+
+    Postgres (via psycopg2) auto-converts TIMESTAMP columns into Python
+    datetime objects, but SQLite (via sqlite3/SQLAlchemy) returns them as
+    plain ISO-format strings for ad-hoc `text()` queries like the ones this
+    module uses. Code that assumed every row always yields a real datetime
+    (e.g. `created_at.tzinfo`) crashed with
+    "'str' object has no attribute 'tzinfo'" as soon as it ran against
+    SQLite.
+    """
+    if value is None:
+        return _utc_now()
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        text_value = value.strip()
+        if not text_value:
+            return _utc_now()
+        try:
+            return datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+        except Exception:
+            for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    return datetime.strptime(text_value, fmt)
+                except Exception:
+                    continue
+            return _utc_now()
+    return _utc_now()
+
+
+def _dialect_name(db: Any) -> str:
+    """Best-effort detection of the SQLAlchemy dialect (postgresql/sqlite/...)."""
+    try:
+        bind = getattr(db, "bind", None)
+        if bind is None and hasattr(db, "get_bind"):
+            bind = db.get_bind()
+        if bind is not None:
+            return bind.dialect.name
+    except Exception:
+        pass
+    try:
+        return db.dialect.name
+    except Exception:
+        pass
+    return "unknown"
+
+
+
 def _json_payload(value):
     if value is None:
         return None
 
-    return Json(value)
+    # A plain JSON string is portable: SQLite stores it as TEXT, and
+    # Postgres has a registered implicit assignment cast from text to
+    # json/jsonb, so this works for INSERT/UPDATE against either
+    # database without needing the psycopg2-specific Json() wrapper.
+    return json.dumps(value, default=str)
 
 
 def _row_get(row: Any, key: str, default: Any = None) -> Any:
@@ -285,6 +352,43 @@ class ForexPortfolioEngine:
             db=db,
             forex_service=self.forex_service,
         )
+        #
+        # Portfolio persistence is initialized
+        # during Forex bootstrap.
+        #
+        self._tables_ready = True
+
+    def _notional_in_account_currency(
+        self,
+        units: float,
+        price: float,
+        base_currency: str,
+        quote_currency: str,
+    ) -> float:
+        """
+        `units` is always denominated in the pair's BASE currency (e.g. 10,000
+        units of USD/JPY means $10,000 notional, same as 10,000 units of
+        EUR/USD meaning €10,000 notional). `units * price` only lands in the
+        account currency when the QUOTE currency matches the account
+        currency (true for EUR/USD, GBP/USD when the account is USD) --
+        for pairs where the account currency is the BASE instead (USD/JPY,
+        USD/CHF, USD/CAD when the account is USD), that formula returns a
+        quote-currency amount (e.g. JPY), not USD, inflating the value by
+        roughly the exchange rate (~158x for USD/JPY). This normalizes to a
+        single account-currency notional regardless of quote direction.
+        """
+        base = (base_currency or "").upper()
+        quote = (quote_currency or "").upper()
+        acct = self.account_currency
+
+        if quote == acct:
+            return units * price
+        if base == acct:
+            return units
+        # Cross pair not involving the account currency directly (e.g. a USD
+        # account trading EUR/GBP) -- best-effort fallback, since a true
+        # conversion needs a third exchange rate we don't have here.
+        return units * price
 
     def _db(self):
         """
@@ -312,8 +416,24 @@ class ForexPortfolioEngine:
         return self.db.execute(stmt, params or {}).fetchall()
 
     def ensure_tables(self) -> None:
+
+        global _INITIALIZED
+
+        if _INITIALIZED:
+            return
+
+        if self._tables_ready:
+            return
+
         if self.db is None:
             return
+
+        dialect = _dialect_name(self.db)
+        serial_pk = (
+            "id INTEGER PRIMARY KEY AUTOINCREMENT"
+            if dialect == "sqlite"
+            else "id SERIAL PRIMARY KEY"
+        )
 
         self.db.execute(text(
             """
@@ -385,9 +505,9 @@ class ForexPortfolioEngine:
         ))
 
         self.db.execute(text(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS forex_cash_ledger (
-                id SERIAL PRIMARY KEY,
+                {serial_pk},
                 tenant_id VARCHAR(100),
                 user_id VARCHAR(100),
                 portfolio_id VARCHAR(100),
@@ -404,9 +524,9 @@ class ForexPortfolioEngine:
         ))
 
         self.db.execute(text(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS forex_portfolio_snapshots (
-                id SERIAL PRIMARY KEY,
+                {serial_pk},
                 tenant_id VARCHAR(100),
                 user_id VARCHAR(100),
                 portfolio_id VARCHAR(100),
@@ -435,6 +555,8 @@ class ForexPortfolioEngine:
 
         if hasattr(self.db, "commit"):
             self.db.commit()
+            self._tables_ready = True
+            _INITIALIZED = True
 
     def create_account(
         self,
@@ -527,7 +649,7 @@ class ForexPortfolioEngine:
             return None
 
         try:
-            self.ensure_tables()
+            #self.ensure_tables()
 
             params: Dict[str, Any] = {
                 "tenant_id": self.tenant_id,
@@ -712,7 +834,17 @@ class ForexPortfolioEngine:
             print("ask   :", getattr(quote, "ask", None))
 
         print("=" * 80)
-        price = _safe_float(entry_price, quote.price)
+        quote_price = _safe_float(getattr(quote, "price", None))
+
+        price = _safe_float(entry_price)
+
+        if price <= 0:
+            price = quote_price
+
+        if price <= 0:
+            raise ValueError(
+                f"Unable to determine entry price for {normalized_pair}."
+            )
         print("=" * 80)
         print("PRICE DEBUG")
         print("entry_price :", entry_price)
@@ -724,7 +856,7 @@ class ForexPortfolioEngine:
             raise ValueError("Entry price must be positive.")
 
         effective_leverage = _safe_float(leverage, account.leverage)
-        notional_value = position_units * price
+        notional_value = self._notional_in_account_currency(position_units, price, base_currency, quote_currency)
         margin_required = notional_value / max(effective_leverage, 1.0)
 
         if margin_required > account.margin_available:
@@ -811,6 +943,8 @@ class ForexPortfolioEngine:
             units=units_to_close,
             entry_price=position.avg_entry_price,
             current_price=exit_price,
+            base_currency=position.base_currency,
+            quote_currency=position.quote_currency,
         )
 
         # update position state
@@ -828,13 +962,17 @@ class ForexPortfolioEngine:
             position.notional_value = 0.0
             position.margin_required = 0.0
         else:
-            position.notional_value = position.units * exit_price
+            position.notional_value = self._notional_in_account_currency(
+                position.units, exit_price, position.base_currency, position.quote_currency
+            )
             position.market_value = position.notional_value
             position.unrealized_pnl = self._calculate_position_pnl(
                 side=position.side,
                 units=position.units,
                 entry_price=position.avg_entry_price,
                 current_price=exit_price,
+                base_currency=position.base_currency,
+                quote_currency=position.quote_currency,
             )
             position.margin_required = position.notional_value / max(position.leverage, 1.0)
 
@@ -1095,7 +1233,7 @@ class ForexPortfolioEngine:
             return None
 
         try:
-            self.ensure_tables()
+            #self.ensure_tables()
 
             row = self.db.execute(text(
                 """
@@ -1136,7 +1274,7 @@ class ForexPortfolioEngine:
             return []
 
         try:
-            self.ensure_tables()
+            #self.ensure_tables()
 
             params: Dict[str, Any] = {
                 "tenant_id": self.tenant_id,
@@ -1194,8 +1332,12 @@ class ForexPortfolioEngine:
                     units=position.units,
                     entry_price=position.avg_entry_price,
                     current_price=current_price,
+                    base_currency=position.base_currency,
+                    quote_currency=position.quote_currency,
                 )
-                position.notional_value = position.units * current_price
+                position.notional_value = self._notional_in_account_currency(
+                    position.units, current_price, position.base_currency, position.quote_currency
+                )
                 position.market_value = position.notional_value
                 position.margin_required = position.notional_value / max(position.leverage, 1.0)
                 position.updated_at = _utc_now()
@@ -1375,6 +1517,487 @@ class ForexPortfolioEngine:
             asof=_utc_now(),
         )
 
+    def _get_var_engine(self):
+        """
+        Returns a configured institutional Forex VaR engine.
+        """
+
+        from modules.forex.risk.forex_var_engine import (
+            get_forex_var_engine,
+        )
+
+        return get_forex_var_engine(
+            db=self.db,
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+            portfolio_id=self.portfolio_id,
+        )
+
+    def _load_positions_into_var_engine(
+            self,
+            *,
+            engine: Any,
+            account: ForexPortfolioAccount,
+            positions: List[ForexPosition],
+    ) -> Any:
+        """
+        Replace the VaR engine's in-memory portfolio with the current live
+        Forex account and open positions.
+
+        This method does not query or persist data. It only maps the existing
+        ForexPortfolioEngine models into the models required by ForexVaREngine.
+        """
+
+        from modules.forex.risk.forex_var_engine import (
+            ForexRiskPosition,
+            PositionDirection,
+        )
+
+        # ==========================================================
+        # Reset the VaR engine's current live portfolio positions
+        # ==========================================================
+
+        portfolio = getattr(engine, "portfolio", None)
+
+        if portfolio is None:
+            raise RuntimeError(
+                "Forex VaR engine does not have an initialized portfolio."
+            )
+
+        portfolio.positions.clear()
+
+        # ==========================================================
+        # Synchronize account-level values
+        # ==========================================================
+
+        portfolio.portfolio_id = (
+                account.portfolio_id
+                or self.portfolio_id
+                or portfolio.portfolio_id
+        )
+
+        portfolio.tenant_id = self.tenant_id
+        portfolio.user_id = self.user_id
+        portfolio.account_currency = (
+                account.account_currency
+                or self.account_currency
+        )
+
+        portfolio.cash = _safe_float(account.cash_balance)
+        portfolio.equity = _safe_float(account.equity)
+        portfolio.buying_power = _safe_float(account.margin_available)
+        portfolio.margin_used = _safe_float(account.margin_used)
+        portfolio.margin_available = _safe_float(
+            account.margin_available
+        )
+
+        # ==========================================================
+        # Map live Forex positions into VaR risk positions
+        # ==========================================================
+
+        for position in positions or []:
+            side = str(position.side or "").strip().upper()
+
+            direction = (
+                PositionDirection.SHORT
+                if side in {"SHORT", "SELL"}
+                else PositionDirection.LONG
+            )
+
+            symbol = normalize_pair(position.pair)
+
+            risk_position = ForexRiskPosition(
+                symbol=symbol,
+                base_currency=str(
+                    position.base_currency or ""
+                ).upper(),
+                quote_currency=str(
+                    position.quote_currency or ""
+                ).upper(),
+                direction=direction,
+                quantity=_safe_float(position.units),
+                entry_price=_safe_float(
+                    position.avg_entry_price
+                ),
+                current_price=_safe_float(
+                    position.current_price
+                ),
+                market_value=abs(
+                    _safe_float(position.market_value)
+                ),
+                notional_value=abs(
+                    _safe_float(position.notional_value)
+                ),
+                unrealized_pnl=_safe_float(
+                    position.unrealized_pnl
+                ),
+                realized_pnl=_safe_float(
+                    position.realized_pnl
+                ),
+                leverage=_safe_float(
+                    position.leverage,
+                    account.leverage,
+                ),
+                metadata={
+                    "position_id": position.id,
+                    "account_id": position.account_id,
+                    "portfolio_id": position.portfolio_id,
+                    "status": position.status,
+                    "margin_required": _safe_float(
+                        position.margin_required
+                    ),
+                    "stop_price": position.stop_price,
+                    "target_price": position.target_price,
+                    "opened_at": (
+                        position.opened_at.isoformat()
+                        if isinstance(position.opened_at, datetime)
+                        else str(position.opened_at or "")
+                    ),
+                },
+            )
+
+            engine.add_position(risk_position)
+
+        # ==========================================================
+        # Recalculate weights after all positions are loaded
+        # ==========================================================
+
+        portfolio.recalculate_weights()
+
+        return engine
+
+    def _build_var_summary(
+            self,
+            *,
+            account: ForexPortfolioAccount,
+            positions: List[ForexPosition],
+    ) -> Dict[str, Any]:
+        """
+        Build the institutional risk packet used by the Trading Desk.
+
+        Failures in the institutional VaR layer do not prevent the standard
+        portfolio snapshot from rendering.
+        """
+
+        try:
+
+            engine = self._get_var_engine()
+
+            self._load_positions_into_var_engine(
+                engine=engine,
+                account=account,
+                positions=positions,
+            )
+
+            portfolio_summary = engine.portfolio_summary()
+
+            statistics_result = (
+                engine.build_portfolio_statistics()
+            )
+
+            statistics = (
+                statistics_result.to_dict()
+                if hasattr(statistics_result, "to_dict")
+                else dict(statistics_result or {})
+            )
+
+            parametric_result = (
+                engine.calculate_parametric_var(
+                    confidence=0.95,
+                )
+            )
+
+            parametric_var = (
+                parametric_result.to_dict()
+                if hasattr(parametric_result, "to_dict")
+                else dict(parametric_result or {})
+            )
+
+            expected_result = (
+                engine.calculate_expected_shortfall(
+                    confidence=0.95,
+                )
+            )
+
+            expected_shortfall = (
+                expected_result.to_dict()
+                if hasattr(expected_result, "to_dict")
+                else dict(expected_result or {})
+            )
+
+            result = {
+                "status": "READY",
+                "portfolio_summary": portfolio_summary,
+                "statistics": statistics,
+                "parametric_var": parametric_var,
+                "expected_shortfall": expected_shortfall,
+
+                #
+                # Flatten the primary institutional risk metrics
+                #
+                "daily_var": _safe_float(
+                    parametric_var.get("daily_var", 0.0)
+                ),
+
+                "daily_var_95": _safe_float(
+                    parametric_var.get("daily_var", 0.0)
+                ),
+
+                "var_95": _safe_float(
+                    parametric_var.get("daily_var", 0.0)
+                ),
+
+                "value_at_risk": _safe_float(
+                    parametric_var.get("daily_var", 0.0)
+                ),
+
+                "expected_shortfall_value": _safe_float(
+                    expected_shortfall.get(
+                        "expected_shortfall",
+                        0.0,
+                    )
+                ),
+
+                "expected_shortfall_95": _safe_float(
+                    expected_shortfall.get(
+                        "expected_shortfall",
+                        0.0,
+                    )
+                ),
+                "gross_exposure": _safe_float(
+                    portfolio_summary.get(
+                        "gross_exposure",
+                        0.0,
+                    )
+                ),
+                "net_exposure": _safe_float(
+                    portfolio_summary.get(
+                        "net_exposure",
+                        0.0,
+                    )
+                ),
+                "directional": portfolio_summary.get(
+                    "directional",
+                    {},
+                ),
+                "currency_exposure": portfolio_summary.get(
+                    "currency_exposure",
+                    {},
+                ),
+                "effective_positions": _safe_float(
+                    portfolio_summary.get(
+                        "effective_positions",
+                        0.0,
+                    )
+                ),
+                "diversification_ratio": _safe_float(
+                    portfolio_summary.get(
+                        "diversification_ratio",
+                        0.0,
+                    )
+                ),
+                "generated_at": _utc_now().isoformat(),
+            }
+
+            print("=" * 80)
+            print("INSTITUTIONAL VAR SUMMARY")
+            print(
+                "Positions :",
+                len(positions or []),
+            )
+            print(
+                "Gross     :",
+                result["gross_exposure"],
+            )
+            print(
+                "Net       :",
+                result["net_exposure"],
+            )
+            print(
+                "Directional:",
+                result["directional"],
+            )
+            print(
+                "Daily VaR :",
+                parametric_var.get("daily_var", 0.0),
+            )
+            print(
+                "Expected Shortfall:",
+                expected_shortfall.get(
+                    "expected_shortfall",
+                    0.0,
+                ),
+            )
+            print("=" * 80)
+
+            return result
+
+        except Exception as exc:
+
+            logger.exception(
+                "Failed to build institutional Forex VaR summary: %s",
+                exc,
+            )
+
+            return {
+                "status": "ERROR",
+                "message": str(exc),
+                "portfolio_summary": {},
+                "statistics": {},
+                "parametric_var": {},
+                "expected_shortfall": {},
+                "gross_exposure": 0.0,
+                "net_exposure": 0.0,
+                "directional": {
+                    "long": 0.0,
+                    "short": 0.0,
+                    "net": 0.0,
+                },
+                "currency_exposure": {},
+                "effective_positions": 0.0,
+                "diversification_ratio": 0.0,
+                "generated_at": _utc_now().isoformat(),
+            }
+
+    def _build_portfolio_allocation(
+            self,
+            *,
+            account: ForexPortfolioAccount,
+            positions: List[ForexPosition],
+    ) -> List[Dict[str, Any]]:
+        """
+        Build portfolio allocation from live open positions.
+        """
+
+        total = sum(
+            abs(_safe_float(p.market_value))
+            for p in positions
+        )
+
+        allocation: List[Dict[str, Any]] = []
+
+        if total <= 0:
+            return allocation
+
+        for position in positions:
+            value = abs(
+                _safe_float(position.market_value)
+            )
+
+            allocation.append({
+
+                "pair": position.pair,
+
+                "side": position.side,
+
+                "units": position.units,
+
+                "market_value": value,
+
+                "notional": _safe_float(
+                    position.notional_value
+                ),
+
+                "margin": _safe_float(
+                    position.margin_required
+                ),
+
+                "weight": round(
+                    value / total * 100.0,
+                    2,
+                ),
+
+                "allocation_pct": round(
+                    value / total * 100.0,
+                    2,
+                ),
+
+                "unrealized_pnl": _safe_float(
+                    position.unrealized_pnl
+                ),
+
+                "realized_pnl": _safe_float(
+                    position.realized_pnl
+                ),
+
+                "entry_price": _safe_float(
+                    position.avg_entry_price
+                ),
+
+                "current_price": _safe_float(
+                    position.current_price
+                ),
+
+            })
+
+        allocation.sort(
+            key=lambda row: row["weight"],
+            reverse=True,
+        )
+
+        return allocation
+
+    def _build_performance_attribution(
+            self,
+            *,
+            closed_positions: List[ForexPosition],
+            execution_history: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Aggregate realized performance by currency pair.
+        """
+
+        attribution: Dict[str, Dict[str, Any]] = {}
+
+        for position in closed_positions:
+
+            pair = normalize_pair(position.pair)
+
+            row = attribution.setdefault(
+                pair,
+                {
+                    "pair": pair,
+                    "trades": 0,
+                    "wins": 0,
+                    "losses": 0,
+                    "realized_pnl": 0.0,
+                },
+            )
+
+            pnl = _safe_float(position.realized_pnl)
+
+            row["trades"] += 1
+            row["realized_pnl"] += pnl
+
+            if pnl > 0:
+                row["wins"] += 1
+            elif pnl < 0:
+                row["losses"] += 1
+
+        results = []
+
+        for row in attribution.values():
+            trades = max(row["trades"], 1)
+
+            row["win_rate"] = round(
+                row["wins"] / trades * 100.0,
+                2,
+            )
+
+            row["average_pnl"] = round(
+                row["realized_pnl"] / trades,
+                2,
+            )
+
+            results.append(row)
+
+        results.sort(
+            key=lambda r: r["realized_pnl"],
+            reverse=True,
+        )
+
+        return results
+
     def position_size_from_risk(
         self,
         *,
@@ -1453,6 +2076,218 @@ class ForexPortfolioEngine:
             and signal.recommendation in {"STRONG_BUY", "BUY", "SELL"},
         }
 
+    def _build_performance_history(
+            self,
+            *,
+            account_id: str,
+    ) -> Dict[str, Any]:
+        """
+        Build historical portfolio performance from persisted portfolio snapshots.
+
+        Returns
+        -------
+        {
+            "equity_curve": [
+                {"date": "...", "equity": ...},
+                ...
+            ],
+            "daily_pnl": [
+                {"date": "...", "pnl": ...},
+                ...
+            ],
+            "monthly_returns": [
+                {"month": "2026-07", "return_pct": ...},
+                ...
+            ],
+        }
+        """
+
+        if self.db is None:
+            return {
+                "equity_curve": [],
+                "daily_pnl": [],
+                "monthly_returns": [],
+            }
+
+        try:
+
+            rows = self.db.execute(
+                text(
+                    """
+                    SELECT
+                        asof,
+                        equity,
+                        cash_balance,
+                        total_realized_pnl,
+                        total_unrealized_pnl
+                    FROM forex_portfolio_snapshots
+                    WHERE account_id = :account_id
+                    ORDER BY asof ASC
+                    """
+                ),
+                {
+                    "account_id": account_id,
+                },
+            ).fetchall()
+
+        except Exception as exc:
+
+            logger.exception(
+                "Failed loading portfolio performance history: %s",
+                exc,
+            )
+
+            return {
+                "equity_curve": [],
+                "daily_pnl": [],
+                "monthly_returns": [],
+            }
+
+        if not rows:
+            return {
+                "equity_curve": [],
+                "daily_pnl": [],
+                "monthly_returns": [],
+            }
+
+        # ==========================================================
+        # Equity Curve
+        # ==========================================================
+
+        equity_curve: List[Dict[str, Any]] = []
+
+        # ==========================================================
+        # Daily P&L
+        # ==========================================================
+
+        daily_totals: Dict[str, float] = {}
+
+        # ==========================================================
+        # Monthly Returns
+        # ==========================================================
+
+        monthly_first: Dict[str, float] = {}
+        monthly_last: Dict[str, float] = {}
+
+        for row in rows:
+
+            asof = _coerce_datetime(_row_get(row, "asof"))
+
+            equity = _safe_float(
+                _row_get(row, "equity")
+            )
+
+            realized = _safe_float(
+                _row_get(row, "total_realized_pnl")
+            )
+
+            unrealized = _safe_float(
+                _row_get(row, "total_unrealized_pnl")
+            )
+
+            total_pnl = realized + unrealized
+
+            day_key = asof.strftime("%Y-%m-%d")
+
+            month_key = asof.strftime("%Y-%m")
+
+            # ----------------------------------------------------------
+            # Equity Curve
+            # ----------------------------------------------------------
+
+            equity_curve.append(
+                {
+                    "date": asof,
+                    "equity": equity,
+                }
+            )
+
+            # ----------------------------------------------------------
+            # Daily P&L
+            #
+            # Store the most recent P&L snapshot for each day.
+            # ----------------------------------------------------------
+
+            daily_totals[day_key] = total_pnl
+
+            # ----------------------------------------------------------
+            # Monthly Returns
+            #
+            # Capture the first and last equity value for each month.
+            # ----------------------------------------------------------
+
+            if month_key not in monthly_first:
+                monthly_first[month_key] = equity
+
+            monthly_last[month_key] = equity
+
+        # ==========================================================
+        # Build Daily P&L
+        # ==========================================================
+
+        daily_pnl = []
+
+        for day in sorted(daily_totals.keys()):
+            daily_pnl.append(
+                {
+                    "date": day,
+                    "pnl": round(
+                        daily_totals[day],
+                        2,
+                    ),
+                }
+            )
+
+        # ==========================================================
+        # Build Monthly Returns
+        # ==========================================================
+
+        monthly_returns = []
+
+        for month in sorted(monthly_first.keys()):
+
+            start_equity = monthly_first[month]
+
+            end_equity = monthly_last[month]
+
+            if start_equity > 0:
+
+                pct = (
+                              (
+                                      end_equity
+                                      - start_equity
+                              )
+                              / start_equity
+                      ) * 100.0
+
+            else:
+
+                pct = 0.0
+
+            monthly_returns.append(
+                {
+                    "month": month,
+                    "return_pct": round(
+                        pct,
+                        2,
+                    ),
+                }
+            )
+
+        return {
+
+            "equity_curve": equity_curve,
+
+            "daily_pnl": daily_pnl,
+
+            "monthly_returns": monthly_returns,
+
+        }
+        return {
+            "equity_curve": equity_curve,
+            "daily_pnl": daily_pnl,
+            "monthly_returns": monthly_returns,
+        }
     # ------------------------------------------------------------------
     # Terminal Snapshot / Institutional Analytics
     # ------------------------------------------------------------------
@@ -1527,6 +2362,11 @@ class ForexPortfolioEngine:
             positions=positions,
         )
 
+        institutional_risk = self._build_var_summary(
+            account=account,
+            positions=positions,
+        )
+
         open_orders = self.load_open_orders(
             account_id=account.id,
             portfolio_id=account.portfolio_id,
@@ -1578,6 +2418,19 @@ class ForexPortfolioEngine:
         }
 
         portfolio = portfolio_snapshot.to_dict() if portfolio_snapshot else {}
+
+        allocation = self._build_portfolio_allocation(
+            account=account,
+            positions=positions,
+        )
+
+        performance_attribution = (
+            self._build_performance_attribution(
+                closed_positions=closed_positions,
+                execution_history=execution_history,
+            )
+        )
+
         portfolio.update({
             "closed_positions": closed_position_rows,
             "open_orders": open_orders,
@@ -1588,6 +2441,11 @@ class ForexPortfolioEngine:
             "pair_exposure": pair_exposure,
             "performance": performance,
             "margin": margin,
+
+            # Sprint 26 Phase 3A
+            "institutional_risk": institutional_risk,
+            "allocation": allocation,
+            "performance_attribution": performance_attribution,
         })
 
         system = {
@@ -1622,8 +2480,13 @@ class ForexPortfolioEngine:
             margin=margin,
             system=system,
             raw={
-                "portfolio_snapshot": portfolio_snapshot.to_dict() if portfolio_snapshot else None,
+                "portfolio_snapshot": (
+                    portfolio_snapshot.to_dict()
+                    if portfolio_snapshot
+                    else None
+                ),
                 "risk": risk_result.to_dict(),
+                "institutional_risk": institutional_risk,
             },
         )
 
@@ -1817,6 +2680,29 @@ class ForexPortfolioEngine:
         execution_history = execution_history or []
         cash_ledger = cash_ledger or []
 
+        # ---------------------------------------------------------
+        # Build historical performance series for dashboard charts
+        # ---------------------------------------------------------
+
+        history = {}
+
+        if account is not None:
+
+            try:
+
+                history = self._build_performance_history(
+                    account_id=account.id,
+                )
+
+            except Exception as exc:
+
+                logger.warning(
+                    "Failed to build performance history: %s",
+                    exc,
+                )
+
+                history = {}
+
         realized_values: List[float] = []
 
         for position in closed_positions:
@@ -1893,7 +2779,12 @@ class ForexPortfolioEngine:
             loss_prob = 1.0 - win_prob
             payoff = average_win / average_loss
             kelly = win_prob - (loss_prob / payoff)
-
+        print("=" * 80)
+        print("PERFORMANCE HISTORY")
+        print("Equity :", len(history.get("equity_curve", [])))
+        print("Daily  :", len(history.get("daily_pnl", [])))
+        print("Monthly:", len(history.get("monthly_returns", [])))
+        print("=" * 80)
         return {
             "trade_count": trade_count,
             "open_position_count": len(positions),
@@ -1914,10 +2805,30 @@ class ForexPortfolioEngine:
             "total_pnl": _round(total_pnl, 2),
             "realized_return_pct": _round(realized_return_pct, 4),
             "unrealized_return_pct": _round(unrealized_return_pct, 4),
-            "sharpe": _round(sharpe, 4),
+                        "sharpe": _round(sharpe, 4),
             "sortino": _round(sortino, 4),
             "kelly_fraction": _round(kelly, 4),
+
+            # -----------------------------------------------------
+            # Dashboard chart data
+            # -----------------------------------------------------
+
+            "equity_curve": history.get(
+                "equity_curve",
+                [],
+            ),
+
+            "daily_pnl": history.get(
+                "daily_pnl",
+                [],
+            ),
+
+            "monthly_returns": history.get(
+                "monthly_returns",
+                [],
+            ),
         }
+
 
     def load_open_orders(
         self,
@@ -1987,7 +2898,7 @@ class ForexPortfolioEngine:
             return []
 
         try:
-            self.ensure_tables()
+            #self.ensure_tables()
 
             params: Dict[str, Any] = {
                 "tenant_id": self.tenant_id,
@@ -2187,18 +3098,46 @@ class ForexPortfolioEngine:
         units: float,
         entry_price: float,
         current_price: float,
+        base_currency: Optional[str] = None,
+        quote_currency: Optional[str] = None,
     ) -> float:
+        """
+        (current_price - entry_price) * units is a PnL denominated in the
+        pair's QUOTE currency. That only equals the account-currency PnL
+        when quote_currency matches the account currency (EUR/USD, GBP/USD
+        on a USD account). For pairs where the account currency is the BASE
+        instead (USD/JPY, USD/CHF on a USD account), the same JPY/CHF-
+        denominated PnL needs converting back to USD by dividing by the
+        current price -- otherwise a real ~$14 move reads as ~-220 (JPY
+        terms mistaken for USD). base_currency/quote_currency are optional
+        for backwards compatibility with any other caller of this method;
+        omitting them reproduces the old (quote-currency) behavior.
+        """
         normalized_side = str(side or "").upper()
         if normalized_side == "SHORT":
-            return (entry_price - current_price) * units
-        return (current_price - entry_price) * units
+            pnl = (entry_price - current_price) * units
+        else:
+            pnl = (current_price - entry_price) * units
+
+        if not base_currency or not quote_currency:
+            return pnl
+
+        base = base_currency.upper()
+        quote = quote_currency.upper()
+        acct = self.account_currency
+
+        if quote == acct:
+            return pnl
+        if base == acct and current_price:
+            return pnl / current_price
+        return pnl
 
     def _persist_account(self, account: ForexPortfolioAccount) -> None:
         if self.db is None:
             return
 
         try:
-            self.ensure_tables()
+            #self.ensure_tables()
 
             self.db.execute(text(
                 """
@@ -2288,7 +3227,7 @@ class ForexPortfolioEngine:
             return
 
         try:
-            self.ensure_tables()
+            #self.ensure_tables()
 
             self.db.execute(text(
                 """
@@ -2396,25 +3335,12 @@ class ForexPortfolioEngine:
             self._rollback_quietly()
 
     def _persist_snapshot(self, snapshot: ForexPortfolioSnapshot) -> None:
-        print("=" * 80)
-        print("ENTER _persist_snapshot")
 
-        if self.db is None:
-            return
-        print("CALLING ensure_tables()")
-        self.ensure_tables()
+        #self.ensure_tables()
         print("ensure_tables() COMPLETE")
         try:
-            self.ensure_tables()
-            print("=" * 80)
-            print("SNAPSHOT INSERT")
-            print("tenant    :", snapshot.tenant_id)
-            print("user      :", snapshot.user_id)
-            print("portfolio :", snapshot.portfolio_id)
-            print("account   :", snapshot.account_id)
-            print("asof      :", snapshot.asof)
-            print("=" * 80)
-            print("EXECUTING INSERT")
+            #self.ensure_tables()
+
             self.db.execute(text(
                 """
                 INSERT INTO forex_portfolio_snapshots (
@@ -2533,7 +3459,7 @@ class ForexPortfolioEngine:
             return
 
         try:
-            self.ensure_tables()
+            #self.ensure_tables()
 
             self.db.execute(text(
                 """
@@ -2584,8 +3510,8 @@ class ForexPortfolioEngine:
             self._rollback_quietly()
 
     def _account_from_row(self, row: Any) -> ForexPortfolioAccount:
-        created_at = _row_get(row, "created_at") or _utc_now()
-        updated_at = _row_get(row, "updated_at") or _utc_now()
+        created_at = _coerce_datetime(_row_get(row, "created_at"))
+        updated_at = _coerce_datetime(_row_get(row, "updated_at"))
 
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
@@ -2612,8 +3538,8 @@ class ForexPortfolioEngine:
         )
 
     def _position_from_row(self, row: Any) -> ForexPosition:
-        opened_at = _row_get(row, "opened_at") or _utc_now()
-        updated_at = _row_get(row, "updated_at") or _utc_now()
+        opened_at = _coerce_datetime(_row_get(row, "opened_at"))
+        updated_at = _coerce_datetime(_row_get(row, "updated_at"))
 
         if opened_at.tzinfo is None:
             opened_at = opened_at.replace(tzinfo=timezone.utc)

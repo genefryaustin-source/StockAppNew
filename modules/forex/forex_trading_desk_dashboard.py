@@ -1,4 +1,3 @@
-
 """
 modules/forex/forex_trading_desk_dashboard.py
 """
@@ -7,6 +6,9 @@ from modules.forex.forex_portfolio_engine import get_forex_portfolio_engine
 from modules.forex.forex_portfolio_manager import (
     get_forex_portfolio_manager,
 )
+from modules.forex.forex_watchlist_ai import ForexWatchlistAI
+from modules.forex.forex_watchlist_factory import get_forex_watchlist_service
+
 try:
     import streamlit as st
     import pandas as pd
@@ -16,6 +18,7 @@ except Exception:
     st=None
     pd=None
 import logging
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 from modules.forex.forex_trading_desk import get_forex_trading_desk
@@ -23,6 +26,19 @@ from modules.forex.forex_portfolio_engine import get_forex_portfolio_engine
 from modules.forex.forex_order_management_engine import (
     get_forex_order_management_engine,
 )
+from modules.forex.forex_pending_orders_dashboard import (
+    render_forex_pending_orders_dashboard,
+)
+from modules.forex.forex_positions_dashboard import (
+    render_forex_positions_dashboard,
+)
+from modules.forex.forex_execution_dashboard_service import (
+    ForexExecutionDashboardService,
+)
+
+
+
+
 class ForexTradingDeskDashboard:
 
     def __init__(self, db=None):
@@ -70,12 +86,105 @@ class ForexTradingDeskDashboard:
             include_history=True,
         )
 
+        portfolio = snapshot.portfolio or {}
+
+        institutional_risk = portfolio.get(
+            "institutional_risk",
+            {},
+        )
+
+        portfolio_summary = institutional_risk.get(
+            "portfolio_summary",
+            {},
+        )
+
+        statistics = institutional_risk.get(
+            "statistics",
+            {},
+        )
+
+        parametric_var = institutional_risk.get(
+            "parametric_var",
+            {},
+        )
+
+        expected_shortfall = institutional_risk.get(
+            "expected_shortfall",
+            {},
+        )
+
         terminal = self._as_dict(snapshot)
 
         account = terminal.get("account", {})
         portfolio = terminal.get("portfolio", {})
         margin = terminal.get("margin", {})
         risk = terminal.get("risk", {})
+        risk = {
+            **risk,
+
+            "daily_var": parametric_var.get(
+                "daily_var",
+                0.0,
+            ),
+
+            "var_95": parametric_var.get(
+                "daily_var",
+                0.0,
+            ),
+
+            "daily_var_95": parametric_var.get(
+                "daily_var",
+                0.0,
+            ),
+
+            "var99": parametric_var.get(
+                "var99",
+                parametric_var.get(
+                    "daily_var_99",
+                    0.0,
+                ),
+            ),
+
+            "expected_shortfall": expected_shortfall.get(
+                "expected_shortfall",
+                0.0,
+            ),
+
+            "expected_shortfall_95": expected_shortfall.get(
+                "expected_shortfall",
+                0.0,
+            ),
+
+            "gross_exposure": portfolio_summary.get(
+                "gross_exposure",
+                0.0,
+            ),
+
+            "net_exposure": portfolio_summary.get(
+                "net_exposure",
+                0.0,
+            ),
+
+            "directional": portfolio_summary.get(
+                "directional",
+                {},
+            ),
+
+            "currency_exposure": portfolio_summary.get(
+                "currency_exposure",
+                {},
+            ),
+
+            "effective_positions": portfolio_summary.get(
+                "effective_positions",
+                0.0,
+            ),
+
+            "diversification_ratio": portfolio_summary.get(
+                "diversification_ratio",
+                0.0,
+            ),
+        }
         performance = terminal.get("performance", {})
         positions = terminal.get("positions", [])
         currency_exposure = terminal.get("currency_exposure", [])
@@ -102,7 +211,53 @@ class ForexTradingDeskDashboard:
             "exposure_pct": portfolio.get("exposure_pct", 0),
             "risk_score": risk.get("risk_score", portfolio.get("risk_score", 0)),
             "leverage": margin.get("leverage", 0),
+
         }
+        summary.update({
+
+            "gross_exposure": risk.get("gross_exposure", 0),
+
+            "net_exposure": risk.get("net_exposure", 0),
+
+            "long_exposure": risk.get(
+                "directional",
+                {},
+            ).get(
+                "long",
+                0,
+            ),
+
+            "short_exposure": risk.get(
+                "directional",
+                {},
+            ).get(
+                "short",
+                0,
+            ),
+
+            "effective_positions": risk.get(
+                "effective_positions",
+                0,
+            ),
+
+            "diversification_ratio": risk.get(
+                "diversification_ratio",
+                0,
+            ),
+
+            "daily_var": risk.get(
+                "daily_var",
+                0,
+            ),
+
+            "expected_shortfall": risk.get(
+                "expected_shortfall",
+                risk.get(
+                    "expected_shortfall_value",
+                    0,
+                ),
+            ),
+        })
 
         portfolio["summary"] = summary
         portfolio["positions"] = positions
@@ -113,6 +268,56 @@ class ForexTradingDeskDashboard:
         portfolio["risk"] = risk
         portfolio["system"] = terminal.get("system", {})
 
+        watchlist_service = get_forex_watchlist_service(
+            db=self.db,
+            tenant_id=kwargs.get("tenant_id"),
+            user_id=kwargs.get("user_id"),
+            portfolio_id=kwargs.get("portfolio_id"),
+        )
+
+        watchlist = watchlist_service.load_watchlist()
+
+        pairs = [
+            item.pair
+            for item in watchlist.items
+        ]
+
+        quotes = self.desk.forex_service.get_quotes(
+            pairs=pairs,
+        )
+
+        rows = []
+
+        for pair, quote in quotes.items():
+            rows.append({
+
+                "pair": quote.pair,
+
+                "bid": quote.bid,
+
+                "ask": quote.ask,
+
+                "mid": quote.mid,
+
+                "spread": quote.spread,
+
+                "provider": quote.provider,
+
+                "volume": quote.volume,
+
+                "timestamp": quote.timestamp,
+
+                "source": quote.source,
+
+            })
+
+        print("=" * 100)
+        print("LIVE PACKET")
+        print("risk =", risk)
+        print("institutional_risk =", institutional_risk)
+        print("parametric_var =", parametric_var)
+        print("expected_shortfall =", expected_shortfall)
+        print("=" * 100)
         return {
             "portfolio": portfolio,
             "positions": positions,
@@ -126,7 +331,42 @@ class ForexTradingDeskDashboard:
             "execution_history": terminal.get("execution_history", []),
             "cash_ledger": terminal.get("cash_ledger", []),
             "system": terminal.get("system", {}),
+
+            "watchlist": rows,
+
+             "providers": list(
+
+        {
+
+            row["provider"]
+
+            for row in rows
+
+            if row["provider"]
+
         }
+
+    ),
+
+    "provider_count": len(
+
+        {
+
+            row["provider"]
+
+            for row in rows
+
+            if row["provider"]
+
+        }
+
+    ),
+
+    "latency_ms": 0,
+
+    "signals": 0,
+
+}
 
     def _execute_close_position(self, portfolio_engine, payload):
         try:
@@ -244,7 +484,98 @@ class ForexTradingDeskDashboard:
 
         return result
 
+    def _submit_forex_order(
+            self,
+            *,
+            portfolio_engine,
+            order_engine,
+            kwargs,
+            pair,
+            side,
+            units,
+            stop_price=0.0,
+            take_profit=0.0,
+            limit_price=None,
+            order_type="MARKET",
+    ):
+
+        # ---------------------------------------------------------
+        # Resolve the active trading account
+        # ---------------------------------------------------------
+
+        account = portfolio_engine.get_account(
+            portfolio_id=kwargs.get("portfolio_id"),
+        )
+
+        if account is None:
+            st.error("No Forex account is available.")
+
+            return {
+                "status": "ERROR",
+                "message": "No Forex account available.",
+            }
+
+        print("=" * 80)
+        print("ORDER SUBMISSION")
+        print("Portfolio :", account.portfolio_id)
+        print("Account   :", account.id)
+        print("Pair      :", pair)
+        print("Side      :", side)
+        print("Units     :", units)
+        print("=" * 80)
+
+        return order_engine.submit(
+            pair=pair,
+            side=side,
+            units=units,
+            order_type=order_type,
+            limit_price=limit_price,
+            stop_price=stop_price,
+            take_profit=take_profit,
+            tenant_id=kwargs.get("tenant_id"),
+            user_id=kwargs.get("user_id"),
+
+            # Always use the resolved account
+            portfolio_id=account.portfolio_id,
+            account_id=account.id,
+        )
+
+    def _get_order_context(
+            self,
+            *,
+            portfolio_engine,
+            kwargs,
+    ) -> Dict[str, Any]:
+
+        account = portfolio_engine.get_account(
+            portfolio_id=kwargs.get("portfolio_id"),
+        )
+
+        if account is None:
+            raise RuntimeError(
+                "No Forex account available."
+            )
+
+        return {
+
+            "account": account,
+
+            "account_id": account.id,
+
+            "portfolio_id": account.portfolio_id,
+
+            "tenant_id": kwargs["tenant_id"],
+
+            "user_id": kwargs["user_id"],
+
+        }
+
     def render(self, **kwargs):
+
+        tenant_id = kwargs.get("tenant_id")
+        user_id = kwargs.get("user_id")
+        portfolio_id = kwargs.get("portfolio_id")
+        account_id = kwargs.get("account_id")
 
         #data = self.desk.dashboard(**kwargs)
         # ============================================================
@@ -360,6 +691,25 @@ class ForexTradingDeskDashboard:
             user_id=kwargs.get("user_id"),
             portfolio_id=kwargs.get("portfolio_id"),
         )
+        # ==========================================================
+        # Live Market Quotes
+        # ==========================================================
+
+        watchlist_service = get_forex_watchlist_service(
+            db=self.db,
+            tenant_id=kwargs.get("tenant_id"),
+            user_id=kwargs.get("user_id"),
+            portfolio_id=kwargs.get("portfolio_id"),
+        )
+
+        watchlist = watchlist_service.load_watchlist()
+
+        pairs = [
+            item.pair
+            for item in watchlist.items
+        ]
+
+        quotes = data.get("watchlist", [])
 
         portfolio = data.get("portfolio", {})
         summary = portfolio.get("summary", {})
@@ -417,12 +767,9 @@ class ForexTradingDeskDashboard:
                 "Risk Score",
 
                 risk.get(
-
                     "risk_score",
-
                     0,
-
-                )
+                ),
 
             )
 
@@ -595,7 +942,7 @@ class ForexTradingDeskDashboard:
         strategy = data.get("strategy_lab", {})
         status_cols[4].info(
 
-            f"Providers : {data.get('provider_health', {}).get('summary', {}).get('healthy', 0)}"
+             f"Providers : {data.get('provider_count', 0)}"
 
         )
 
@@ -614,16 +961,48 @@ class ForexTradingDeskDashboard:
         status_cols[7].success("AI ONLINE")
 
         st.divider()
-        st.subheader("Live Market")
 
-        quotes = data.get(
+        watchlist = watchlist_service.load_watchlist()
 
-            "watchlist",
-
-            []
-
+        watchlist_ai = ForexWatchlistAI(
+            portfolio_engine=portfolio_engine,
+            order_engine=order_engine,
         )
 
+        account_data = data.get("account", {})
+
+        account_id = (
+                account_data.get("id")
+                or data.get("account_id")
+                or kwargs.get("account_id")
+        )
+
+        rows = watchlist_ai.enrich_watchlist(
+            watchlist=watchlist,
+            account_id=account_id,
+        )
+        # ==========================================================
+        # Live Market
+        # ==========================================================
+
+        st.subheader("Live Market")
+        print("=" * 80)
+        print("AI WATCHLIST")
+        print(type(rows))
+        print(len(rows) if isinstance(rows, list) else rows)
+
+        if isinstance(rows, list):
+            for r in rows[:5]:
+                print(r)
+
+        print("=" * 80)
+        # Reuse the AI-enriched watchlist rows created in the
+        # Forex Watchlist section.
+        quotes = live.get("watchlist", [])
+        print(type(quotes))
+        print(len(quotes))
+        print(quotes)
+        print("=" * 80)
         if quotes:
 
             ticker = pd.DataFrame(quotes)
@@ -636,11 +1015,15 @@ class ForexTradingDeskDashboard:
 
                 "ask",
 
+                "mid",
+
                 "spread",
 
-                "change_pct",
+                "provider",
 
-                "signal",
+                "volume",
+
+                "timestamp",
 
             ]
 
@@ -654,8 +1037,52 @@ class ForexTradingDeskDashboard:
 
             ]
 
-            if cols:
-                ticker = ticker[cols]
+            ticker = ticker[cols].copy()
+
+            # --------------------------------------------
+            # Formatting
+            # --------------------------------------------
+
+            if "bid" in ticker.columns:
+                ticker["bid"] = ticker["bid"].map(lambda x: f"{x:.5f}")
+
+            if "ask" in ticker.columns:
+                ticker["ask"] = ticker["ask"].map(lambda x: f"{x:.5f}")
+
+            if "mid" in ticker.columns:
+                ticker["mid"] = ticker["mid"].map(lambda x: f"{x:.5f}")
+
+            if "spread" in ticker.columns:
+                ticker["spread"] = ticker["spread"].map(lambda x: f"{x:.5f}")
+
+            if "volume" in ticker.columns:
+                ticker["volume"] = ticker["volume"].map(lambda x: f"{x:,.0f}")
+
+            ticker.rename(
+
+                columns={
+
+                    "pair": "Pair",
+
+                    "bid": "Bid",
+
+                    "ask": "Ask",
+
+                    "mid": "Mid",
+
+                    "spread": "Spread",
+
+                    "provider": "Provider",
+
+                    "volume": "Volume",
+
+                    "timestamp": "Updated",
+
+                },
+
+                inplace=True,
+
+            )
 
             st.dataframe(
 
@@ -665,7 +1092,7 @@ class ForexTradingDeskDashboard:
 
                 hide_index=True,
 
-                height=180,
+                height=220,
 
             )
 
@@ -673,7 +1100,7 @@ class ForexTradingDeskDashboard:
 
             st.info(
 
-                "No live quotes available."
+                "No live market data available."
 
             )
 
@@ -698,11 +1125,18 @@ class ForexTradingDeskDashboard:
                 "Strategy",
                 "Journal",
                 "Providers",
+                "Pending Orders (Detail)",
+                "Live Positions (Detail)",
             ],
             horizontal=True,
         )
 
         if ws == "Portfolio":
+
+            st.error("ACTIVE PORTFOLIO BLOCK")
+            print("=" * 80)
+            print("ACTIVE PORTFOLIO BLOCK")
+            print("=" * 80)
 
             portfolio = data.get("portfolio", {})
 
@@ -768,9 +1202,59 @@ class ForexTradingDeskDashboard:
                 ),
             )
 
+            # ---------------------------------------------------------
+            # Daily P&L Metric
+            # ---------------------------------------------------------
+
+            daily_pnl = summary.get("daily_pnl", 0.0)
+
+            # If daily_pnl is now a history list, use the latest value
+            if isinstance(daily_pnl, list):
+
+                if daily_pnl:
+
+                    latest = daily_pnl[-1]
+
+                    if isinstance(latest, dict):
+
+                        daily_pnl = latest.get("pnl", 0.0)
+
+                    else:
+
+                        daily_pnl = 0.0
+
+                else:
+
+                    daily_pnl = 0.0
+
+            # ---------------------------------------------------------
+            # Daily P&L Metric
+            # ---------------------------------------------------------
+
+            daily_pnl = summary.get("daily_pnl", 0.0)
+
+            # If daily_pnl is now a history list, use the latest value
+            if isinstance(daily_pnl, list):
+
+                if daily_pnl:
+
+                    latest = daily_pnl[-1]
+
+                    if isinstance(latest, dict):
+
+                        daily_pnl = latest.get("pnl", 0.0)
+
+                    else:
+
+                        daily_pnl = 0.0
+
+                else:
+
+                    daily_pnl = 0.0
+
             row1[6].metric(
                 "Daily P&L",
-                f"{summary.get('daily_pnl', 0):,.2f}",
+                f"{float(daily_pnl):,.2f}",
             )
 
             row1[7].metric(
@@ -919,32 +1403,28 @@ class ForexTradingDeskDashboard:
 
             with c2:
 
-                st.subheader(
-                    "Daily Performance"
-                )
+                st.subheader("Daily Performance")
 
-                pnl_history = performance.get(
-
-                    "daily_pnl",
-
+                equity = performance.get(
+                    "equity_history",
                     [],
-
                 )
 
-                if pnl_history:
+                if equity:
 
-                    st.bar_chart(
+                    df = pd.DataFrame(equity)
 
-                        pnl_history
+                    if "equity" in df.columns:
+                        df["daily_pnl"] = df["equity"].diff()
 
-                    )
+                        st.bar_chart(
+                            df["daily_pnl"].fillna(0)
+                        )
 
                 else:
 
                     st.info(
-
                         "No P&L history."
-
                     )
 
             with c3:
@@ -966,55 +1446,37 @@ class ForexTradingDeskDashboard:
                     "Risk Score",
 
                     risk.get(
-
                         "risk_score",
-
                         0,
-
                     ),
 
                 )
 
-                st.metric(
-
-                    "VaR",
-
-                    risk.get(
-
-                        "var95",
-
-                        0,
-
-                    ),
-
+                var95 = (
+                        risk.get("daily_var")
+                        or risk.get("var_95")
+                        or risk.get("daily_var_95")
+                        or 0
                 )
 
                 st.metric(
+                    "VaR (95%)",
+                    f"${risk.get('daily_var', risk.get('var_95', 0)):,.2f}",
+                )
 
+                st.metric(
+                    "Expected Shortfall",
+                    f"${risk.get('expected_shortfall', risk.get('expected_shortfall_value', 0)):,.2f}",
+                )
+
+                st.metric(
                     "Drawdown",
-
-                    risk.get(
-
-                        "drawdown",
-
-                        0,
-
-                    ),
-
+                    f"{risk.get('drawdown', 0):.2f}%",
                 )
 
                 st.metric(
-
                     "Leverage",
-
-                    risk.get(
-
-                        "leverage",
-
-                        0,
-
-                    ),
-
+                    f"{margin.get('leverage', 0):.2f}x",
                 )
 
             st.divider()
@@ -1074,7 +1536,40 @@ class ForexTradingDeskDashboard:
 
                 st.info("No open positions.")
 
+            st.divider()
+            st.subheader("Closed Positions")
 
+            closed_positions = portfolio.get("closed_positions", [])
+
+            if closed_positions:
+
+                df = pd.DataFrame(closed_positions)
+
+                preferred = [
+                    "pair",
+                    "side",
+                    "units",
+                    "avg_entry_price",
+                    "exit_price",
+                    "realized_pnl",
+                    "opened_at",
+                    "closed_at",
+                ]
+
+                cols = [c for c in preferred if c in df.columns]
+
+                if cols:
+                    df = df[cols]
+
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=300,
+                )
+
+            else:
+                st.info("No closed positions.")
 
             st.divider()
 
@@ -1140,7 +1635,7 @@ class ForexTradingDeskDashboard:
 
                 )
 
-                activity = portfolio.get(
+                activity = data.get(
                     "execution_history",
                     [],
                 )
@@ -1300,22 +1795,25 @@ class ForexTradingDeskDashboard:
             # ==========================================================
 
             if e.button(
-
                     "AI Trade",
-
                     key="portfolio_ai_trade_btn",
-
                     use_container_width=True,
-
             ):
+                # Reset other dialog state
+                st.session_state["close_position_selected_id"] = None
+                st.session_state["close_position_selector_widget"] = None
+
+                # Launch AI Trade dialog
                 st.session_state["ai_trade_new_order"] = True
+
                 print("=" * 80)
-                print("TOP OF CLOSE DIALOG")
-                print("close_position_selected_id =",
-                      st.session_state.get("close_position_selected_id"))
-                print("widget =",
-                      st.session_state.get("close_position_selector_widget"))
+                print("AI TRADE BUTTON")
+                print(
+                    "ai_trade_new_order =",
+                    st.session_state.get("ai_trade_new_order"),
+                )
                 print("=" * 80)
+
                 st.rerun()
 
             # ==========================================================
@@ -1557,11 +2055,27 @@ class ForexTradingDeskDashboard:
 
                     if submit:
 
-                        with st.spinner(
+                        with st.spinner("Submitting order..."):
 
-                                "Submitting order..."
+                            account = portfolio_engine.get_account(
+                                portfolio_id=kwargs.get("portfolio_id"),
+                            )
 
-                        ):
+                            if account is None:
+
+                                st.error("No Forex account is available.")
+
+                                return
+
+                            print("=" * 80)
+                            print("NEW ORDER SUBMISSION")
+                            print("Portfolio :", account.portfolio_id)
+                            print("Account   :", account.id)
+                            print("Pair      :", pair)
+                            print("Side      :", side)
+                            print("OrderType :", order_type)
+                            print("Units     :", quantity)
+                            print("=" * 80)
 
                             result = order_engine.submit(
                                 pair=pair,
@@ -1578,8 +2092,10 @@ class ForexTradingDeskDashboard:
 
                                 tenant_id=kwargs.get("tenant_id"),
                                 user_id=kwargs.get("user_id"),
-                                portfolio_id=kwargs.get("portfolio_id"),
-                                account_id=kwargs.get("account_id"),
+
+                                # Always use the active account
+                                portfolio_id=account.portfolio_id,
+                                account_id=account.id,
                             )
 
 
@@ -1865,8 +2381,405 @@ class ForexTradingDeskDashboard:
                         else:
                             st.error("Close position failed.")
 
+            # ==========================================================
+            # AI Trade Dialog
+            # Phase 2
+            # ==========================================================
+
+            if st.session_state.get("ai_trade_new_order", False):
+
+                @st.dialog("AI Assisted Trade", width="large")
+                def render_ai_trade_dialog():
+
+                    st.subheader("AI Trade Setup")
+
+                    account = portfolio_engine.get_account(
+                        portfolio_id=kwargs.get("portfolio_id"),
+                    )
+
+                    if account is None:
+                        st.error("No Forex account is available.")
+
+                        if st.button(
+                                "Close",
+                                key="ai_trade_close_no_account",
+                                use_container_width=True,
+                        ):
+                            #st.session_state["ai_trade_new_order"] = False
+                            st.rerun()
+
+                        return
+
+                    left, right = st.columns(2)
+
+                    with left:
+
+                        st.text_input(
+                            "Account",
+                            value=account.account_name,
+                            disabled=True,
+                            key="ai_trade_account_name",
+                        )
+
+                        # ----------------------------------------------------------
+                        # Load watchlist pairs
+                        # ----------------------------------------------------------
+
+                        pairs = watchlist_service.get_pairs_for_ui()
+
+                        if not pairs:
+                            watchlist_service.seed_all_pairs()
+
+                            pairs = watchlist_service.get_pairs_for_ui()
+
+                        # ----------------------------------------------------------
+                        # Currency Pair
+                        # ----------------------------------------------------------
+
+                        default_pair = st.session_state.get(
+                            "ai_trade_pair"
+                        )
+
+                        if default_pair not in pairs:
+                            default_pair = pairs[0]
+
+                        pair = st.selectbox(
+
+                            "Currency Pair",
+
+                            options=pairs,
+
+                            index=pairs.index(default_pair),
+
+                            key="ai_trade_pair",
+
+                        )
+
+                        current_pair = st.session_state.get(
+                            "ai_trade_previous_pair"
+                        )
+
+                        if current_pair != pair:
+                            st.session_state["ai_trade_previous_pair"] = pair
+
+                            st.session_state.pop(
+                                "ai_trade_recommendation",
+                                None,
+                            )
+                            st.session_state["ai_trade_previous_pair"] = pair
+
+                        risk_pct = st.select_slider(
+                            "Risk Per Trade",
+                            options=[
+                                0.25,
+                                0.50,
+                                1.00,
+                                2.00,
+                            ],
+                            value=1.00,
+                            format_func=lambda value: f"{value:.2f}%",
+                            key="ai_trade_risk_pct",
+                        )
+                        recommendation = st.session_state.get(
+                            "ai_trade_recommendation"
+                        )
+
+                    with right:
+
+                        st.metric(
+                            "Cash",
+                            f"${account.cash_balance:,.2f}",
+                        )
+
+                        st.metric(
+                            "Equity",
+                            f"${account.equity:,.2f}",
+                        )
+
+                        st.metric(
+                            "Buying Power",
+                            f"${account.margin_available:,.2f}",
+                        )
+
+                        st.metric(
+                            "Leverage",
+                            f"{account.leverage:.1f}x",
+                        )
 
 
+
+                    st.divider()
+
+                    if st.button(
+                            "Analyze Trade",
+                            key="ai_trade_analyze",
+                            use_container_width=True,
+                    ):
+
+                        try:
+
+                            #
+                            # Clear any previous recommendation first
+                            #
+                            st.session_state.pop(
+                                "ai_trade_recommendation",
+                                None,
+                            )
+
+                            recommendation = portfolio_engine.recommend_position_from_signal(
+                                account_id=account.id,
+                                pair=pair,
+                                risk_pct=float(risk_pct),
+                            )
+
+                            if recommendation is None:
+                                st.error(
+                                    "The AI was unable to generate a recommendation."
+                                )
+
+                                return
+
+                            print("=" * 80)
+                            print("AI RECOMMENDATION")
+                            print(type(recommendation))
+                            print(recommendation)
+                            print("=" * 80)
+
+                            st.session_state["ai_trade_recommendation"] = recommendation
+
+                            st.rerun()
+
+                        except Exception as exc:
+
+                            st.exception(exc)
+
+                    recommendation = st.session_state.get(
+                        "ai_trade_recommendation"
+                    )
+
+                    signal = recommendation.get("signal", {}) if recommendation else {}
+                    sizing = recommendation.get("sizing", {}) if recommendation else {}
+                    recommended_side = (
+                        recommendation.get("recommended_side")
+                        if recommendation
+                        else None
+                    )
+                    can_open = (
+                        recommendation.get("can_open_position", False)
+                        if recommendation
+                        else False
+                    )
+
+                    if recommendation:
+
+                        st.divider()
+
+                        st.subheader("AI Recommendation")
+
+                        col1, col2, col3 = st.columns(3)
+
+                        with col1:
+
+                            st.metric(
+                                "Recommendation",
+                                signal.get("recommendation", "-"),
+                            )
+
+                            st.metric(
+                                "Recommended Side",
+                                recommended_side or "-",
+                            )
+
+                            st.metric(
+                                "Confidence",
+                                f"{float(signal.get('confidence', 0) or 0):.1f}%",
+                            )
+
+                        with col2:
+
+                            st.metric(
+                                "Entry",
+                                signal.get("entry_price", "-"),
+                            )
+
+                            st.metric(
+                                "Stop",
+                                signal.get("stop_price", "-"),
+                            )
+
+                            st.metric(
+                                "Risk / Reward",
+                                signal.get("risk_reward", "-"),
+                            )
+
+                        with col3:
+
+                            st.metric(
+                                "Target",
+                                signal.get("target_price", "-"),
+                            )
+
+                            st.metric(
+                                "Units",
+                                f"{float(sizing.get('suggested_units', 0) or 0):,.0f}",
+                            )
+
+                            st.metric(
+                                "Margin Required",
+                                f"${float(sizing.get('margin_required', 0) or 0):,.2f}",
+                            )
+
+                        rationale = signal.get("rationale")
+
+                        if rationale:
+                            st.markdown("#### AI Rationale")
+
+                            st.write(rationale)
+
+                        warnings = signal.get("warnings")
+
+                        if warnings:
+                            st.warning(warnings)
+
+                        if can_open:
+                            st.success("AI trade is eligible for execution.")
+                        else:
+                            st.warning(
+                                "AI does not recommend opening this position."
+                            )
+
+                    left, right = st.columns(2)
+
+                    with left:
+
+                        if recommendation and can_open:
+
+                            if st.button(
+                                    "Execute AI Trade",
+                                    key="execute_ai_trade",
+                                    use_container_width=True,
+                            ):
+
+                                try:
+
+                                    pair = str(signal.get("pair", "")).strip()
+
+                                    side = str(
+                                        recommended_side or ""
+                                    ).upper()
+
+                                    units = float(
+                                        sizing.get("suggested_units") or 0.0
+                                    )
+
+                                    stop_price = float(
+                                        signal.get("stop_price") or 0.0
+                                    )
+
+                                    target_price = float(
+                                        signal.get("target_price") or 0.0
+                                    )
+
+                                    if not pair:
+                                        st.error("AI recommendation did not include a currency pair.")
+                                        return
+
+                                    if not side:
+                                        st.error("AI recommendation did not include a trade side.")
+                                        return
+
+                                    if units is None or float(units) <= 0:
+                                        st.error("AI recommendation did not include a valid position size.")
+                                        return
+
+                                    result = self._submit_forex_order(
+                                        portfolio_engine=portfolio_engine,
+                                        order_engine=order_engine,
+                                        kwargs=kwargs,
+                                        pair=pair,
+                                        side=side,
+                                        units=units,
+                                        stop_price=stop_price,
+                                        take_profit=take_profit,
+                                        limit_price=limit_price,
+                                        order_type=order_type,
+                                    )
+
+                                except Exception as exc:
+                                    st.exception(exc)
+                                    return
+
+                                status = str(result.get("status", "")).upper()
+
+                                if status in ("FILLED", "SUBMITTED", "ACCEPTED"):
+
+                                    st.success(result.get("message", "AI Trade submitted."))
+
+                                    #
+                                    # Clear dialog state
+                                    #
+                                    st.session_state.pop(
+                                        "ai_trade_recommendation",
+                                        None,
+                                    )
+
+                                    st.session_state.pop(
+                                        "ai_trade_previous_pair",
+                                        None,
+                                    )
+
+                                    st.session_state["ai_trade_new_order"] = False
+
+                                    st.rerun()
+
+                                else:
+
+                                    st.error(
+                                        result.get(
+                                            "message",
+                                            "AI Trade failed.",
+                                        )
+                                    )
+
+
+                        else:
+
+                            st.button(
+
+                                "Execute AI Trade",
+
+                                key="execute_ai_trade_disabled",
+
+                                disabled=True,
+
+                                use_container_width=True,
+
+                            )
+
+
+
+                    with right:
+
+                        if st.button(
+                                "Cancel",
+                                key="cancel_ai_trade",
+                                use_container_width=True,
+                        ):
+                            st.session_state.pop(
+                                "ai_trade_recommendation",
+                                None,
+                            )
+
+                            st.session_state.pop(
+                                "ai_trade_previous_pair",
+                                None,
+                            )
+
+                            st.session_state["ai_trade_new_order"] = False
+
+                            st.rerun()
+
+                render_ai_trade_dialog()
 
 
             # ==========================================================
@@ -1881,49 +2794,104 @@ class ForexTradingDeskDashboard:
 
             with left:
 
-                attribution = performance.get(
-
-                    "attribution",
-
-                    {},
-
+                attribution = portfolio.get(
+                    "performance_attribution",
+                    [],
                 )
 
                 if attribution:
 
-                    att_df = pd.DataFrame(
+                    att_df = pd.DataFrame(attribution)
 
+                    c1, c2, c3, c4 = st.columns(4)
+
+                    best = att_df.sort_values(
+                        "realized_pnl",
+                        ascending=False,
+                    ).iloc[0]
+
+                    worst = att_df.sort_values(
+                        "realized_pnl",
+                        ascending=True,
+                    ).iloc[0]
+
+                    c1.metric(
+                        "Pairs Traded",
+                        len(att_df),
+                    )
+
+                    c2.metric(
+                        "Best Pair",
+                        best["pair"],
+                    )
+
+                    c3.metric(
+                        "Worst Pair",
+                        worst["pair"],
+                    )
+
+                    c4.metric(
+                        "Total Realized",
+                        f"${att_df['realized_pnl'].sum():,.2f}",
+                    )
+
+                    fig = px.bar(
+
+                        att_df,
+
+                        x="pair",
+
+                        y="realized_pnl",
+
+                        color="realized_pnl",
+
+                        text="realized_pnl",
+
+                        title="Realized P&L by Currency Pair",
+
+                    )
+
+                    st.plotly_chart(
+
+                        fig,
+
+                        use_container_width=True,
+
+                    )
+
+                    display = att_df[
                         [
-
-                            {
-
-                                "Source": k,
-
-                                "PnL": v,
-
-                            }
-
-                            for k, v in
-
-                            attribution.items()
-
+                            "pair",
+                            "trades",
+                            "wins",
+                            "losses",
+                            "win_rate",
+                            "realized_pnl",
+                            "average_pnl",
                         ]
+                    ].copy()
 
-                    )
+                    display.columns = [
 
-                    st.bar_chart(
+                        "Pair",
 
-                        att_df.set_index(
+                        "Trades",
 
-                            "Source"
+                        "Wins",
 
-                        )
+                        "Losses",
 
-                    )
+                        "Win Rate %",
+
+                        "Realized P&L",
+
+                        "Average P&L",
+
+                    ]
 
                     st.dataframe(
 
-                        att_df,
+                        display,
 
                         use_container_width=True,
 
@@ -1934,9 +2902,7 @@ class ForexTradingDeskDashboard:
                 else:
 
                     st.info(
-
                         "No attribution data."
-
                     )
 
             with center:
@@ -2048,12 +3014,48 @@ class ForexTradingDeskDashboard:
             )
 
             allocation = portfolio.get(
-
                 "allocation",
-
-                {},
-
+                [],
             )
+
+            if allocation:
+                alloc_df = pd.DataFrame(allocation)
+
+                c1, c2, c3, c4 = st.columns(4)
+
+                c1.metric(
+
+                    "Largest Position",
+
+                    alloc_df.iloc[0]["pair"],
+
+                )
+
+                c2.metric(
+
+                    "Largest Weight",
+
+                    f"{alloc_df.iloc[0]['weight']:.2f}%",
+
+                )
+
+                c3.metric(
+
+                    "Open Pairs",
+
+                    len(alloc_df),
+
+                )
+
+                c4.metric(
+
+                    "Total Exposure",
+
+                    f"${alloc_df['market_value'].sum():,.2f}",
+
+                )
+
+
 
             left, right = st.columns(2)
 
@@ -2061,33 +3063,36 @@ class ForexTradingDeskDashboard:
 
                 if allocation:
 
-                    alloc_df = pd.DataFrame(
+                    display = alloc_df[
+                        [
+                            "pair",
+                            "side",
+                            "weight",
+                            "market_value",
+                            "margin",
+                            "unrealized_pnl",
+                        ]
+                    ].copy()
 
-                        {
+                    display.columns = [
 
-                            "Asset":
+                        "Pair",
 
-                                list(
+                        "Side",
 
-                                    allocation.keys()
+                        "Weight %",
 
-                                ),
+                        "Market Value",
 
-                            "Weight":
+                        "Margin",
 
-                                list(
+                        "Unrealized P&L",
 
-                                    allocation.values()
-
-                                ),
-
-                        }
-
-                    )
+                    ]
 
                     st.dataframe(
 
-                        alloc_df,
+                        display,
 
                         use_container_width=True,
 
@@ -2098,9 +3103,7 @@ class ForexTradingDeskDashboard:
                 else:
 
                     st.info(
-
                         "No allocation available."
-
                     )
 
             with right:
@@ -2113,12 +3116,16 @@ class ForexTradingDeskDashboard:
 
                             alloc_df,
 
-                            names="Asset",
+                            names="pair",
 
-                            values="Weight",
+                            values="weight",
 
-                            hole=.45,
+                            hole=0.45,
 
+                        )
+
+                        fig.update_layout(
+                            title="Portfolio Allocation",
                         )
 
                         st.plotly_chart(
@@ -2129,9 +3136,9 @@ class ForexTradingDeskDashboard:
 
                         )
 
-                    except Exception:
+                    except Exception as exc:
 
-                        pass
+                        logger.exception(exc)
 
             # ==========================================================
             # Currency Exposure Detail
@@ -2184,96 +3191,543 @@ class ForexTradingDeskDashboard:
                 st.info("No currency exposure.")
 
             # ==========================================================
-            # Watchlist
+            # Forex Watchlist
             # ==========================================================
 
             st.divider()
+            st.subheader("Forex Watchlist")
 
-            st.subheader(
+            # ----------------------------------------------------------
+            # Load the persisted watchlist
+            # ----------------------------------------------------------
 
-                "Forex Watchlist"
+            watchlist = watchlist_service.load_watchlist()
+            items = list(getattr(watchlist, "items", []) or [])
 
+            # ----------------------------------------------------------
+            # Resolve the active Forex account
+            # ----------------------------------------------------------
+
+            account_data = data.get("account", {})
+
+            account_id = (
+                    account_data.get("id")
+                    or data.get("account_id")
+                    or kwargs.get("account_id")
             )
 
-            watchlist = data.get(
-
-                "watchlist",
-
-                [],
-
-            )
-
-            if watchlist:
-
-                watch_df = pd.DataFrame(
-
-                    watchlist
-
+            if not account_id:
+                account = portfolio_engine.get_account(
+                    portfolio_id=kwargs.get("portfolio_id"),
                 )
 
-                preferred = [
+                if account is not None:
+                    account_id = account.id
 
+            # ----------------------------------------------------------
+            # AI enrichment
+            # ----------------------------------------------------------
+
+            watchlist_ai = ForexWatchlistAI(
+                portfolio_engine=portfolio_engine,
+                order_engine=order_engine,
+            )
+
+            rows = []
+
+            if items and account_id:
+                try:
+                    rows = watchlist_ai.enrich_watchlist(
+                        watchlist=watchlist,
+                        account_id=account_id,
+                    ) or []
+                except Exception as exc:
+                    logger.exception(
+                        "Failed to enrich Forex watchlist: %s",
+                        exc,
+                    )
+                    st.warning(
+                        "The watchlist loaded, but AI enrichment could not be completed."
+                    )
+
+            # ----------------------------------------------------------
+            # Fallback to live market rows
+            # ----------------------------------------------------------
+
+            if not rows:
+                live_rows = data.get("watchlist", [])
+
+                rows = [
+                    {
+                        "pair": row.get("pair"),
+                        "recommendation": "-",
+                        "confidence": 0.0,
+                        "recommended_side": "-",
+                        "entry_price": row.get("mid", 0.0),
+                        "stop_price": 0.0,
+                        "target_price": 0.0,
+                        "risk_reward": 0.0,
+                        "suggested_units": 0.0,
+                        "position_open": False,
+                        "pending_orders": 0,
+                    }
+                    for row in live_rows
+                    if isinstance(row, dict) and row.get("pair")
+                ]
+
+            # ----------------------------------------------------------
+            # Summary
+            # ----------------------------------------------------------
+
+            whatchlist_summary = watchlist_ai.summarize(
+                rows=rows,
+            ) if rows else {
+                "pair_count": 0,
+                "buy_count": 0,
+                "sell_count": 0,
+                "watch_count": 0,
+                "average_confidence": 0.0,
+            }
+
+            # ----------------------------------------------------------
+            # Display
+            # ----------------------------------------------------------
+
+            if rows:
+
+                c1, c2, c3, c4, c5 = st.columns(5)
+
+                c1.metric(
+                    "Pairs",
+                    whatchlist_summary.get("pair_count", len(rows)),
+                )
+
+                c2.metric(
+                    "BUY",
+                    whatchlist_summary.get("buy_count", 0),
+                )
+
+                c3.metric(
+                    "SELL",
+                    whatchlist_summary.get("sell_count", 0),
+                )
+
+                c4.metric(
+                    "WATCH",
+                    whatchlist_summary.get("watch_count", 0),
+                )
+
+                c5.metric(
+                    "Avg Confidence",
+                    f"{float(whatchlist_summary.get('average_confidence', 0) or 0):.1f}%",
+                )
+
+                watch_df = pd.DataFrame(rows)
+
+                expected_columns = [
                     "pair",
-
-                    "bid",
-
-                    "ask",
-
-                    "spread",
-
-                    "change_pct",
-
-                    "volume",
-
-                    "atr",
-
-                    "signal",
-
+                    "recommendation",
+                    "confidence",
+                    "recommended_side",
+                    "entry_price",
+                    "stop_price",
+                    "target_price",
+                    "risk_reward",
+                    "suggested_units",
+                    "position_open",
+                    "pending_orders",
                 ]
 
-                cols = [
+                for column in expected_columns:
+                    if column not in watch_df.columns:
+                        watch_df[column] = None
 
-                    c
+                display = watch_df[expected_columns].copy()
 
-                    for c in preferred
-
-                    if c in watch_df.columns
-
+                display.columns = [
+                    "Pair",
+                    "Signal",
+                    "Confidence",
+                    "Side",
+                    "Entry",
+                    "Stop",
+                    "Target",
+                    "R/R",
+                    "Units",
+                    "Open",
+                    "Pending",
                 ]
 
-                if cols:
-                    watch_df = watch_df[cols]
-
-                st.dataframe(
-
-                    watch_df,
-
-                    use_container_width=True,
-
+                st.data_editor(
+                    display,
                     hide_index=True,
+                    disabled=True,
+                    use_container_width=True,
+                    key="forex_watchlist_grid",
+                )
+
+                st.divider()
+
+                selected_pair = st.selectbox(
+                    "Selected Pair",
+                    options=display["Pair"].dropna().tolist(),
+                    key="watchlist_selected_pair",
+                )
+
+                a1, a2, a3, a4 = st.columns(4)
+
+                with a1:
+                    if st.button(
+                            "AI Trade",
+                            key="watchlist_ai_trade",
+                            use_container_width=True,
+                    ):
+                        st.session_state["ai_trade_selected_pair"] = selected_pair
+                        st.session_state["ai_trade_new_order"] = True
+                        st.rerun()
+
+                with a2:
+                    if st.button(
+                            "Manual Trade",
+                            key="watchlist_manual_trade",
+                            use_container_width=True,
+                    ):
+                        st.session_state["new_order_selected_pair"] = selected_pair
+                        st.session_state["new_order_dialog"] = True
+                        st.rerun()
+
+                with a3:
+                    if st.button(
+                            "Analyze",
+                            key="watchlist_analyze",
+                            use_container_width=True,
+                    ):
+                        try:
+                            analysis = (
+                                portfolio_engine.recommend_position_from_signal(
+                                    account_id=account_id,
+                                    pair=selected_pair,
+                                    risk_pct=1.0,
+                                )
+                            )
+
+                            st.session_state["watchlist_analysis"] = analysis
+                            st.session_state["watchlist_analysis_pair"] = (
+                                selected_pair
+                            )
+
+                            st.rerun()
+
+                        except Exception as exc:
+                            st.exception(exc)
+
+                with a4:
+                    st.button(
+                        "Chart",
+                        disabled=True,
+                        key="watchlist_chart",
+                        use_container_width=True,
+                    )
+
+            else:
+                st.info("Watchlist is empty.")
+            # ==========================================================
+            # Watchlist AI Analysis
+            # ==========================================================
+
+            analysis = st.session_state.get(
+                "watchlist_analysis"
+            )
+
+            if analysis:
+
+                signal = analysis.get(
+                    "signal",
+                    {},
+                )
+
+                sizing = analysis.get(
+                    "sizing",
+                    {},
+                )
+
+                st.divider()
+
+                st.subheader(
+
+                    f"AI Analysis - {st.session_state.get('watchlist_analysis_pair', '')}"
 
                 )
+
+                c1, c2, c3, c4 = st.columns(4)
+
+                c1.metric(
+
+                    "Recommendation",
+
+                    signal.get(
+                        "recommendation",
+                        "-",
+                    ),
+
+                )
+
+                c2.metric(
+
+                    "Confidence",
+
+                    f"{signal.get('confidence', 0):.1f}%",
+
+                )
+
+                c3.metric(
+
+                    "Risk / Reward",
+
+                    signal.get(
+                        "risk_reward",
+                        0,
+                    ),
+
+                )
+
+                c4.metric(
+
+                    "Suggested Side",
+
+                    analysis.get(
+                        "recommended_side",
+                        "-",
+                    ),
+
+                )
+
+                c1, c2, c3 = st.columns(3)
+
+                c1.metric(
+
+                    "Entry",
+
+                    signal.get(
+                        "entry_price",
+                        "-",
+                    ),
+
+                )
+
+                c2.metric(
+
+                    "Stop",
+
+                    signal.get(
+                        "stop_price",
+                        "-",
+                    ),
+
+                )
+
+                c3.metric(
+
+                    "Target",
+
+                    signal.get(
+                        "target_price",
+                        "-",
+                    ),
+
+                )
+
+                c1, c2, c3 = st.columns(3)
+
+                c1.metric(
+
+                    "Suggested Units",
+
+                    f"{sizing.get('suggested_units', 0):,.0f}",
+
+                )
+
+                c2.metric(
+
+                    "Margin Required",
+
+                    f"${sizing.get('margin_required', 0):,.2f}",
+
+                )
+
+                c3.metric(
+
+                    "Can Open",
+
+                    "YES"
+
+                    if analysis.get(
+                        "can_open_position",
+                        False,
+                    )
+
+                    else
+
+                    "NO",
+
+                )
+
+                rationale = signal.get(
+
+                    "rationale",
+
+                    "",
+
+                )
+
+                if rationale:
+                    st.markdown(
+
+                        "#### AI Rationale"
+
+                    )
+
+                    st.write(
+
+                        rationale
+
+                    )
+
+                    st.divider()
+
+                    b1, b2 = st.columns(2)
+
+                    with b1:
+
+                        if st.button(
+
+                                "Execute AI Trade",
+
+                                key="watchlist_execute_ai_trade",
+
+                                use_container_width=True,
+
+                        ):
+                            st.session_state["ai_trade_selected_pair"] = (
+                                st.session_state.get(
+                                    "watchlist_analysis_pair"
+                                )
+                            )
+
+                            st.session_state["ai_trade_new_order"] = True
+
+                            st.rerun()
+
+                    with b2:
+
+                        if st.button(
+
+                                "Clear Analysis",
+
+                                key="clear_watchlist_analysis",
+
+                                use_container_width=True,
+
+                        ):
+                            st.session_state.pop(
+
+                                "watchlist_analysis",
+
+                                None,
+
+                            )
+
+                            st.session_state.pop(
+
+                                "watchlist_analysis_pair",
+
+                                None,
+
+                            )
+
+                            st.rerun()
+
+            # ----------------------------------------------------------
+            # Remove Pair
+            # ----------------------------------------------------------
+
+
+            if items:
+
+                pair_remove = st.selectbox(
+                    "Remove Pair",
+                    options=[
+                        item.pair
+                        for item in items
+                    ],
+                    key="watchlist_remove_pair",
+                )
+
+                if st.button(
+                        "Remove Pair",
+                        key="watchlist_remove_button",
+                        use_container_width=True,
+                ):
+                    watchlist_service.remove_pair(
+                        pair=pair_remove,
+                    )
+
+                    st.rerun()
 
             else:
 
                 st.info(
-
-                    "No watchlist available."
-
+                    "The Forex watchlist is empty. Seed major or cross pairs below."
                 )
+
+            # ----------------------------------------------------------
+            # Seed Buttons
+            # IMPORTANT: outside `if items`
+            # ----------------------------------------------------------
+
+            left, right = st.columns(2)
+
+            with left:
+
+                if st.button(
+                        "Seed Major Pairs",
+                        key="seed_major_pairs",
+                        use_container_width=True,
+                ):
+                    watchlist_service.seed_major_pairs()
+                    st.rerun()
+
+            with right:
+
+                if st.button(
+                        "Seed Cross Pairs",
+                        key="seed_cross_pairs",
+                        use_container_width=True,
+                ):
+                    watchlist_service.seed_cross_pairs()
+                    st.rerun()
 
             # ==========================================================
             # Account Summary
+            # IMPORTANT: outside `if items`
             # ==========================================================
 
             st.divider()
 
+
+
             st.subheader(
-
                 "Account Summary"
-
             )
+            print("=" * 80)
+            print("ACCOUNT SUMMARY DEBUG")
+            print("=" * 80)
 
+            print("account =", account)
+            print("summary =", summary)
+            print("margin =", margin)
+
+            print("=" * 80)
             row = st.columns(6)
 
             row[0].metric(
@@ -2331,7 +3785,7 @@ class ForexTradingDeskDashboard:
             )
 
             st.divider()
-
+            print("CHECKPOINT 4.7 ELIF Orders")
             st.success(
                 "Portfolio Dashboard Loaded Successfully"
             )
@@ -2339,6 +3793,86 @@ class ForexTradingDeskDashboard:
         elif ws == "Orders":
 
             portfolio = data.get("portfolio", {})
+
+            account = portfolio_engine.get_account(
+                portfolio_id=kwargs.get("portfolio_id"),
+            )
+
+            dashboard_service = ForexExecutionDashboardService(
+                db=self.desk.db,
+            )
+
+            with st.spinner(
+                    "Loading institutional execution analytics..."
+            ):
+
+                dashboard = dashboard_service.build_dashboard(
+                    account_id=account.id if account else None,
+                    portfolio_id=kwargs.get("portfolio_id"),
+                )
+
+            #
+            # NEW CODE STARTS HERE
+            #
+
+            cards = dashboard.get(
+                "cards",
+                {},
+            )
+
+            statistics = dashboard.get(
+                "statistics",
+                {},
+            )
+
+            quality = dashboard.get(
+                "quality",
+                {},
+            )
+
+            charts = dashboard.get(
+                "charts",
+                {},
+            )
+
+            distributions = dashboard.get(
+                "distributions",
+                {},
+            )
+
+            broker = dashboard.get(
+                "broker",
+                {},
+            )
+
+            timeline = dashboard.get(
+                "timeline",
+                [],
+            )
+
+            recent_executions = dashboard.get(
+                "recent_executions",
+                [],
+            )
+
+            execution_health = dashboard.get(
+                "execution_health",
+                {},
+            )
+
+            execution_intelligence = dashboard.get(
+                "execution_intelligence",
+                {},
+            )
+
+            executive_ai = dashboard.get(
+                "executive_ai",
+                {},
+            )
+
+            #
+            # END OF NEW CODE
+            #
 
             open_orders = data.get("open_orders", [])
 
@@ -2371,8 +3905,762 @@ class ForexTradingDeskDashboard:
                 "generated_at",
                 "--",
             )
+            print("=" * 80)
+            print("EXECUTION DASHBOARD PACKET")
+            print("cards                  :", cards.keys())
+            print("statistics            :", statistics.keys())
+            print("quality               :", quality.keys())
+            print("broker                :", broker.keys())
+            print("execution_health      :", execution_health)
+            print("execution_intelligence:", execution_intelligence)
+            print("=" * 80)
 
             st.subheader("Institutional Order Management")
+
+            # ==========================================================
+            # Institutional Execution Command Center
+            # ==========================================================
+
+            st.divider()
+
+            st.subheader(
+                "Execution Command Center"
+            )
+
+            health_score = float(
+                execution_health.get(
+                    "overall_score",
+                    0.0,
+                )
+                or 0.0
+            )
+
+            health_grade = str(
+                execution_health.get(
+                    "grade",
+                    "--",
+                )
+                or "--"
+            )
+
+            health_status = str(
+                execution_health.get(
+                    "status",
+                    "--",
+                )
+                or "--"
+            )
+
+            intelligence_summary = execution_intelligence.get(
+                "summary",
+                {},
+            )
+
+            risk_level = str(
+                intelligence_summary.get(
+                    "risk_level",
+                    "--",
+                )
+                or "--"
+            )
+
+            headline = str(
+                intelligence_summary.get(
+                    "headline",
+                    "Execution intelligence unavailable.",
+                )
+                or "Execution intelligence unavailable."
+            )
+
+            active_alerts = execution_intelligence.get(
+                "alerts",
+                [],
+            )
+
+            recommendations = execution_intelligence.get(
+                "recommendations",
+                [],
+            )
+
+            command_cards = st.columns(4)
+
+            command_cards[0].metric(
+                "Execution Health",
+                health_grade,
+            )
+
+            command_cards[1].metric(
+                "Overall Score",
+                f"{health_score:.1f}",
+            )
+
+            command_cards[2].metric(
+                "Status",
+                health_status,
+            )
+
+            command_cards[3].metric(
+                "Execution Risk",
+                risk_level,
+            )
+
+            st.info(
+                headline
+            )
+
+            action_left, action_center_left, action_center_right, action_right = (
+                st.columns(4)
+            )
+
+            with action_left:
+
+                if st.button(
+                        "Refresh Analytics",
+                        key="orders_refresh_execution_analytics",
+                        use_container_width=True,
+                ):
+                    st.rerun()
+
+            with action_center_left:
+
+                st.metric(
+                    "Active Alerts",
+                    len(active_alerts),
+                )
+
+            with action_center_right:
+
+                st.metric(
+                    "Recommendations",
+                    len(recommendations),
+                )
+
+            with action_right:
+
+                broker_name = broker.get(
+                    "name",
+                    broker.get(
+                        "broker",
+                        "Paper",
+                    ),
+                )
+
+                st.metric(
+                    "Broker",
+                    broker_name,
+                )
+
+            if health_score >= 95:
+
+                st.success(
+                    "Execution quality is operating at institutional standards."
+                )
+
+            elif health_score >= 85:
+
+                st.warning(
+                    "Execution quality is acceptable but has optimization opportunities."
+                )
+
+            elif health_score > 0:
+
+                st.error(
+                    "Execution quality requires review."
+                )
+
+            else:
+
+                st.info(
+                    "Execution health is awaiting sufficient execution data."
+                )
+            print("=" * 100)
+            print("EXECUTION COMMAND CENTER")
+            print("=" * 100)
+            print("health_score    :", health_score)
+            print("health_grade    :", health_grade)
+            print("health_status   :", health_status)
+            print("risk_level      :", risk_level)
+            print("headline        :", headline)
+            print("alerts          :", len(active_alerts))
+            print("recommendations :", len(recommendations))
+            print("=" * 100)
+
+            # ==========================================================
+            # Institutional Execution Health Detail
+            # ==========================================================
+
+            st.divider()
+
+            st.subheader(
+                "Execution Health Analysis"
+            )
+
+            left, right = st.columns(
+                [1.2, 1]
+            )
+
+            with left:
+
+                score_df = pd.DataFrame(
+
+                    [
+
+                        {
+                            "Category": "Fill Rate",
+                            "Score": execution_health.get(
+                                "fill_rate_score",
+                                0,
+                            ),
+                        },
+
+                        {
+                            "Category": "Latency",
+                            "Score": execution_health.get(
+                                "latency_score",
+                                0,
+                            ),
+                        },
+
+                        {
+                            "Category": "Slippage",
+                            "Score": execution_health.get(
+                                "slippage_score",
+                                0,
+                            ),
+                        },
+
+                        {
+                            "Category": "Broker",
+                            "Score": execution_health.get(
+                                "broker_score",
+                                0,
+                            ),
+                        },
+
+                    ]
+
+                )
+
+                st.bar_chart(
+                    score_df.set_index(
+                        "Category"
+                    )
+                )
+
+                st.dataframe(
+
+                    score_df,
+
+                    use_container_width=True,
+
+                    hide_index=True,
+
+                )
+
+            with right:
+
+                st.metric(
+
+                    "Overall Score",
+
+                    f"{execution_health.get('overall_score', 0):.1f}",
+
+                )
+
+                st.metric(
+
+                    "Execution Grade",
+
+                    execution_health.get(
+                        "grade",
+                        "--",
+                    ),
+
+                )
+
+                st.metric(
+
+                    "Execution Status",
+
+                    execution_health.get(
+                        "status",
+                        "--",
+                    ),
+
+                )
+
+                st.metric(
+
+                    "Broker Rating",
+
+                    execution_health.get(
+                        "broker_score",
+                        0,
+                    ),
+
+                )
+            print("=" * 100)
+            print("EXECUTION HEALTH DETAIL")
+            print(score_df)
+            print("=" * 100)
+
+            # ==========================================================
+            # Execution Quality Scorecard
+            # ==========================================================
+
+            st.divider()
+
+            st.subheader(
+                "Execution Quality Scorecard"
+            )
+            quality_summary = quality or {}
+            average_latency = float(
+                quality_summary.get(
+                    "average_latency_ms",
+                    quality_summary.get(
+                        "latency_ms",
+                        0,
+                    ),
+                )
+                or 0
+            )
+
+            median_latency = float(
+                quality_summary.get(
+                    "median_latency_ms",
+                    0,
+                )
+                or 0
+            )
+
+            p95_latency = float(
+                quality_summary.get(
+                    "p95_latency_ms",
+                    0,
+                )
+                or 0
+            )
+
+            average_slippage = float(
+                quality_summary.get(
+                    "average_slippage",
+                    quality_summary.get(
+                        "avg_slippage",
+                        0,
+                    ),
+                )
+                or 0
+            )
+
+            average_cost = float(
+                quality_summary.get(
+                    "average_execution_cost",
+                    0,
+                )
+                or 0
+            )
+
+            average_spread = float(
+                quality_summary.get(
+                    "average_spread",
+                    0,
+                )
+                or 0
+            )
+            quality_cards = st.columns(6)
+
+            quality_cards[0].metric(
+                "Average Latency",
+                f"{average_latency:,.1f} ms",
+            )
+
+            quality_cards[1].metric(
+                "Median Latency",
+                f"{median_latency:,.1f} ms",
+            )
+
+            quality_cards[2].metric(
+                "95th Percentile",
+                f"{p95_latency:,.1f} ms",
+            )
+
+            quality_cards[3].metric(
+                "Average Slippage",
+                f"{average_slippage:.6f}",
+            )
+
+            quality_cards[4].metric(
+                "Average Spread",
+                f"{average_spread:.6f}",
+            )
+
+            quality_cards[5].metric(
+                "Execution Cost",
+                f"{average_cost:.6f}",
+            )
+            left, right = st.columns(2)
+            with left:
+
+                quality_df = pd.DataFrame(
+
+                    [
+
+                        {
+                            "Metric": "Latency",
+                            "Value": average_latency,
+                        },
+
+                        {
+                            "Metric": "Slippage",
+                            "Value": average_slippage,
+                        },
+
+                        {
+                            "Metric": "Spread",
+                            "Value": average_spread,
+                        },
+
+                        {
+                            "Metric": "Execution Cost",
+                            "Value": average_cost,
+                        },
+
+                    ]
+
+                )
+
+                st.bar_chart(
+                    quality_df.set_index(
+                        "Metric"
+                    )
+                )
+            with right:
+                st.dataframe(
+
+                    quality_df,
+
+                    use_container_width=True,
+
+                    hide_index=True,
+
+                )
+            print("=" * 100)
+            print("EXECUTION QUALITY SCORECARD")
+            print("Latency :", average_latency)
+            print("Slippage:", average_slippage)
+            print("Spread  :", average_spread)
+            print("Cost    :", average_cost)
+            print("=" * 100)
+
+            # ==========================================================
+            # Execution Trend Analysis
+            # ==========================================================
+
+            st.divider()
+
+            st.subheader(
+                "Execution Trend Analysis"
+            )
+
+            trend_source = dashboard.get(
+                "recent_executions",
+                recent_executions,
+            )
+
+            trend_df = pd.DataFrame(
+                trend_source,
+            )
+
+            if not trend_df.empty:
+                if "executed_at" in trend_df.columns:
+
+                    trend_df["executed_at"] = pd.to_datetime(
+                        trend_df["executed_at"],
+                        errors="coerce",
+                    )
+
+                elif "timestamp" in trend_df.columns:
+
+                    trend_df["executed_at"] = pd.to_datetime(
+                        trend_df["timestamp"],
+                        errors="coerce",
+                    )
+
+                    trend_df = trend_df.sort_values(
+                        "executed_at"
+                    )
+
+                    left, center, right = st.columns(3)
+
+                    with left:
+
+                        st.markdown(
+                            "#### Latency Trend"
+                        )
+
+                        if "latency_ms" in trend_df.columns:
+
+                            st.line_chart(
+
+                                trend_df.set_index(
+                                    "executed_at"
+                                )[
+                                    "latency_ms"
+                                ]
+
+                            )
+
+                        else:
+
+                            st.info(
+                                "Latency history unavailable."
+                            )
+
+                    with center:
+
+                        st.markdown(
+                            "#### Slippage Trend"
+                        )
+
+                        slippage_column = None
+
+                        for candidate in (
+
+                                "slippage",
+
+                                "avg_slippage",
+
+                                "average_slippage",
+
+                        ):
+
+                            if candidate in trend_df.columns:
+                                slippage_column = candidate
+
+                                break
+
+                        if slippage_column:
+
+                            st.line_chart(
+
+                                trend_df.set_index(
+                                    "executed_at"
+                                )[
+                                    slippage_column
+                                ]
+
+                            )
+
+                        else:
+
+                            st.info(
+                                "Slippage history unavailable."
+                            )
+
+                    with right:
+
+                        st.markdown(
+                            "#### Execution Price"
+
+                        )
+
+                        price_column = None
+
+                        for candidate in (
+
+                                "execution_price",
+
+                                "avg_fill_price",
+
+                                "price",
+
+                        ):
+
+                            if candidate in trend_df.columns:
+                                price_column = candidate
+
+                                break
+
+                        if price_column:
+
+                            st.line_chart(
+
+                                trend_df.set_index(
+                                    "executed_at"
+                                )[
+                                    price_column
+                                ]
+
+                            )
+
+                        else:
+
+                            st.info(
+                                "Execution price history unavailable."
+                            )
+                        st.markdown(
+                            "#### Trend Summary"
+                        )
+
+                        summary_rows = [
+
+                            {
+
+                                "Metric": "Executions",
+
+                                "Value": len(trend_df),
+
+                            },
+
+                            {
+
+                                "Metric": "First Execution",
+
+                                "Value": trend_df["executed_at"].min(),
+
+                            },
+
+                            {
+
+                                "Metric": "Latest Execution",
+
+                                "Value": trend_df["executed_at"].max(),
+
+                            },
+
+                        ]
+
+                        st.dataframe(
+
+                            pd.DataFrame(summary_rows),
+
+                            use_container_width=True,
+
+                            hide_index=True,
+
+                        )
+                print("=" * 100)
+                print("EXECUTION TREND ANALYSIS")
+                print("rows =", len(trend_df))
+                print("columns =", list(trend_df.columns))
+                print("=" * 100)
+            st.divider()
+
+            st.subheader(
+                "Execution Trend Intelligence"
+            )
+
+            trend_intelligence = {
+
+                "latency": "Stable",
+
+                "slippage": "Stable",
+
+                "fill_rate": "Stable",
+
+                "execution_quality": "Stable",
+
+                "overall": "Stable",
+
+            }
+            if (
+                    not trend_df.empty
+                    and "latency_ms" in trend_df.columns
+                    and len(trend_df) >= 2
+            ):
+
+                latency_delta = (
+
+                        trend_df["latency_ms"].iloc[-1]
+
+                        -
+
+                        trend_df["latency_ms"].iloc[0]
+
+                )
+
+                if latency_delta < -10:
+
+                    trend_intelligence["latency"] = "Improving"
+
+                elif latency_delta > 10:
+
+                    trend_intelligence["latency"] = "Deteriorating"
+                slippage_column = None
+
+                for candidate in (
+
+                        "slippage",
+
+                        "avg_slippage",
+
+                        "average_slippage",
+
+                ):
+
+                    if candidate in trend_df.columns:
+                        slippage_column = candidate
+
+                        break
+
+                if (
+                        slippage_column
+                        and len(trend_df) >= 2
+                ):
+
+                    delta = (
+
+                            trend_df[slippage_column].iloc[-1]
+
+                            -
+
+                            trend_df[slippage_column].iloc[0]
+
+                    )
+
+                    if delta < -0.0001:
+
+                        trend_intelligence["slippage"] = "Improving"
+
+                    elif delta > 0.0001:
+
+                        trend_intelligence["slippage"] = "Deteriorating"
+                    score = execution_health.get(
+                        "overall_score",
+                        0,
+                    )
+
+                    if score >= 95:
+
+                        trend_intelligence["execution_quality"] = "Excellent"
+
+                    elif score >= 85:
+
+                        trend_intelligence["execution_quality"] = "Good"
+
+                    else:
+
+                        trend_intelligence["execution_quality"] = "Needs Review"
+
+                    states = list(
+                        trend_intelligence.values()
+                    )
+
+                    if "Deteriorating" in states:
+
+                        trend_intelligence["overall"] = "Deteriorating"
+
+                    elif "Improving" in states:
+
+                        trend_intelligence["overall"] = "Improving"
+
+                    else:
+
+                        trend_intelligence["overall"] = "Stable"
+                print("=" * 100)
+                print("TREND INTELLIGENCE")
+                print(trend_intelligence)
+                print("=" * 100)
 
             # ==========================================================
             # Executive Order Metrics
@@ -2382,46 +4670,540 @@ class ForexTradingDeskDashboard:
 
             row[0].metric(
                 "Open Orders",
-                len(open_orders),
+                cards.get(
+                    "open_orders",
+                    len(open_orders),
+                ),
             )
 
             row[1].metric(
                 "Filled",
-                len(filled_orders),
+                cards.get(
+                    "filled_orders",
+                    len(filled_orders),
+                ),
             )
 
             row[2].metric(
                 "Executions",
-                len(execution_history),
+                cards.get(
+                    "executions",
+                    len(execution_history),
+                ),
             )
 
             row[3].metric(
                 "Pending",
-                len(pending_orders),
+                cards.get(
+                    "pending_orders",
+                    len(pending_orders),
+                ),
             )
 
             row[4].metric(
                 "Fill Rate",
-                f"{execution.get('fill_rate', 0):.1f}%"
+                f"{statistics.get(
+                    'fill_rate',
+                    execution.get(
+                        'fill_rate',
+                        0,
+                    ),
+                ):.1f}%"
             )
 
             row[5].metric(
                 "Latency",
-                f"{execution.get('latency_ms', 0):,.0f} ms"
+                f"{statistics.get(
+                    'latency_ms',
+                    execution.get(
+                        'latency_ms',
+                        0,
+                    ),
+                ):,.0f} ms",
             )
 
             row[6].metric(
                 "Slippage",
-                f"{execution.get('avg_slippage', 0):.4f}"
+                f"{quality.get(
+                    'avg_slippage',
+                    execution.get(
+                        'avg_slippage',
+                        0,
+                    ),
+                ):.4f}",
             )
 
             row[7].metric(
                 "Broker",
-                broker_status.get(
+                broker.get(
                     "name",
-                    "Paper",
+                    broker_status.get(
+                        "name",
+                        "Paper",
+                    ),
                 ),
             )
+
+            print("=" * 100)
+            print("ORDERS DASHBOARD SERVICE")
+            print("=" * 100)
+            print("cards =", cards)
+            print("statistics =", statistics)
+            print("quality =", quality)
+            print("broker =", broker)
+            print("=" * 100)
+
+            # ==========================================================
+            # Institutional Execution Health
+            # ==========================================================
+
+            st.divider()
+
+            st.subheader(
+                "Institutional Execution Health"
+            )
+
+            left, right = st.columns(2)
+
+            left.metric(
+                "Overall Score",
+                f"{execution_health.get('overall_score', 0):.0f}",
+            )
+
+            left.metric(
+                "Grade",
+                execution_health.get(
+                    "grade",
+                    "--",
+                ),
+            )
+
+            left.metric(
+                "Status",
+                execution_health.get(
+                    "status",
+                    "--",
+                ),
+            )
+
+            right.metric(
+                "Fill Rate Score",
+                execution_health.get(
+                    "fill_rate_score",
+                    0,
+                ),
+            )
+
+            right.metric(
+                "Latency Score",
+                execution_health.get(
+                    "latency_score",
+                    0,
+                ),
+            )
+
+            right.metric(
+                "Slippage Score",
+                execution_health.get(
+                    "slippage_score",
+                    0,
+                ),
+            )
+
+            right.metric(
+                "Broker Score",
+                execution_health.get(
+                    "broker_score",
+                    0,
+                ),
+            )
+
+            # ==========================================================
+            # Institutional Execution Intelligence
+            # ==========================================================
+
+            st.divider()
+
+            st.subheader(
+                "Institutional Execution Intelligence"
+            )
+
+            summary = execution_intelligence.get(
+                "summary",
+                {},
+            )
+
+            headline = summary.get(
+                "headline",
+                "Execution intelligence unavailable.",
+            )
+
+            st.info(headline)
+
+            left, center, right = st.columns(3)
+
+            left.metric(
+                "Execution Score",
+                f"{summary.get('overall_score', 0):.1f}",
+            )
+
+            center.metric(
+                "Execution Grade",
+                summary.get(
+                    "grade",
+                    "--",
+                ),
+            )
+
+            right.metric(
+                "Risk Level",
+                summary.get(
+                    "risk_level",
+                    "--",
+                ),
+            )
+
+            st.markdown("#### Recommendations")
+
+            recommendations = execution_intelligence.get(
+                "recommendations",
+                [],
+            )
+
+            if recommendations:
+
+                for recommendation in recommendations:
+                    st.success(
+                        recommendation
+                    )
+
+            else:
+
+                st.info(
+                    "No recommendations."
+                )
+
+            st.markdown("#### Alerts")
+
+            alerts = execution_intelligence.get(
+                "alerts",
+                [],
+            )
+
+            if alerts:
+
+                for alert in alerts:
+
+                    severity = str(
+                        alert.get(
+                            "severity",
+                            "",
+                        )
+                    ).upper()
+
+                    message = alert.get(
+                        "message",
+                        "",
+                    )
+
+                    if severity == "CRITICAL":
+
+                        st.error(message)
+
+                    elif severity == "WARNING":
+
+                        st.warning(message)
+
+                    else:
+
+                        st.info(message)
+
+            else:
+
+                st.success(
+                    "No execution alerts."
+                )
+
+            st.markdown("#### Broker Analysis")
+
+            broker_analysis = execution_intelligence.get(
+                "broker_analysis",
+                {},
+            )
+
+            broker_df = pd.DataFrame(
+
+                [
+
+                    {
+
+                        "Metric": "Broker",
+
+                        "Value": broker_analysis.get(
+                            "broker_name",
+                            "--",
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Fill Rate",
+
+                        "Value": broker_analysis.get(
+                            "fill_rate",
+                            0,
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Reject Rate",
+
+                        "Value": broker_analysis.get(
+                            "reject_rate",
+                            0,
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Average Latency",
+
+                        "Value": broker_analysis.get(
+                            "average_latency_ms",
+                            0,
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Average Slippage",
+
+                        "Value": broker_analysis.get(
+                            "average_slippage",
+                            0,
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Execution Grade",
+
+                        "Value": broker_analysis.get(
+                            "execution_grade",
+                            "--",
+                        ),
+
+                    },
+
+                ]
+
+            )
+
+            st.dataframe(
+
+                broker_df,
+
+                use_container_width=True,
+
+                hide_index=True,
+
+            )
+
+            st.markdown("#### Execution Cost Analysis")
+
+            cost_analysis = execution_intelligence.get(
+                "cost_analysis",
+                {},
+            )
+
+            cost_df = pd.DataFrame(
+
+                [
+
+                    {
+
+                        "Metric": "Total Commission",
+
+                        "Value": cost_analysis.get(
+                            "total_commission",
+                            0,
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Average Commission",
+
+                        "Value": cost_analysis.get(
+                            "average_commission",
+                            0,
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Execution Cost",
+
+                        "Value": cost_analysis.get(
+                            "total_execution_cost",
+                            0,
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Average Cost",
+
+                        "Value": cost_analysis.get(
+                            "average_execution_cost",
+                            0,
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Spread",
+
+                        "Value": cost_analysis.get(
+                            "average_spread",
+                            0,
+                        ),
+
+                    },
+
+                ]
+
+            )
+
+            st.dataframe(
+
+                cost_df,
+
+                use_container_width=True,
+
+                hide_index=True,
+
+            )
+
+            st.markdown("#### Execution Risk Analysis")
+
+            risk_analysis = execution_intelligence.get(
+                "risk_analysis",
+                {},
+            )
+
+            risk_df = pd.DataFrame(
+
+                [
+
+                    {
+
+                        "Metric": "Risk Level",
+
+                        "Value": risk_analysis.get(
+                            "risk_level",
+                            "--",
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Latency",
+
+                        "Value": risk_analysis.get(
+                            "average_latency_ms",
+                            0,
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Reject Rate",
+
+                        "Value": risk_analysis.get(
+                            "reject_rate",
+                            0,
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Pending Orders",
+
+                        "Value": risk_analysis.get(
+                            "pending_order_count",
+                            0,
+                        ),
+
+                    },
+
+                    {
+
+                        "Metric": "Open Orders",
+
+                        "Value": risk_analysis.get(
+                            "open_order_count",
+                            0,
+                        ),
+
+                    },
+
+                ]
+
+            )
+
+            st.dataframe(
+
+                risk_df,
+
+                use_container_width=True,
+
+                hide_index=True,
+
+            )
+
+            print("=" * 100)
+            print("EXECUTION INTELLIGENCE UI")
+            print(
+                execution_intelligence.get(
+                    "summary",
+                    {},
+                )
+            )
+            print(
+                "Recommendations:",
+                len(
+                    execution_intelligence.get(
+                        "recommendations",
+                        [],
+                    )
+                ),
+            )
+            print(
+                "Alerts:",
+                len(
+                    execution_intelligence.get(
+                        "alerts",
+                        [],
+                    )
+                ),
+            )
+            print("=" * 100)
+
+
 
             st.divider()
 
@@ -2439,33 +5221,59 @@ class ForexTradingDeskDashboard:
 
                 )
 
-                status = {
-
-                    "Open": len(open_orders),
-
-                    "Pending": len(pending_orders),
-
-                    "Filled": len(filled_orders),
-
-                    "Cancelled": len(cancelled_orders),
-
-                }
-
-                status_df = pd.DataFrame(
-
-                    {
-
-                        "Status":
-
-                            list(status.keys()),
-
-                        "Orders":
-
-                            list(status.values()),
-
-                    }
-
+                status_rows = distributions.get(
+                    "status_distribution",
+                    [],
                 )
+
+                if status_rows:
+
+                    status_df = pd.DataFrame(
+                        status_rows,
+                    )
+
+                else:
+
+                    status_df = pd.DataFrame(
+                        [
+
+                            {
+
+                                "status": "Open",
+
+                                "orders": len(open_orders),
+
+                            },
+
+                            {
+
+                                "status": "Pending",
+
+                                "orders": len(pending_orders),
+
+                            },
+
+                            {
+
+                                "status": "Filled",
+
+                                "orders": len(filled_orders),
+
+                            },
+
+                            {
+
+                                "status": "Cancelled",
+
+                                "orders": len(cancelled_orders),
+
+                            },
+
+                        ]
+
+                    )
+
+
 
                 st.bar_chart(
 
@@ -2495,35 +5303,141 @@ class ForexTradingDeskDashboard:
 
                 )
 
-                metrics_df = pd.DataFrame(
+                rows = [
 
-                    [
+                    {
+
+                        "Metric": key.replace(
+                            "_",
+                            " ",
+                        ).title(),
+
+                        "Value": value,
+
+                    }
+
+                    for key, value in statistics.items()
+
+                    if not isinstance(
+                        value,
+                        (
+                            dict,
+                            list,
+                        ),
+                    )
+
+                ]
+
+                metrics_df = pd.DataFrame(rows)
+
+                st.divider()
+
+                st.subheader(
+                    "Execution Quality"
+                )
+
+                quality_rows = [
+
+                    {
+
+                        "Metric": key.replace(
+                            "_",
+                            " ",
+                        ).title(),
+
+                        "Value": value,
+
+                    }
+
+                    for key, value in quality.items()
+
+                    if not isinstance(
+                        value,
+                        (
+                            dict,
+                            list,
+                        ),
+                    )
+
+                ]
+
+                if quality_rows:
+                    st.dataframe(
+
+                        pd.DataFrame(
+                            quality_rows,
+                        ),
+
+                        use_container_width=True,
+
+                        hide_index=True,
+
+                    )
+
+                    st.divider()
+
+                    st.subheader(
+                        "Broker Analytics"
+                    )
+
+                    broker_rows = [
 
                         {
 
-                            "Metric": k,
+                            "Metric": key.replace(
+                                "_",
+                                " ",
+                            ).title(),
 
-                            "Value": v,
+                            "Value": value,
 
                         }
 
-                        for k, v in
+                        for key, value in broker.items()
 
-                        execution.items()
+                        if not isinstance(
+                            value,
+                            (
+                                dict,
+                                list,
+                            ),
+                        )
 
                     ]
 
-                )
+                    if broker_rows:
+                        st.dataframe(
 
-                st.dataframe(
+                            pd.DataFrame(
+                                broker_rows,
+                            ),
 
-                    metrics_df,
+                            use_container_width=True,
 
-                    use_container_width=True,
+                            hide_index=True,
 
-                    hide_index=True,
+                        )
 
-                )
+                    print("=" * 100)
+                    print("EXECUTION ANALYTICS PACKET")
+                    print("=" * 100)
+
+                    print("statistics")
+                    print(statistics)
+
+                    print("quality")
+                    print(quality)
+
+                    print("charts")
+                    print(charts)
+
+                    print("distributions")
+                    print(distributions)
+
+                    print("broker")
+                    print(broker)
+
+                    print("=" * 100)
 
             st.divider()
 
@@ -2532,68 +5446,50 @@ class ForexTradingDeskDashboard:
             # ==========================================================
 
             st.subheader(
-
                 "Open Orders"
-
             )
 
-            if open_orders:
+            dashboard_open_orders = dashboard.get(
+                "open_orders",
+                open_orders,
+            )
+
+            if dashboard_open_orders:
 
                 df = pd.DataFrame(
-
-                    open_orders
-
+                    dashboard_open_orders,
                 )
 
                 preferred = [
-
                     "pair",
-
                     "side",
-
                     "order_type",
-
                     "quantity",
-
                     "price",
-
                     "status",
-
                     "submitted_at",
-
                     "strategy",
-
                 ]
 
                 cols = [
-
                     c
-
                     for c in preferred
-
                     if c in df.columns
-
                 ]
 
                 if cols:
                     df = df[cols]
 
                 st.dataframe(
-
                     df,
-
                     use_container_width=True,
-
                     hide_index=True,
-
                 )
 
             else:
 
                 st.info(
-
                     "No open orders."
-
                 )
 
             st.divider()
@@ -2603,34 +5499,53 @@ class ForexTradingDeskDashboard:
             # ==========================================================
 
             st.subheader(
-
                 "Filled Orders"
-
             )
 
-            if filled_orders:
+            dashboard_filled_orders = dashboard.get(
+                "filled_orders",
+                filled_orders,
+            )
 
-                df = pd.DataFrame(
+            if dashboard_filled_orders:
 
-                    filled_orders
-
+                filled_df = pd.DataFrame(
+                    dashboard_filled_orders,
                 )
 
+                if "filled_at" in filled_df.columns:
+                    filled_df = filled_df.sort_values(
+                        "filled_at",
+                        ascending=False,
+                    )
+
                 preferred = [
+
+                    "filled_at",
 
                     "pair",
 
                     "side",
 
+                    "order_type",
+
                     "filled_qty",
 
                     "avg_fill_price",
+
+                    "execution_price",
 
                     "commission",
 
                     "slippage",
 
-                    "filled_at",
+                    "latency_ms",
+
+                    "broker",
+
+                    "strategy",
+
+                    "status",
 
                 ]
 
@@ -2640,16 +5555,16 @@ class ForexTradingDeskDashboard:
 
                     for c in preferred
 
-                    if c in df.columns
+                    if c in filled_df.columns
 
                 ]
 
                 if cols:
-                    df = df[cols]
+                    filled_df = filled_df[cols]
 
                 st.dataframe(
 
-                    df,
+                    filled_df,
 
                     use_container_width=True,
 
@@ -2664,6 +5579,53 @@ class ForexTradingDeskDashboard:
                     "No filled orders."
 
                 )
+
+            print("=" * 80)
+            print("FILLED ORDERS VALIDATION")
+            print(
+                "dashboard_filled_orders =",
+                len(dashboard_filled_orders),
+            )
+            print("=" * 80)
+
+            st.divider()
+
+
+
+            st.subheader("Closed Positions History")
+
+            closed_positions = portfolio.get("closed_positions", [])
+
+            if closed_positions:
+
+                df = pd.DataFrame(closed_positions)
+
+                preferred = [
+                    "pair",
+                    "side",
+                    "units",
+                    "avg_entry_price",
+                    "exit_price",
+                    "realized_pnl",
+                    "opened_at",
+                    "closed_at",
+                    "status",
+                ]
+
+                cols = [c for c in preferred if c in df.columns]
+
+                if cols:
+                    df = df[cols]
+
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=350,
+                )
+
+            else:
+                st.info("No closed positions.")
 
             st.divider()
 
@@ -2680,14 +5642,21 @@ class ForexTradingDeskDashboard:
                     "Pending Orders"
 
                 )
+                dashboard_pending_orders = dashboard.get(
 
-                if pending_orders:
+                    "pending_orders",
+
+                    pending_orders,
+
+                )
+
+                if dashboard_pending_orders:
 
                     st.dataframe(
 
-                        pd.DataFrame(
+                        df=pd.DataFrame(
 
-                            pending_orders
+                            dashboard_pending_orders,
 
                         ),
 
@@ -2696,6 +5665,11 @@ class ForexTradingDeskDashboard:
                         hide_index=True,
 
                     )
+
+                    print("=" * 80)
+                    print("PENDING ORDERS VALIDATION")
+                    print("dashboard_pending_orders =", len(dashboard_pending_orders))
+                    print("=" * 80)
 
                 else:
 
@@ -2712,14 +5686,21 @@ class ForexTradingDeskDashboard:
                     "Cancelled Orders"
 
                 )
+                dashboard_cancelled_orders = dashboard.get(
 
-                if cancelled_orders:
+                    "cancelled_orders",
+
+                    cancelled_orders,
+
+                )
+
+                if dashboard_cancelled_orders:
 
                     st.dataframe(
 
-                        pd.DataFrame(
+                        df=pd.DataFrame(
 
-                            cancelled_orders
+                            dashboard_cancelled_orders,
 
                         ),
 
@@ -2736,6 +5717,14 @@ class ForexTradingDeskDashboard:
                         "No cancelled orders."
 
                     )
+
+                print("=" * 80)
+                print("CANCELLED ORDERS VALIDATION")
+                print(
+                    "dashboard_cancelled_orders =",
+                    len(dashboard_cancelled_orders),
+                )
+                print("=" * 80)
 
             st.divider()
 
@@ -3157,6 +6146,7 @@ class ForexTradingDeskDashboard:
 
                 )
 
+
             # ==========================================================
             # Execution Performance
             # ==========================================================
@@ -3254,32 +6244,48 @@ class ForexTradingDeskDashboard:
                 "Recent Executions"
 
             )
+            dashboard_recent_executions = dashboard.get(
+                "recent_executions",
+                execution_history,
+            )
 
-            executions = execution_history
+            #executions = execution_history
 
-            if executions:
+            if dashboard_recent_executions:
 
                 exec_df = pd.DataFrame(
-
-                    executions
-
+                    dashboard_recent_executions,
                 )
 
                 preferred = [
 
-                    "time",
+                    "executed_at",
 
                     "pair",
 
                     "side",
 
-                    "quantity",
+                    "execution_type",
 
-                    "price",
+                    "order_type",
+
+                    "requested_units",
+
+                    "filled_units",
+
+                    "execution_price",
+
+                    "avg_fill_price",
+
+                    "commission",
 
                     "slippage",
 
-                    "latency",
+                    "latency_ms",
+
+                    "status",
+
+                    "broker",
 
                     "strategy",
 
@@ -3315,6 +6321,14 @@ class ForexTradingDeskDashboard:
                     "No executions available."
 
                 )
+
+            print("=" * 80)
+            print("RECENT EXECUTIONS VALIDATION")
+            print(
+                "dashboard_recent_executions =",
+                len(dashboard_recent_executions),
+            )
+            print("=" * 80)
             st.divider()
 
             st.subheader(
@@ -3356,27 +6370,69 @@ class ForexTradingDeskDashboard:
                 "Execution Timeline"
 
             )
+            dashboard_timeline = dashboard.get(
+                "timeline",
+                execution_history,
+            )
 
-            timeline = execution_history
 
-            if timeline:
+            if dashboard_timeline:
 
                 timeline_df = pd.DataFrame(
-
-                    timeline
-
+                    dashboard_timeline,
                 )
 
-                if "latency" in timeline_df.columns:
-                    st.line_chart(
+                if "timestamp" in timeline_df.columns:
 
-                        timeline_df[
-
-                            "latency"
-
-                        ]
-
+                    timeline_df = timeline_df.sort_values(
+                        "timestamp",
+                        ascending=False,
                     )
+
+                elif "executed_at" in timeline_df.columns:
+
+                    timeline_df = timeline_df.sort_values(
+                        "executed_at",
+                        ascending=False,
+                    )
+
+                preferred = [
+
+                    "timestamp",
+
+                    "executed_at",
+
+                    "event_type",
+
+                    "pair",
+
+                    "side",
+
+                    "units",
+
+                    "price",
+
+                    "status",
+
+                    "broker",
+
+                    "strategy",
+
+                    "message",
+
+                ]
+                cols = [
+
+                    c
+
+                    for c in preferred
+
+                    if c in timeline_df.columns
+
+                ]
+
+                if cols:
+                    timeline_df = timeline_df[cols]
 
                 st.dataframe(
 
@@ -3388,6 +6444,7 @@ class ForexTradingDeskDashboard:
 
                 )
 
+
             else:
 
                 st.info(
@@ -3396,9 +6453,17 @@ class ForexTradingDeskDashboard:
 
                 )
 
-            st.divider()
+            print("=" * 80)
+            print("TIMELINE VALIDATION")
+            print(
+                "dashboard_timeline =",
+                len(dashboard_timeline),
+            )
+            print("=" * 80)
 
             st.divider()
+
+
 
             st.subheader(
                 "Broker Status"
@@ -3653,41 +6718,23 @@ class ForexTradingDeskDashboard:
             cards = st.columns(8)
 
             cards[0].metric(
-
                 "Risk Score",
-
-                risk.get(
-
-                    "risk_score",
-
-                    0,
-
-                ),
-
+                f"{risk.get('risk_score', 0):.2f}",
             )
 
             cards[1].metric(
-
                 "Daily VaR",
-
-                f"${risk.get('var95', 0):,.2f}",
-
+                f"${risk.get('daily_var', risk.get('var_95', 0)):,.2f}",
             )
 
             cards[2].metric(
-
                 "99% VaR",
-
-                f"${risk.get('var99', 0):,.2f}",
-
+                f"${risk.get('var_99', risk.get('var99', 0)):,.2f}",
             )
 
             cards[3].metric(
-
                 "Expected Shortfall",
-
-                f"${risk.get('expected_shortfall', 0):,.2f}",
-
+                f"${risk.get('expected_shortfall_value', risk.get('expected_shortfall_95', 0)):,.2f}",
             )
 
             cards[4].metric(
@@ -4379,7 +7426,11 @@ class ForexTradingDeskDashboard:
             # ==========================================================
             # Executive Performance Cards
             # ==========================================================
-
+            print("=" * 80)
+            print("TRADING DESK RISK OBJECT")
+            print(risk)
+            print("=" * 80)
+            st.write(risk)
             cards = st.columns(8)
 
             cards[0].metric(
@@ -4630,6 +7681,71 @@ class ForexTradingDeskDashboard:
 
             stats_left, stats_right = st.columns(2)
 
+            # ----------------------------------------------------------
+            # Normalize portfolio objects
+            # ----------------------------------------------------------
+
+            portfolio_summary = portfolio.get(
+                "summary",
+                {},
+            )
+
+            risk_summary = portfolio.get(
+                "risk",
+                risk,
+            )
+
+            margin_summary = portfolio.get(
+                "margin",
+                margin,
+            )
+
+            performance_summary = portfolio.get(
+                "performance",
+                performance,
+            )
+
+            directional = risk_summary.get(
+                "directional",
+                {},
+            )
+
+            portfolio_summary["gross_exposure"] = risk_summary.get(
+                "gross_exposure",
+                portfolio_summary.get(
+                    "gross_exposure",
+                    0,
+                ),
+            )
+
+            portfolio_summary["net_exposure"] = risk_summary.get(
+                "net_exposure",
+                portfolio_summary.get(
+                    "net_exposure",
+                    0,
+                ),
+            )
+
+            portfolio_summary["long_exposure"] = directional.get(
+                "long",
+                portfolio_summary.get(
+                    "long_exposure",
+                    0,
+                ),
+            )
+
+            portfolio_summary["short_exposure"] = directional.get(
+                "short",
+                portfolio_summary.get(
+                    "short_exposure",
+                    0,
+                ),
+            )
+
+            # ==========================================================
+            # Portfolio Statistics
+            # ==========================================================
+
             with stats_left:
 
                 st.subheader(
@@ -4640,48 +7756,141 @@ class ForexTradingDeskDashboard:
 
                     {
                         "Metric": "Open Positions",
-                        "Value": summary.get("open_positions", 0),
+                        "Value": portfolio_summary.get(
+                            "open_positions",
+                            0,
+                        ),
                     },
+
                     {
                         "Metric": "Long Positions",
-                        "Value": summary.get("long_count", 0),
+                        "Value": portfolio_summary.get(
+                            "long_count",
+                            0,
+                        ),
                     },
+
                     {
                         "Metric": "Short Positions",
-                        "Value": summary.get("short_count", 0),
+                        "Value": portfolio_summary.get(
+                            "short_count",
+                            0,
+                        ),
                     },
+
                     {
                         "Metric": "Gross Exposure",
-                        "Value": summary.get("gross_exposure", 0),
+                        "Value": portfolio_summary.get(
+                            "gross_exposure",
+                            0,
+                        ),
                     },
+
+                    {
+                        "Metric": "Net Exposure",
+                        "Value": portfolio_summary.get(
+                            "net_exposure",
+                            0,
+                        ),
+                    },
+
+                    {
+                        "Metric": "Long Exposure",
+                        "Value": portfolio_summary.get(
+                            "long_exposure",
+                            0,
+                        ),
+                    },
+
+                    {
+                        "Metric": "Short Exposure",
+                        "Value": portfolio_summary.get(
+                            "short_exposure",
+                            0,
+                        ),
+                    },
+
+                    {
+                        "Metric": "Diversification",
+                        "Value": portfolio_summary.get(
+                            "diversification_ratio",
+                            0,
+                        ),
+                    },
+
+                    {
+                        "Metric": "Effective Positions",
+                        "Value": portfolio_summary.get(
+                            "effective_positions",
+                            portfolio_summary.get(
+                                "open_positions",
+                                0,
+                            ),
+                        ),
+                    },
+
                     {
                         "Metric": "Leverage",
-                        "Value": summary.get("leverage", 0),
+                        "Value": margin_summary.get(
+                            "leverage",
+                            0,
+                        ),
                     },
+
                     {
                         "Metric": "Margin Used",
-                        "Value": summary.get("margin_used", 0),
+                        "Value": margin_summary.get(
+                            "margin_used",
+                            0,
+                        ),
                     },
+
                     {
                         "Metric": "Buying Power",
-                        "Value": summary.get("buying_power", 0),
+                        "Value": margin_summary.get(
+                            "buying_power",
+                            0,
+                        ),
                     },
+
+                    {
+                        "Metric": "Margin Available",
+                        "Value": margin_summary.get(
+                            "margin_available",
+                            0,
+                        ),
+                    },
+
                     {
                         "Metric": "Cash Balance",
-                        "Value": summary.get("cash_balance", 0),
+                        "Value": portfolio_summary.get(
+                            "cash_balance",
+                            portfolio_summary.get(
+                                "cash",
+                                0,
+                            ),
+                        ),
                     },
 
                 ]
 
+                portfolio_stats_df = pd.DataFrame(
+                    portfolio_stats,
+                )
+
                 st.dataframe(
 
-                    pd.DataFrame(portfolio_stats),
+                    portfolio_stats_df,
 
                     use_container_width=True,
 
                     hide_index=True,
 
                 )
+
+            # ==========================================================
+            # Risk & Performance
+            # ==========================================================
 
             with stats_right:
 
@@ -4693,42 +7902,94 @@ class ForexTradingDeskDashboard:
 
                     {
                         "Metric": "Risk Score",
-                        "Value": risk.get("risk_score", 0),
+                        "Value": risk_summary.get(
+                            "risk_score",
+                            0,
+                        ),
                     },
+
                     {
-                        "Metric": "VaR (95%)",
-                        "Value": risk.get("var95", 0),
+                        "Metric": "Daily VaR (95%)",
+                        "Value": risk_summary.get(
+                            "daily_var",
+                            risk_summary.get(
+                                "var_95",
+                                0,
+                            ),
+                        ),
                     },
+
                     {
                         "Metric": "Expected Shortfall",
-                        "Value": risk.get("expected_shortfall", 0),
+                        "Value": risk_summary.get(
+                            "expected_shortfall_value",
+                            risk_summary.get(
+                                "expected_shortfall",
+                                risk_summary.get(
+                                    "expected_shortfall_95",
+                                    0,
+                                ),
+                            ),
+                        ),
                     },
+
                     {
-                        "Metric": "Max Drawdown",
-                        "Value": risk.get("drawdown", 0),
+                        "Metric": "Maximum Drawdown",
+                        "Value": risk_summary.get(
+                            "drawdown",
+                            0,
+                        ),
                     },
+
                     {
                         "Metric": "Sharpe Ratio",
-                        "Value": performance.get("sharpe", 0),
+                        "Value": performance_summary.get(
+                            "sharpe",
+                            0,
+                        ),
                     },
+
                     {
                         "Metric": "Sortino Ratio",
-                        "Value": performance.get("sortino", 0),
+                        "Value": performance_summary.get(
+                            "sortino",
+                            0,
+                        ),
                     },
+
                     {
                         "Metric": "Profit Factor",
-                        "Value": performance.get("profit_factor", 0),
+                        "Value": performance_summary.get(
+                            "profit_factor",
+                            0,
+                        ),
                     },
+
                     {
                         "Metric": "Win Rate",
-                        "Value": performance.get("win_rate", 0),
+                        "Value": performance_summary.get(
+                            "win_rate",
+                            0,
+                        ),
+                    },
+
+                    {
+                        "Metric": "Expectancy",
+                        "Value": performance_summary.get(
+                            "expectancy",
+                            0,
+                        ),
                     },
 
                 ]
 
+                risk_stats_df = pd.DataFrame(
+                    risk_stats,
+                )
+
                 st.dataframe(
 
-                    pd.DataFrame(risk_stats),
+                    risk_stats_df,
 
                     use_container_width=True,
 
@@ -4737,6 +7998,8 @@ class ForexTradingDeskDashboard:
                 )
 
             st.divider()
+
+
 
             # ==========================================================
             # Portfolio Allocation
@@ -5007,7 +8270,11 @@ class ForexTradingDeskDashboard:
             # ==========================================================
             # Executive KPI Cards
             # ==========================================================
-
+            print("=" * 80)
+            print("TRADING DESK RISK OBJECT")
+            print(risk)
+            print("=" * 80)
+            print("risk keys:", list(risk.keys()))
             cards = st.columns(8)
 
             cards[0].metric(
@@ -5174,23 +8441,25 @@ class ForexTradingDeskDashboard:
 
                 )
 
+                confidence_value = alpha.get(
+
+                    'confidence',
+
+                    ai.get(
+
+                        'confidence',
+
+                        0,
+
+                    ),
+
+                )
+
                 st.metric(
 
                     "Confidence",
 
-                    f"{alpha.get(
-
-                        'confidence',
-
-                        ai.get(
-
-                            'confidence',
-
-                            0,
-
-                        ),
-
-                    ):.1f}%",
+                    f"{confidence_value:.1f}%",
 
                 )
 
@@ -5703,7 +8972,11 @@ class ForexTradingDeskDashboard:
             # ==========================================================
             # Executive Cards
             # ==========================================================
-
+            print("=" * 80)
+            print("TRADING DESK RISK OBJECT")
+            print(risk)
+            print("=" * 80)
+            print("risk keys:", list(risk.keys()))
             cards = st.columns(8)
 
             cards[0].metric(
@@ -6206,7 +9479,7 @@ class ForexTradingDeskDashboard:
                 "Institutional Trading Journal Loaded"
 
             )
-        else:
+        elif ws == "Providers":
 
             providers = data.get(
 
@@ -6233,7 +9506,11 @@ class ForexTradingDeskDashboard:
                 {},
 
             )
-
+            print("=" * 80)
+            print("TRADING DESK RISK OBJECT")
+            print(risk)
+            print("=" * 80)
+            print("risk keys:", list(risk.keys()))
             cards = st.columns(8)
 
             cards[0].metric(
@@ -6794,6 +10071,37 @@ class ForexTradingDeskDashboard:
                 "Provider Operations Center Loaded"
 
             )
+
+        elif ws == "Pending Orders (Detail)":
+
+            portfolio_engine = get_forex_portfolio_engine(
+                db=self.desk.db,
+                tenant_id=kwargs.get("tenant_id"),
+                user_id=kwargs.get("user_id"),
+                portfolio_id=kwargs.get("portfolio_id"),
+            )
+            render_forex_pending_orders_dashboard(
+                db=self.desk.db,
+                portfolio_engine=portfolio_engine,
+                **kwargs,
+            )
+            return
+
+        elif ws == "Live Positions (Detail)":
+
+            portfolio_engine = get_forex_portfolio_engine(
+                db=self.desk.db,
+                tenant_id=kwargs.get("tenant_id"),
+                user_id=kwargs.get("user_id"),
+                portfolio_id=kwargs.get("portfolio_id"),
+            )
+            render_forex_positions_dashboard(
+                db=self.desk.db,
+                portfolio_engine=portfolio_engine,
+                **kwargs,
+            )
+            return
+
 
 _INSTANCE=None
 def get_forex_trading_desk_dashboard(db=None):

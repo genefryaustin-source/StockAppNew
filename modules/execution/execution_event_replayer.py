@@ -43,6 +43,18 @@ class ExecutionEventReplayer:
         db,
     ):
         self.db = db
+        # load_events() below queries execution_events directly, bypassing
+        # ExecutionRepository's constructor (which is what normally calls
+        # ExecutionSchema(db).ensure() first). On a fresh database with no
+        # orders ever submitted, every audit/explorer dashboard that uses
+        # this replayer crashed with "no such table: execution_events"
+        # instead of showing an empty result.
+        if self.db is not None:
+            try:
+                from modules.execution.execution_schema import ExecutionSchema
+                ExecutionSchema(self.db).ensure()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Event Loading

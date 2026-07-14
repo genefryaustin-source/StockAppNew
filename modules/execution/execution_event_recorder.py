@@ -131,6 +131,36 @@ class ExecutionEventRecorder:
             payload=self._payload(context),
         )
 
+    def order_rejected(
+            self,
+            context: ExecutionContext,
+    ):
+        """
+        Sprint 26 gap: every other order-state transition
+        (validated/pending/accepted/cancelled/expired/...) has a matching
+        recorder method, but REJECTED never did. ExecutionOrderStateMachine
+        wires its _events map to `recorder.order_rejected` unconditionally
+        at construction time, so without this method the state machine
+        (and therefore the entire execution pipeline) could never even be
+        built.
+        """
+
+        return self._record(
+            context,
+            self.engine.record_order_rejected,
+            asset_class=self._asset(context),
+            correlation_id=context.correlation_id,
+            actor=self.actor,
+            source=self.source,
+            portfolio_id=context.portfolio_id,
+            account_id=context.account_id,
+            symbol=self._symbol(context),
+            order_id=context.broker_order_id,
+            quantity=self._quantity(context),
+            price=context.requested_price,
+            payload=self._payload(context),
+        )
+
     def order_pending(
             self,
             context: ExecutionContext,

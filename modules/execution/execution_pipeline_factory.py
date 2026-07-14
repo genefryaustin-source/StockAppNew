@@ -35,6 +35,8 @@ from .execution_event_recorder import ExecutionEventRecorder
 from .execution_fill_pipeline import ExecutionFillPipeline
 from .execution_models import ExecutionActor, ExecutionSource
 from .execution_order_pipeline import ExecutionOrderPipeline
+from .execution_order_state_machine import ExecutionOrderStateMachine
+from .execution_position_state_machine import ExecutionPositionStateMachine
 from .execution_pending_order_pipeline import ExecutionPendingOrderPipeline
 from .execution_position_pipeline import ExecutionPositionPipeline
 from .execution_query import ExecutionQuery
@@ -64,6 +66,8 @@ class ExecutionPipeline:
     pending_pipeline: ExecutionPendingOrderPipeline
     position_pipeline: ExecutionPositionPipeline
     order_pipeline: ExecutionOrderPipeline
+    order_state_machine: ExecutionOrderStateMachine
+    position_state_machine: ExecutionPositionStateMachine
 
 
     def submit(
@@ -175,6 +179,22 @@ class ExecutionPipelineFactory:
             source=self.source,
         )
 
+        # NOTE: both state machines must exist before the pipelines that
+        # depend on them (fill/pending/order) are constructed below. The
+        # factory previously never built these, which meant
+        # ExecutionFillPipeline / ExecutionPendingOrderPipeline /
+        # ExecutionOrderPipeline could never be instantiated at all
+        # (they all require order_state_machine as a required kwarg).
+        order_state_machine = ExecutionOrderStateMachine(
+            recorder=recorder,
+            order_repository=order_repository,
+        )
+
+        position_state_machine = ExecutionPositionStateMachine(
+            recorder=recorder,
+            portfolio_engine=self.portfolio_engine,
+        )
+
         snapshot_pipeline = ExecutionSnapshotPipeline(
             portfolio_engine=self.portfolio_engine,
             execution_repository=repository,
@@ -186,6 +206,8 @@ class ExecutionPipelineFactory:
             order_repository=order_repository,
             snapshot_pipeline=snapshot_pipeline,
             recorder=recorder,
+            order_state_machine=order_state_machine,
+            position_state_machine=position_state_machine,
         )
 
         pending_pipeline = ExecutionPendingOrderPipeline(
@@ -193,6 +215,8 @@ class ExecutionPipelineFactory:
             snapshot_pipeline=snapshot_pipeline,
             fill_pipeline=fill_pipeline,
             recorder=recorder,
+            order_state_machine=order_state_machine,
+            position_state_machine=position_state_machine,
         )
 
         position_pipeline = ExecutionPositionPipeline(
@@ -205,6 +229,7 @@ class ExecutionPipelineFactory:
         order_pipeline = ExecutionOrderPipeline(
             validator=validator,
             recorder=recorder,
+            order_state_machine=order_state_machine,
             fill_pipeline=fill_pipeline,
             pending_pipeline=pending_pipeline,
         )
@@ -221,6 +246,8 @@ class ExecutionPipelineFactory:
             pending_pipeline=pending_pipeline,
             position_pipeline=position_pipeline,
             order_pipeline=order_pipeline,
+            order_state_machine=order_state_machine,
+            position_state_machine=position_state_machine,
         )
 
 

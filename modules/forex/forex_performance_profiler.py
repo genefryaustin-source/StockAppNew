@@ -82,6 +82,10 @@ def _tick(max_jobs: int = 100) -> Dict[str, Any]:
 class ForexPerformanceProfiler:
     """Coordinates runtime, memory, and scheduler profiling for Forex operations."""
 
+    def run_all(self, **kwargs) -> Dict[str, Any]:
+        """Alias for forex_validation_center.py's generic run_all() dispatch."""
+        return self.full_profile()
+
     def profile_scheduler(self, job_count: int = 100) -> Dict[str, Any]:
         started = time.perf_counter()
         result = _schedule_jobs(job_count=job_count)

@@ -82,6 +82,10 @@ def _tick(max_jobs: int = 100) -> Dict[str, Any]:
 class ForexBenchmarkSuite:
     """Runs repeatable benchmark tiers against the Forex operations runtime."""
 
+    def run_all(self, **kwargs) -> Dict[str, Any]:
+        """Alias for forex_validation_center.py's generic run_all() dispatch."""
+        return self.run_standard_benchmarks()
+
     def run_benchmark(self, job_count: int = 100, max_jobs_per_tick: int = 100) -> Dict[str, Any]:
         started = time.perf_counter()
         schedule_started = time.perf_counter()

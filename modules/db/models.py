@@ -105,3 +105,80 @@ class TenantApiKey(Base):
     created_by_user_id = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(UTC))
     updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+
+class TenantBrokerSetting(Base):
+    """
+    Which execution/broker providers (paper, alpaca, tradier, ibkr, ...) a
+    tenant is allowed to pick in the Trading & Execution broker dropdown.
+
+    No row for a given (tenant_id, broker_name) means "not explicitly set" --
+    callers should treat that as enabled for "paper" (always available) and
+    disabled for every real broker until a tenant/super admin turns it on,
+    so a tenant doesn't see broker options they never asked for.
+    """
+    __tablename__ = "tenant_broker_settings"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "broker_name", name="uq_tenant_broker_setting"),
+    )
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    tenant_id = Column(String, nullable=False, index=True)
+
+    broker_name = Column(String, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=False)
+
+    updated_by_user_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+
+
+class TenantRiskLimit(Base):
+    """
+    Per-tenant Internal Risk Layer limits (modules/risk_layer). No row for
+    a given (tenant_id, limit_name) means "use the built-in default" -- see
+    modules.risk_layer.limits.DEFAULT_LIMITS for the fallback values and
+    what each limit_name means.
+    """
+    __tablename__ = "tenant_risk_limits"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "limit_name", name="uq_tenant_risk_limit"),
+    )
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    tenant_id = Column(String, nullable=False, index=True)
+
+    limit_name = Column(String, nullable=False)
+    limit_value = Column(Float, nullable=False)
+
+    updated_by_user_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+
+
+class TenantRiskProviderSetting(Base):
+    """
+    Which external risk-analytics vendors (modules/risk_providers) a
+    tenant has enabled, plus any provider-specific config (e.g. the
+    Custom Risk Provider's field-mapping JSON). Mirrors
+    TenantBrokerSetting -- no row means "not enabled," so a tenant only
+    sees vendor output in the Risk Layer once a tenant/super admin turns
+    one on and its credentials are set under Admin > API Keys.
+    """
+    __tablename__ = "tenant_risk_provider_settings"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "provider_name", name="uq_tenant_risk_provider_setting"),
+    )
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    tenant_id = Column(String, nullable=False, index=True)
+
+    # Matches a key in modules.risk_providers.registry.RISK_PROVIDER_REGISTRY,
+    # e.g. "portfolioscience", "factset", "custom".
+    provider_name = Column(String, nullable=False)
+
+    enabled = Column(Boolean, nullable=False, default=False)
+    config_json = Column(Text, nullable=True)
+
+    updated_by_user_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))

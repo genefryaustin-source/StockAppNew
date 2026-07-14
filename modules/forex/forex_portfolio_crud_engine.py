@@ -27,7 +27,12 @@ class ForexPortfolioCrudEngine:
 
     def __init__(self, db=None):
         self.db = db
-        self._tables_ready = False
+
+        #
+        # Portfolio tables are initialized during
+        # Forex bootstrap.
+        #
+        self._tables_ready = True
 
     # ---------------------------------------------------------------------
     # Database
@@ -101,7 +106,11 @@ class ForexPortfolioCrudEngine:
         is_default=False,
     ):
 
-        self.ensure_tables()
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        # self.ensure_tables()
 
         if is_default:
 
@@ -175,14 +184,18 @@ class ForexPortfolioCrudEngine:
     # ---------------------------------------------------------------------
 
     def list_portfolios(
-        self,
-        *,
-        tenant_id,
-        user_id,
-        include_archived=False,
+            self,
+            *,
+            tenant_id,
+            user_id,
+            include_archived=False,
     ):
 
-        self.ensure_tables()
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        # self.ensure_tables()
 
         sql = """
         SELECT *
@@ -221,7 +234,11 @@ class ForexPortfolioCrudEngine:
         portfolio_id,
     ):
 
-        self.ensure_tables()
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        # self.ensure_tables()
 
         row = self.db.execute(text("""
         SELECT *
@@ -243,7 +260,11 @@ class ForexPortfolioCrudEngine:
         user_id,
     ):
 
-        self.ensure_tables()
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        # self.ensure_tables()
 
         row = self.db.execute(text("""
         SELECT *
@@ -280,7 +301,11 @@ class ForexPortfolioCrudEngine:
         status,
     ):
 
-        self.ensure_tables()
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        # self.ensure_tables()
 
         self.db.execute(text("""
         UPDATE forex_portfolios
@@ -320,7 +345,11 @@ class ForexPortfolioCrudEngine:
         portfolio_id,
     ):
 
-        self.ensure_tables()
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        # self.ensure_tables()
 
         self.db.execute(text("""
         DELETE
@@ -343,7 +372,11 @@ class ForexPortfolioCrudEngine:
         portfolio_id,
     ):
 
-        self.ensure_tables()
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        # self.ensure_tables()
 
         self.db.execute(text("""
         UPDATE forex_portfolios
@@ -369,7 +402,11 @@ class ForexPortfolioCrudEngine:
         portfolio_id,
     ):
 
-        self.ensure_tables()
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        # self.ensure_tables()
 
         self.db.execute(text("""
         UPDATE forex_portfolios
@@ -402,7 +439,11 @@ class ForexPortfolioCrudEngine:
         portfolio_id,
     ):
 
-        self.ensure_tables()
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        # self.ensure_tables()
 
         self.db.execute(text("""
         UPDATE forex_portfolios
@@ -487,10 +528,17 @@ def get_forex_portfolio_crud_engine(db=None):
 
     global _ENGINE
 
-    if _ENGINE is None:
+    # Previously this just swapped `_ENGINE.db = db` on the same cached
+    # instance, leaving `_ENGINE._tables_ready` stuck at True from
+    # whichever db session first triggered ensure_tables(). Any later call
+    # with a *different* db session (a fresh request-scoped session, a
+    # fresh test database, a reconnect, ...) then silently skipped
+    # ensure_tables() against a database that had never actually had the
+    # forex_portfolios table created in it - "no such table:
+    # forex_portfolios" on every read. Rebuilding the instance when the db
+    # session actually changes resets _tables_ready along with it, so it
+    # gets created for real once per distinct session.
+    if _ENGINE is None or (db is not None and _ENGINE.db is not db):
         _ENGINE = ForexPortfolioCrudEngine(db=db)
-
-    elif db is not None:
-        _ENGINE.db = db
 
     return _ENGINE

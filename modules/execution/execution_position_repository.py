@@ -68,6 +68,13 @@ class ExecutionPositionRepository:
         db,
     ):
         self.db = db
+        # Only project_position() called ensure_tables() itself; every
+        # other read method here (load_position, load_positions,
+        # close_position_projection, delete_projection, rebuild_projection)
+        # queried forex_positions directly and crashed with "no such table"
+        # on a database no position had ever been projected into yet -
+        # ensure it once at construction instead, matching ExecutionRepository.
+        self.ensure_tables()
 
     # ------------------------------------------------------------------
     # Schema
@@ -323,7 +330,14 @@ class ExecutionPositionRepository:
         account_id: Optional[str] = None,
         portfolio_id: Optional[str] = None,
         status: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        # tenant_id accepted for call-site compatibility with
+        # ForexPositionManagementEngine.load_positions() (used by
+        # forex_positions_dashboard.py), which always passes it through -
+        # this table has no tenant_id column to filter on, so it's a no-op
+        # rather than a TypeError.
+        del tenant_id
 
         where = []
 
@@ -455,13 +469,26 @@ class ExecutionPositionRepository:
     # Row Conversion
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _coerce_datetime(value) -> datetime:
+        # SQLite hands back ISO-format strings for TIMESTAMP columns
+        # instead of native datetime objects (unlike Postgres via
+        # psycopg2), and this previously assumed .tzinfo always existed -
+        # same dialect gap fixed in forex_portfolio_engine.py earlier.
+        if value is None:
+            return _utc_now()
+        if isinstance(value, str):
+            parsed = datetime.fromisoformat(value)
+            return parsed
+        return value
+
     def _from_row(
         self,
         row,
     ) -> Dict[str, Any]:
 
-        opened = row["opened_at"] or _utc_now()
-        updated = row["updated_at"] or _utc_now()
+        opened = self._coerce_datetime(row["opened_at"])
+        updated = self._coerce_datetime(row["updated_at"])
 
         if opened.tzinfo is None:
             opened = opened.replace(
@@ -476,6 +503,14 @@ class ExecutionPositionRepository:
         return {
 
             "id": row["id"],
+            # forex_positions_dashboard.py (and other forex-layer callers,
+            # matching the "symbol"/"position_id" convention used by
+            # ForexRiskPosition and the partial-profit manager) read
+            # "position_id" and "symbol" - this repository is execution-
+            # layer and always used "id"/"pair". Rather than rename the
+            # canonical keys (and risk breaking whatever already reads
+            # "id"/"pair" from here), expose both as aliases.
+            "position_id": row["id"],
 
             "tenant_id": row["tenant_id"],
 
@@ -486,6 +521,7 @@ class ExecutionPositionRepository:
             "account_id": row["account_id"],
 
             "pair": row["pair"],
+            "symbol": row["pair"],
 
             "base_currency": row["base_currency"],
 

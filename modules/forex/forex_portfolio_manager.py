@@ -40,7 +40,7 @@ from modules.forex.forex_portfolio_crud_engine import (
 
 DEFAULT_ACCOUNT_CURRENCY = "USD"
 DEFAULT_STARTING_CASH = 100000.0
-
+_INITIALIZED = False
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -111,8 +111,20 @@ class ForexPortfolioManager:
             starting_cash: float = DEFAULT_STARTING_CASH,
     ):
         self.db = db
-        self.tenant_id = tenant_id
-        self.user_id = user_id
+        # forex_portfolio_crud_engine.py filters every query with raw SQL
+        # like "WHERE tenant_id=:tenant AND user_id=:user". In SQL, `col =
+        # NULL` never matches (even a NULL-valued column), so tenant_id=None
+        # / user_id=None silently returned zero rows from list_portfolios()
+        # forever, even immediately after create_portfolio() had just
+        # inserted a row with those same NULL values - the portfolio
+        # dashboard's "no active portfolio" empty state was permanent for
+        # any caller that didn't explicitly pass a tenant_id/user_id, which
+        # is the common case (most dashboards call
+        # get_forex_portfolio_manager(db=db) with neither). Normalizing to
+        # a stable default string here, once, means every query this
+        # manager issues is internally consistent.
+        self.tenant_id = str(tenant_id) if tenant_id is not None else "default"
+        self.user_id = str(user_id) if user_id is not None else "default"
         self.portfolio_id = portfolio_id
 
         self.portfolio_engine = get_forex_portfolio_crud_engine(
@@ -122,17 +134,23 @@ class ForexPortfolioManager:
         self.starting_cash = float(starting_cash or DEFAULT_STARTING_CASH)
         self.price_service = get_forex_price_service() if get_forex_price_service else None
         self.alpha_model = get_forex_alpha_model() if get_forex_alpha_model else None
-        self._tables_ready = False
+        self._tables_ready = True
         self.cache = get_forex_portfolio_cache()
     # ------------------------------------------------------------------
     # Database
     # ------------------------------------------------------------------
 
     def ensure_tables(self) -> None:
-        if self.db is None or text is None:
+
+        global _INITIALIZED
+
+        if _INITIALIZED:
             return
 
         if self._tables_ready:
+            return
+
+        if self.db is None or text is None:
             return
 
         try:
@@ -170,12 +188,12 @@ class ForexPortfolioManager:
                 )
             """))
 
-
-
-
-
             self.db.commit()
+
             self._tables_ready = True
+            _INITIALIZED = True
+
+
         except Exception as exc:
             print("=" * 80)
             print("PortfolioManager.ensure_tables FAILED")
@@ -199,7 +217,7 @@ class ForexPortfolioManager:
         if self.db is None or text is None:
             return []
 
-        self.ensure_tables()
+        #self.ensure_tables()
         #
         # Sprint 26 Portfolio Cache
         #
@@ -312,7 +330,7 @@ class ForexPortfolioManager:
                 "message": "Database is not available.",
             }
 
-        self.ensure_tables()
+        #self.ensure_tables()
 
         pair = normalize_pair(pair)
         side = str(side or "").upper()
@@ -612,7 +630,7 @@ class ForexPortfolioManager:
             }
 
         if self.db is not None and text is not None:
-            self.ensure_tables()
+            #self.ensure_tables()
             now = datetime.now(timezone.utc).replace(tzinfo=None)
 
             self.db.execute(text("""
@@ -915,11 +933,18 @@ def get_forex_portfolio_manager(
 ):
     global _MANAGER
 
+    # Normalize the same way ForexPortfolioManager.__init__ does before
+    # comparing against the cached instance - otherwise a None argument
+    # here would never equal the cached manager's normalized "default"
+    # attribute, defeating the singleton cache on every single call.
+    normalized_tenant_id = str(tenant_id) if tenant_id is not None else "default"
+    normalized_user_id = str(user_id) if user_id is not None else "default"
+
     if (
             _MANAGER is None
             or _MANAGER.db is not db
-            or _MANAGER.tenant_id != tenant_id
-            or _MANAGER.user_id != user_id
+            or _MANAGER.tenant_id != normalized_tenant_id
+            or _MANAGER.user_id != normalized_user_id
             or _MANAGER.portfolio_id != portfolio_id
     ):
         _MANAGER = ForexPortfolioManager(

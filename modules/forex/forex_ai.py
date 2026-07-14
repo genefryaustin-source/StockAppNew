@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+from sqlalchemy import text
 
 try:
     from modules.forex.forex_service import (
@@ -32,7 +33,7 @@ except Exception as e:
     raise
 
 logger = logging.getLogger(__name__)
-
+_INITIALIZED = False
 
 DEFAULT_FOREX_AI_PAIRS = MAJOR_PAIRS + CROSS_PAIRS
 
@@ -115,15 +116,29 @@ def _round(value: float, places: int = 2) -> float:
     return round(_safe_float(value), places)
 
 
-def _json_payload(payload: Any) -> Any:
+def _json_payload(payload: Any) -> Optional[str]:
+    """Serialize a payload to a JSON string for binding as a raw SQL
+    parameter. Raw ``text()`` execution does not go through SQLAlchemy's
+    JSON/JSONB type system, so both SQLite and Postgres need an actual
+    string here, never a bare dict/list (sqlite3's binder rejects those
+    outright, and psycopg2 will not auto-adapt them without the ORM type
+    layer either)."""
     if payload is None:
         return None
-    if isinstance(payload, (dict, list)):
-        return payload
     try:
-        return json.loads(json.dumps(payload, default=str))
+        return json.dumps(payload, default=str)
     except Exception:
-        return {"value": str(payload)}
+        return json.dumps({"value": str(payload)})
+
+
+def _coerce_isoformat(value: Any) -> Optional[str]:
+    """SQLite returns TIMESTAMP columns as ISO strings, Postgres/psycopg2
+    returns native datetime objects. Normalize both to an ISO string."""
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 class ForexTrendAnalyzer:
@@ -391,12 +406,27 @@ class ForexAIEngine:
         self.risk_engine = ForexRiskScoringEngine()
         self.signal_generator = ForexSignalGenerator()
 
-    def ensure_tables(self) -> None:
+        #
+        # AI persistence initialized during
+        # Forex bootstrap.
+        #
+        self._tables_ready = True
+
+    def ensure_tables(self):
+
+        global _INITIALIZED
+
+        if _INITIALIZED:
+            return
+
+        if self._tables_ready:
+            return
+
         if self.db is None:
             return
 
         self.db.execute(
-            """
+            text("""
             CREATE TABLE IF NOT EXISTS forex_ai_signals (
                 id SERIAL PRIMARY KEY,
                 tenant_id VARCHAR(100),
@@ -423,18 +453,18 @@ class ForexAIEngine:
                 asof TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
-            """
+            """)
         )
 
         self.db.execute(
-            """
+            text("""
             CREATE INDEX IF NOT EXISTS idx_forex_ai_signals_tenant_pair_asof
             ON forex_ai_signals (tenant_id, pair, asof DESC)
-            """
+            """)
         )
 
         self.db.execute(
-            """
+            text("""
             CREATE TABLE IF NOT EXISTS forex_ai_history (
                 id SERIAL PRIMARY KEY,
                 tenant_id VARCHAR(100),
@@ -444,11 +474,11 @@ class ForexAIEngine:
                 payload JSONB,
                 created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
-            """
+            """)
         )
 
         self.db.execute(
-            """
+            text("""
             CREATE TABLE IF NOT EXISTS forex_model_snapshots (
                 id SERIAL PRIMARY KEY,
                 tenant_id VARCHAR(100),
@@ -458,11 +488,15 @@ class ForexAIEngine:
                 payload JSONB,
                 created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
             )
-            """
+            """)
         )
 
         if hasattr(self.db, "commit"):
             self.db.commit()
+
+        self._tables_ready = True
+        _INITIALIZED = True
+
 
     def score_pair(
         self,
@@ -474,16 +508,48 @@ class ForexAIEngine:
         normalized_pair = normalize_pair(pair)
         quote = self.forex_service.get_quote(normalized_pair)
 
-        trend_score = self.trend_analyzer.score(quote, historical_prices)
-        momentum_score = self.momentum_analyzer.score(quote, historical_prices)
-        volatility_score = self.volatility_analyzer.score(quote, historical_prices)
-        carry_score = self.carry_analyzer.score(normalized_pair)
-        liquidity_score = self.risk_engine.liquidity_score(quote)
+        trend_score = self.trend_analyzer.score(
+            quote,
+            historical_prices,
+        )
+
+        momentum_score = self.momentum_analyzer.score(
+            quote,
+            historical_prices,
+        )
+
+        volatility_score = self.volatility_analyzer.score(
+            quote,
+            historical_prices,
+        )
+
+        carry_score = self.carry_analyzer.score(
+            normalized_pair,
+        )
+
+        liquidity_score = self.risk_engine.liquidity_score(
+            quote,
+        )
+
         correlation_score = self.correlation_analyzer.score(
             normalized_pair,
             portfolio_pairs or self.portfolio_pairs,
         )
-        macro_score = self.risk_engine.macro_score(normalized_pair)
+
+        macro_score = self.risk_engine.macro_score(
+            normalized_pair,
+        )
+
+        print("=" * 100)
+        print(f"AI SCORE BREAKDOWN: {normalized_pair}")
+        print(f"Trend        : {trend_score}")
+        print(f"Momentum     : {momentum_score}")
+        print(f"Volatility   : {volatility_score}")
+        print(f"Carry        : {carry_score}")
+        print(f"Liquidity    : {liquidity_score}")
+        print(f"Correlation  : {correlation_score}")
+        print(f"Macro        : {macro_score}")
+        print("=" * 100)
 
         composite_score = (
             trend_score * 0.22
@@ -655,10 +721,14 @@ class ForexAIEngine:
             return
 
         try:
-            self.ensure_tables()
+            #
+            # Tables initialized during
+            # Forex bootstrap.
+            #
+            # self.ensure_tables()
 
             self.db.execute(
-                """
+                text("""
                 INSERT INTO forex_ai_signals (
                     tenant_id,
                     user_id,
@@ -707,7 +777,7 @@ class ForexAIEngine:
                     :raw_payload,
                     :asof
                 )
-                """,
+                """),
                 {
                     "tenant_id": signal.tenant_id,
                     "user_id": signal.user_id,
@@ -735,7 +805,7 @@ class ForexAIEngine:
             )
 
             self.db.execute(
-                """
+                text("""
                 INSERT INTO forex_ai_history (
                     tenant_id,
                     user_id,
@@ -750,7 +820,7 @@ class ForexAIEngine:
                     :event_type,
                     :payload
                 )
-                """,
+                """),
                 {
                     "tenant_id": signal.tenant_id,
                     "user_id": signal.user_id,
@@ -781,7 +851,11 @@ class ForexAIEngine:
             return []
 
         try:
-            self.ensure_tables()
+            #
+            # Tables initialized during
+            # Forex bootstrap.
+            #
+            # self.ensure_tables()
 
             params: Dict[str, Any] = {
                 "tenant_id": self.tenant_id,
@@ -795,7 +869,7 @@ class ForexAIEngine:
                 params["pair"] = normalize_pair(pair)
 
             rows = self.db.execute(
-                f"""
+                text(f"""
                 SELECT
                     pair,
                     recommendation,
@@ -822,7 +896,7 @@ class ForexAIEngine:
                 {where}
                 ORDER BY asof DESC
                 LIMIT :limit
-                """,
+                """),
                 params,
             ).fetchall()
 
@@ -849,9 +923,13 @@ class ForexAIEngine:
                         "rationale": row.rationale,
                         "warnings": row.warnings,
                         "provider": row.provider,
-                        "raw": row.raw_payload,
-                        "asof": row.asof.isoformat() if row.asof else None,
-                        "created_at": row.created_at.isoformat() if row.created_at else None,
+                        "raw": (
+                            json.loads(row.raw_payload)
+                            if row.raw_payload
+                            else None
+                        ),
+                        "asof": _coerce_isoformat(row.asof),
+                        "created_at": _coerce_isoformat(row.created_at),
                     }
                 )
 
@@ -872,10 +950,14 @@ class ForexAIEngine:
             return
 
         try:
-            self.ensure_tables()
+            #
+            # Tables initialized during
+            # Forex bootstrap.
+            #
+            # self.ensure_tables()
 
             self.db.execute(
-                """
+                text("""
                 INSERT INTO forex_model_snapshots (
                     tenant_id,
                     user_id,
@@ -890,7 +972,7 @@ class ForexAIEngine:
                     :model_version,
                     :payload
                 )
-                """,
+                """),
                 {
                     "tenant_id": self.tenant_id,
                     "user_id": self.user_id,

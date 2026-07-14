@@ -112,7 +112,7 @@ class ForexCarryTradeEngine:
         }
 
 _ENGINE=None
-def get_forex_carry_trade_engine():
+def get_forex_carry_trade_engine(db=None, tenant_id=None, user_id=None, portfolio_id=None):
     global _ENGINE
     if _ENGINE is None:
         _ENGINE=ForexCarryTradeEngine()

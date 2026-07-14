@@ -131,7 +131,10 @@ class ForexStrategyEngine:
             tenant_id=tenant_id,
         )
 _ENGINE=None
-def get_forex_strategy_engine(db=None):
+def get_forex_strategy_engine(db=None, tenant_id=None, user_id=None, portfolio_id=None, **_extra):
+ # _extra absorbs caller kwargs the underlying ForexStrategyEngine doesn't
+ # take (forex_service/forex_ai_engine/forex_portfolio_engine, seen from
+ # forex_recommendation_engine.py) - it builds those internally itself.
  global _ENGINE
  if _ENGINE is None: _ENGINE=ForexStrategyEngine(db=db)
  return _ENGINE

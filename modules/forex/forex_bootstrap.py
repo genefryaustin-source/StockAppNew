@@ -294,6 +294,149 @@ def bootstrap_forex_runtime(
         "alpha_model",
         _alpha,
     )
+    def _watchlists():
+        from modules.forex.forex_watchlist_service import (
+            get_forex_watchlist_service,
+        )
+
+        service = get_forex_watchlist_service(db=db)
+
+        # Force initialization only.
+        service.load_watchlist()
+
+        return {"status": "READY"}
+
+    components["watchlists"] = _component(
+        "watchlists",
+        _watchlists,
+    )
+
+    def _trading_desk():
+        from modules.forex.forex_trading_desk import (
+            get_forex_trading_desk,
+        )
+
+        get_forex_trading_desk(
+            db=db,
+        )
+
+        return {"status": "READY"}
+
+    components["trading_desk"] = _component(
+        "trading_desk",
+        _trading_desk,
+    )
+
+    def _portfolio():
+        from modules.forex.forex_portfolio_engine import (
+            get_forex_portfolio_engine,
+        )
+
+        get_forex_portfolio_engine(
+            db=db,
+        )
+
+        return {"status": "READY"}
+
+    components["portfolio"] = _component(
+        "portfolio",
+        _portfolio,
+    )
+
+    def _execution():
+        from modules.forex.forex_execution_center import (
+            get_forex_execution_center,
+        )
+
+        get_forex_execution_center(
+            db=db,
+        )
+
+        return {"status": "READY"}
+
+    components["execution"] = _component(
+        "execution",
+        _execution,
+    )
+
+    def _ai():
+        from modules.forex.forex_ai_orchestrator import (
+            get_forex_ai_orchestrator,
+        )
+
+        get_forex_ai_orchestrator(
+            db=db,
+        )
+
+        return {"status": "READY"}
+
+    components["ai"] = _component(
+        "ai",
+        _ai,
+    )
+
+    def _recommendations():
+        from modules.forex.forex_recommendation_engine import (
+            get_forex_recommendation_engine,
+        )
+
+        get_forex_recommendation_engine(
+            db=db,
+        )
+
+        return {"status": "READY"}
+
+    components["recommendation_engine"] = _component(
+        "recommendation_engine",
+        _recommendations,
+    )
+
+    def _risk():
+        from modules.forex.forex_risk_management_engine import (
+            get_forex_risk_management_engine,
+        )
+
+        get_forex_risk_management_engine(
+            db=db,
+        )
+
+        return {"status": "READY"}
+
+    components["risk_engine"] = _component(
+        "risk_engine",
+        _risk,
+    )
+
+    def _events():
+        from modules.forex.forex_event_store import (
+            get_forex_event_store,
+        )
+
+        get_forex_event_store(
+            db=db,
+        )
+
+        return {"status": "READY"}
+
+    components["event_store"] = _component(
+        "event_store",
+        _events,
+    )
+
+    validation = {
+        "healthy": True,
+        "failed_components": [],
+    }
+
+    for name, component in components.items():
+
+        if component.get("status") not in ("READY", "SKIPPED"):
+            validation["healthy"] = False
+
+            validation["failed_components"].append(name)
+
+
+
 
     completed = _now()
 
@@ -304,6 +447,7 @@ def bootstrap_forex_runtime(
         "last_error": None,
         "mode": mode,
         "components": components,
+        "validation": validation,
     }
 
     return {
@@ -312,6 +456,7 @@ def bootstrap_forex_runtime(
         "initialized_at": started,
         "completed_at": completed,
         "components": components,
+        "validation": validation,
     }
 
 
@@ -390,3 +535,51 @@ def reload_forex_platform(
 
 def platform_status() -> Dict[str, Any]:
     return forex_runtime_status()
+
+# ==============================================================================
+# OOP wrapper
+# ==============================================================================
+#
+# forex_module.py (the canonical module entry point) expects a bootstrap
+# *object* with .initialize()/.shutdown() methods, not the free functions
+# above. This class is a thin wrapper around them so both call styles work
+# off the same underlying runtime state.
+
+
+class ForexBootstrap:
+    def __init__(self, db: Optional[Any] = None, mode: str = "development", session_factory=None):
+        self.db = db
+        self.mode = mode
+        self.session_factory = session_factory
+
+    def initialize(self) -> Dict[str, Any]:
+        return bootstrap_forex_runtime(
+            db=self.db,
+            mode=self.mode,
+            session_factory=self.session_factory,
+        )
+
+    def shutdown(self) -> Dict[str, Any]:
+        return shutdown_forex_runtime()
+
+    def status(self) -> Dict[str, Any]:
+        return forex_runtime_status()
+
+    def reload(self) -> Dict[str, Any]:
+        return reload_forex_platform(
+            db=self.db,
+            mode=self.mode,
+            session_factory=self.session_factory,
+        )
+
+
+
+
+_BOOTSTRAP: Optional[ForexBootstrap] = None
+
+
+def get_forex_bootstrap(db: Optional[Any] = None) -> ForexBootstrap:
+    global _BOOTSTRAP
+    if _BOOTSTRAP is None or (db is not None and _BOOTSTRAP.db is None):
+        _BOOTSTRAP = ForexBootstrap(db=db)
+    return _BOOTSTRAP

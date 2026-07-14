@@ -16,7 +16,10 @@ class ForexSelfDiagnosticEngine:
 
     def __init__(self, store: Optional[ForexStateStore] = None) -> None:
         self.store = store or ForexStateStore()
-        self.queue = ForexExecutionQueue(self.store)
+        # ForexExecutionQueue takes no arguments (in-memory deque,
+        # no persistence) - passing self.store always raised TypeError,
+        # same bug found and fixed in forex_scheduler.py.
+        self.queue = ForexExecutionQueue()
         self.governor = ForexResourceGovernor(self.store)
 
     def run_diagnostics(self) -> Dict[str, Any]:

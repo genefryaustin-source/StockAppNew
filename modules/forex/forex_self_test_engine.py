@@ -26,6 +26,10 @@ class ForexSelfTestEngine:
     def run_runtime_self_test(self) -> Dict[str, Any]:
         return ForexIntegrationTestSuite(db=self.db, user=self.user).run_schedule_runtime_flow(max_jobs=5)
 
+    def run_all(self, **kwargs) -> Dict[str, Any]:
+        """Alias for forex_validation_center.py's generic run_all() dispatch."""
+        return self.run_full_self_test()
+
     def run_full_self_test(self) -> Dict[str, Any]:
         smoke = self.run_smoke_test()
         components = self.run_component_self_test()

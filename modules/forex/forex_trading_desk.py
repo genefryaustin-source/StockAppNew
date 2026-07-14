@@ -20,6 +20,7 @@ from modules.forex.forex_portfolio_manager import get_forex_portfolio_manager
 from modules.forex.forex_order_management_engine import get_forex_order_management_engine
 from modules.forex.forex_risk_management_engine import get_forex_risk_management_engine
 from modules.forex.forex_performance_analytics_engine import get_forex_performance_analytics_engine
+from modules.forex.forex_service import get_forex_service
 from modules.forex.forex_trade_journal_engine import get_forex_trade_journal_engine
 from modules.forex.forex_strategy_lab import get_forex_strategy_lab
 from modules.forex.forex_ai_orchestrator import get_forex_ai_orchestrator
@@ -115,6 +116,13 @@ class ForexTradingDesk:
         )
         self.health = get_forex_provider_health()
         self.command_center = get_forex_command_center_engine()
+        self.forex_service = _factory_with_context(
+            get_forex_service,
+            db=db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+        )
 
     @profile_alpha_execution("ForexTradingDesk.dashboard")
     def dashboard(

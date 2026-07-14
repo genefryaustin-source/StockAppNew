@@ -62,6 +62,25 @@ KNOWN_PROVIDERS = [
     ("FMP_API_KEY", "Financial Modeling Prep", "https://site.financialmodelingprep.com/developer/docs"),
     ("MASSIVE_API_KEY", "Massive (options data)", "https://polygon.io/dashboard/signup"),
     ("ALPACA_API_KEY", "Alpaca (brokerage)", "https://app.alpaca.markets/signup"),
+    ("ALPACA_API_SECRET", "Alpaca (brokerage secret)", "https://app.alpaca.markets/signup"),
+    ("TRADIER_ACCESS_TOKEN", "Tradier (brokerage)", "https://tradier.com/products/brokerage-api"),
+    ("TRADIER_ACCOUNT_ID", "Tradier (account ID)", "https://tradier.com/products/brokerage-api"),
+    ("IBKR_ACCOUNT_ID", "Interactive Brokers (account ID)", "https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/"),
+    ("IBKR_GATEWAY_URL", "Interactive Brokers (Client Portal Gateway URL)", "https://www.interactivebrokers.com/campus/ibkr-api-page/cpapi-v1/"),
+    ("PORTFOLIOSCIENCE_API_KEY", "PortfolioScience RiskAPI", "https://www.portfolioscience.com/products/riskapi-enterprise"),
+    ("FACTSET_API_USERNAME", "FactSet Open:Risk API (username-serial)", "https://developer.factset.com/api-catalog/openrisk-api"),
+    ("FACTSET_API_KEY", "FactSet Open:Risk API (API key)", "https://developer.factset.com/api-catalog/openrisk-api"),
+    ("CUSTOM_RISK_PROVIDER_BASE_URL", "Custom Risk Provider (base URL)", ""),
+    ("CUSTOM_RISK_PROVIDER_API_KEY", "Custom Risk Provider (API key)", ""),
+    ("ONDO_API_KEY", "Ondo Finance (Global Markets)", "https://ondo.finance/"),
+    ("SECURITIZE_API_KEY", "Securitize", "https://securitize.io/"),
+    ("SECURITIZE_API_SECRET", "Securitize (secret)", "https://securitize.io/"),
+    ("CUSTOM_TOKENIZED_ASSET_BASE_URL", "Custom Tokenized Asset Provider (base URL)", ""),
+    ("CUSTOM_TOKENIZED_ASSET_API_KEY", "Custom Tokenized Asset Provider (API key)", ""),
+    ("CCXT_EXCHANGE_ID", "Crypto Exchange (ccxt exchange id, e.g. binance)", "https://docs.ccxt.com/"),
+    ("CCXT_API_KEY", "Crypto Exchange (API key)", "https://docs.ccxt.com/"),
+    ("CCXT_API_SECRET", "Crypto Exchange (API secret)", "https://docs.ccxt.com/"),
+    ("SEC_EDGAR_IDENTITY", "SEC EDGAR (contact identity, e.g. 'Name email@domain.com')", "https://www.sec.gov/os/webmaster-faq#developers"),
     ("FINTEL_API_KEY", "Fintel", "https://fintel.io/"),
     ("QUIVER_API_KEY", "QuiverQuant", "https://www.quiverquant.com/"),
 ]
@@ -334,3 +353,229 @@ def get_provider_key(provider: str, db=None, tenant_id: Optional[str] = None) ->
     if not platform_key:
         platform_key = os.getenv(provider, "")
     return platform_key or ""
+
+
+# -----------------------------------------------------
+# BROKER PROVIDERS -- same resolution order as get_provider_key, but
+# brokers (Alpaca and any future broker/execution provider) need a
+# key + secret + environment (paper/live base URL) bundle rather than a
+# single string, so they get a small dedicated helper on top of it.
+# -----------------------------------------------------
+
+def get_alpaca_credentials(paper: bool = True, db=None, tenant_id: Optional[str] = None) -> dict:
+    """
+    Resolves Alpaca brokerage credentials exactly like every other
+    provider in KNOWN_PROVIDERS: the current tenant's own key/secret
+    (set in Settings > API Keys) first, then the platform-wide fallback
+    in Streamlit secrets / environment variables. Never raises --
+    returns {"configured": False} if nothing is set anywhere, so callers
+    can show a clear "connect Alpaca" prompt instead of crashing.
+
+    Also honors the older nested `st.secrets["alpaca"] = {API_KEY,
+    API_SECRET, BASE_URL_PAPER, BASE_URL_LIVE}` block for backwards
+    compatibility with deployments that were set up before the flat
+    ALPACA_API_KEY / ALPACA_API_SECRET convention existed.
+    """
+    api_key = get_provider_key("ALPACA_API_KEY", db=db, tenant_id=tenant_id)
+    api_secret = get_provider_key("ALPACA_API_SECRET", db=db, tenant_id=tenant_id)
+
+    base_url_paper = "https://paper-api.alpaca.markets"
+    base_url_live = "https://api.alpaca.markets"
+
+    legacy = {}
+    if _has_streamlit_context():
+        try:
+            legacy = dict(st.secrets.get("alpaca", {}))
+        except Exception:
+            legacy = {}
+
+    if not api_key:
+        api_key = legacy.get("API_KEY", "")
+    if not api_secret:
+        api_secret = legacy.get("API_SECRET", "")
+    base_url_paper = legacy.get("BASE_URL_PAPER") or base_url_paper
+    base_url_live = legacy.get("BASE_URL_LIVE") or base_url_live
+
+    return {
+        "api_key": api_key,
+        "api_secret": api_secret,
+        "base_url": base_url_paper if paper else base_url_live,
+        "paper": paper,
+        "configured": bool(api_key and api_secret),
+    }
+
+def get_tradier_credentials(sandbox: bool = True, db=None, tenant_id: Optional[str] = None) -> dict:
+    """
+    Resolves Tradier brokerage credentials the same way as every other
+    provider: tenant key first, then platform secret/env fallback.
+    Tradier auths with a single bearer access token, but calls are scoped
+    to an account id, so both TRADIER_ACCESS_TOKEN and TRADIER_ACCOUNT_ID
+    are resolved. Also honors a legacy nested st.secrets["tradier"] block
+    for parity with the Alpaca back-compat path.
+    """
+    access_token = get_provider_key("TRADIER_ACCESS_TOKEN", db=db, tenant_id=tenant_id)
+    account_id = get_provider_key("TRADIER_ACCOUNT_ID", db=db, tenant_id=tenant_id)
+
+    legacy = {}
+    if _has_streamlit_context():
+        try:
+            legacy = dict(st.secrets.get("tradier", {}))
+        except Exception:
+            legacy = {}
+
+    if not access_token:
+        access_token = legacy.get("ACCESS_TOKEN", "")
+    if not account_id:
+        account_id = legacy.get("ACCOUNT_ID", "")
+
+    base_url = "https://sandbox.tradier.com" if sandbox else "https://api.tradier.com"
+    base_url = legacy.get("BASE_URL_SANDBOX" if sandbox else "BASE_URL_PRODUCTION") or base_url
+
+    return {
+        "access_token": access_token,
+        "account_id": account_id,
+        "base_url": base_url,
+        "sandbox": sandbox,
+        "configured": bool(access_token and account_id),
+    }
+
+
+def get_ibkr_credentials(db=None, tenant_id: Optional[str] = None) -> dict:
+    """
+    Resolves Interactive Brokers connection settings.
+
+    IBKR is structurally different from Alpaca/Tradier: retail accounts
+    don't get a static API key + secret. Programmatic access goes through
+    IBKR's Client Portal Gateway -- a small local/hosted process the user
+    must run and log into (with 2FA) themselves in a browser. This app
+    can only talk to that already-authenticated gateway over its local
+    REST API; it cannot perform the login for you (nor should it try --
+    entering IBKR credentials on the user's behalf isn't something this
+    app does).
+
+    So "configured" here means: a gateway URL and account id are set,
+    NOT that the session is currently authenticated. Use
+    IBKRBroker.test_connection() to check live session status.
+    """
+    account_id = get_provider_key("IBKR_ACCOUNT_ID", db=db, tenant_id=tenant_id)
+    gateway_url = get_provider_key("IBKR_GATEWAY_URL", db=db, tenant_id=tenant_id)
+
+    legacy = {}
+    if _has_streamlit_context():
+        try:
+            legacy = dict(st.secrets.get("ibkr", {}))
+        except Exception:
+            legacy = {}
+
+    if not account_id:
+        account_id = legacy.get("ACCOUNT_ID", "")
+    if not gateway_url:
+        gateway_url = legacy.get("GATEWAY_URL", "")
+
+    gateway_url = (gateway_url or "https://localhost:5000/v1/api").rstrip("/")
+
+    return {
+        "account_id": account_id,
+        "base_url": gateway_url,
+        # account_id can be auto-discovered from the gateway session, so
+        # only require the gateway URL to consider this "configured" --
+        # the real go/no-go check is test_connection().
+        "configured": bool(gateway_url),
+    }
+
+
+def get_portfolioscience_credentials(db=None, tenant_id: Optional[str] = None) -> dict:
+    """PortfolioScience RiskAPI -- a single API key, same resolution order
+    (tenant key first, platform fallback second) as every other provider."""
+    api_key = get_provider_key("PORTFOLIOSCIENCE_API_KEY", db=db, tenant_id=tenant_id)
+    return {
+        "api_key": api_key,
+        "base_url": "https://api.portfolioscience.com",
+        "configured": bool(api_key),
+    }
+
+
+def get_factset_credentials(db=None, tenant_id: Optional[str] = None) -> dict:
+    """
+    FactSet's developer APIs authenticate with HTTP Basic auth using a
+    "username-serial:api-key" pair issued from FactSet's developer portal
+    (https://developer.factset.com) -- not a single bearer token.
+    """
+    username = get_provider_key("FACTSET_API_USERNAME", db=db, tenant_id=tenant_id)
+    api_key = get_provider_key("FACTSET_API_KEY", db=db, tenant_id=tenant_id)
+    return {
+        "username": username,
+        "api_key": api_key,
+        "base_url": "https://api.factset.com",
+        "configured": bool(username and api_key),
+    }
+
+
+def get_custom_risk_provider_credentials(db=None, tenant_id: Optional[str] = None) -> dict:
+    """
+    A generic REST risk provider slot for any vendor (or in-house service)
+    without a dedicated adapter -- a base URL + bearer API key, with the
+    JSON response field mapping configured separately in the Risk
+    Providers admin tab (modules.risk_providers.provider_settings), since
+    that's tenant-specific config rather than a credential.
+    """
+    base_url = get_provider_key("CUSTOM_RISK_PROVIDER_BASE_URL", db=db, tenant_id=tenant_id)
+    api_key = get_provider_key("CUSTOM_RISK_PROVIDER_API_KEY", db=db, tenant_id=tenant_id)
+    return {
+        "base_url": (base_url or "").rstrip("/"),
+        "api_key": api_key,
+        "configured": bool(base_url and api_key),
+    }
+
+
+def get_ondo_credentials(db=None, tenant_id: Optional[str] = None) -> dict:
+    """Ondo Finance / Ondo Global Markets -- a single API key, same
+    resolution order as every other provider."""
+    api_key = get_provider_key("ONDO_API_KEY", db=db, tenant_id=tenant_id)
+    return {
+        "api_key": api_key,
+        "base_url": "https://api.ondo.finance",
+        "configured": bool(api_key),
+    }
+
+
+def get_securitize_credentials(db=None, tenant_id: Optional[str] = None) -> dict:
+    """Securitize -- API key + secret pair, same resolution order as
+    every other provider."""
+    api_key = get_provider_key("SECURITIZE_API_KEY", db=db, tenant_id=tenant_id)
+    api_secret = get_provider_key("SECURITIZE_API_SECRET", db=db, tenant_id=tenant_id)
+    return {
+        "api_key": api_key,
+        "api_secret": api_secret,
+        "base_url": "https://api.securitize.io",
+        "configured": bool(api_key and api_secret),
+    }
+
+
+def get_custom_tokenized_asset_credentials(db=None, tenant_id: Optional[str] = None) -> dict:
+    """Generic tokenized-asset venue slot -- base URL + bearer API key,
+    for any custodian/platform without a dedicated adapter."""
+    base_url = get_provider_key("CUSTOM_TOKENIZED_ASSET_BASE_URL", db=db, tenant_id=tenant_id)
+    api_key = get_provider_key("CUSTOM_TOKENIZED_ASSET_API_KEY", db=db, tenant_id=tenant_id)
+    return {
+        "base_url": (base_url or "").rstrip("/"),
+        "api_key": api_key,
+        "configured": bool(base_url and api_key),
+    }
+
+
+def get_ccxt_credentials(db=None, tenant_id: Optional[str] = None) -> dict:
+    """
+    Crypto exchange credentials for the ccxt broker. CCXT_EXCHANGE_ID picks
+    which of ccxt's 100+ supported exchanges to connect to (e.g. "binance",
+    "coinbase", "kraken") -- defaults to "binance" if not set.
+    """
+    exchange_id = get_provider_key("CCXT_EXCHANGE_ID", db=db, tenant_id=tenant_id) or "binance"
+    api_key = get_provider_key("CCXT_API_KEY", db=db, tenant_id=tenant_id)
+    api_secret = get_provider_key("CCXT_API_SECRET", db=db, tenant_id=tenant_id)
+    return {
+        "exchange_id": exchange_id.strip().lower(),
+        "api_key": api_key,
+        "api_secret": api_secret,
+        "configured": bool(api_key and api_secret),
+    }

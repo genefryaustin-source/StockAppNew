@@ -40,6 +40,10 @@ G8_CURRENCIES = [
     "NZD",
 ]
 
+# forex_currency_strength_dashboard.py (and others) import this list under
+# the name MAJOR_CURRENCIES.
+MAJOR_CURRENCIES = G8_CURRENCIES
+
 MAJOR_AND_CROSS_PAIRS = [
     "EUR/USD",
     "GBP/USD",
@@ -693,7 +697,7 @@ class ForexCurrencyStrengthEngine:
 _ENGINE: Optional[ForexCurrencyStrengthEngine] = None
 
 
-def get_forex_currency_strength_engine() -> ForexCurrencyStrengthEngine:
+def get_forex_currency_strength_engine(db=None, tenant_id=None, user_id=None, portfolio_id=None) -> ForexCurrencyStrengthEngine:
     global _ENGINE
     if _ENGINE is None:
         _ENGINE = ForexCurrencyStrengthEngine()

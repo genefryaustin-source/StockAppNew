@@ -559,10 +559,11 @@ try:
             "Earnings","Market Data","Analytics","Rankings","Indicator Builder",
             "Universe","Stock Dashboard","Intraday Charts","Portfolio",
             "Portfolio Construction","Portfolio Deployment","Market Overview",
-            "Strategy Lab","Regime Engine","Strategy Discovery","Strategy Library",
+            "Strategy Lab","Regime Engine","Strategy Discovery","Strategy Library","Signal Backtester",
             "IPO Intelligence","Pre-IPO Intelligence","Alerts","Admin",
             "AI Rankings","AI Portfolio","AI Forecast","Kronos AI Forecast","AI Scanner","AI Agent",
             "Options Flow","Options Trading","Analyst Consensus","Smart Money",
+            "Risk Layer",
             "Export / Sheets","Research Reports","Social Sentiment",
             "Team Collaboration","Crypto","Investment Committee","Multi-Agent Research",
             "Portfolio Construction OS","Autonomous PM","Fund Operations","Hedge Fund OS",
@@ -584,9 +585,10 @@ try:
                 "Portfolio","Portfolio Construction","Portfolio Deployment",
                 "Portfolio Construction & Capital Allocation",
                 "Options Flow","Options Trading", "Crypto","Forex","Alerts",
+                "Risk Layer",
             ]),
             ("🧠 Strategy", [
-                "Strategy Lab","Strategy Discovery","Strategy Library",
+                "Strategy Lab","Strategy Discovery","Strategy Library","Signal Backtester",
                 "Regime Engine","Smart Money",
                 "IPO Intelligence","Pre-IPO Intelligence",
             ]),
@@ -940,6 +942,18 @@ try:
             st.error("Strategy Lab failed to load.")
             st.exception(e)
 
+    elif page == "Signal Backtester":
+        if not check_page(user, "Signal Backtester", db):
+            require_page(user, "Signal Backtester", db)
+            st.stop()
+        try:
+            from modules.backtesting.backtest_ui import render_backtest_page
+            run_page("Signal Backtester", render_backtest_page, db, user)
+        except Exception as e:
+            safe_rollback(db)
+            st.error("Signal Backtester failed to load.")
+            st.exception(e)
+
     elif page == "IPO Intelligence":
         if not check_page(user, "IPO Intelligence", db):
             require_page(user, "IPO Intelligence", db)
@@ -1091,6 +1105,18 @@ try:
         st.divider()
 
         render_smart_money_admin(db, user)
+
+    elif page == "Risk Layer":
+        if not check_page(user, "Risk Layer", db):
+            require_page(user, "Risk Layer", db)
+            st.stop()
+        try:
+            from modules.risk_layer.risk_ui import render_risk_layer_page
+            run_page("Risk Layer", render_risk_layer_page, db, user)
+        except Exception as e:
+            safe_rollback(db)
+            st.error("Risk Layer failed to load.")
+            st.exception(e)
 
     elif page == "Export / Sheets":
         if not check_page(user, "Export / Sheets", db):

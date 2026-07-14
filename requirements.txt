@@ -12,6 +12,27 @@ torch>=2.0.0
 einops==0.8.1
 huggingface_hub==0.33.1
 safetensors==0.6.2
+# --- Advanced risk model cross-check (modules/portfolio/advanced_risk_engine.py) ---
+# NOTE: riskfolio-lib pulls in a heavy dependency chain (cvxpy, scikit-learn,
+# statsmodels, networkx, vectorbt, astropy, pybind11). Both packages are
+# optional at runtime -- the Risk Layer degrades gracefully if they aren't
+# installed -- but they're listed here since that's the intended default.
+arch>=7.2
+riskfolio-lib>=7.0.0
+# --- Real crypto exchange execution (modules/portfolio/brokers/ccxt_broker.py) ---
+ccxt>=4.5
+# --- Options Greeks (modules/options/quantlib_greeks_engine.py) ---
+QuantLib>=1.40
+# --- Signal backtesting (modules/backtesting/). Fair-code license (Apache 2.0
+# + Commons Clause): free to use, including commercially, as long as you're
+# not selling a product that IS PRIMARILY this library. ---
+vectorbt>=1.0
+# --- Risk Layer data-quality validation (modules/risk_layer/data_quality.py) ---
+pandera>=0.24
+# --- SEC EDGAR filing access (modules/research/edgar_service.py) ---
+edgartools>=5.0
+# --- On-chain tokenized asset verification (modules/tokenized_assets/onchain_verification.py) ---
+web3>=7.0
 beautifulsoup4==4.14.3
 blinker==1.9.0
 cachetools==5.5.2

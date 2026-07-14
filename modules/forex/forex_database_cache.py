@@ -10,13 +10,22 @@ from typing import Iterable, Optional
 
 from sqlalchemy import text
 
+# -----------------------------------------------------------------------------
+# Database schema initialization flag
+# -----------------------------------------------------------------------------
 
+_INITIALIZED = False
 class ForexDatabaseCache:
 
     def __init__(self, db):
         self.db=db
 
-    def ensure_tables(self)->None:
+    def ensure_tables(self):
+
+        global _INITIALIZED
+
+        if _INITIALIZED:
+            return
         self.db.execute(text("""
         CREATE TABLE IF NOT EXISTS forex_quote_cache(
             pair VARCHAR(20) PRIMARY KEY,
@@ -29,8 +38,10 @@ class ForexDatabaseCache:
         """))
         self.db.commit()
 
+        _INITIALIZED = True
+
     def save_quote(self, quote:dict)->None:
-        self.ensure_tables()
+        #self.ensure_tables()
         self.db.execute(text("""
         INSERT INTO forex_quote_cache
         (pair,mid,bid,ask,provider,updated_at)
@@ -58,7 +69,7 @@ class ForexDatabaseCache:
             self.save_quote(q)
 
     def get_quote(self,pair:str)->Optional[dict]:
-        self.ensure_tables()
+        #self.ensure_tables()
         row=self.db.execute(text("""
         SELECT *
         FROM forex_quote_cache
@@ -69,6 +80,6 @@ class ForexDatabaseCache:
         return dict(row._mapping)
 
     def clear(self)->None:
-        self.ensure_tables()
+        #self.ensure_tables()
         self.db.execute(text("DELETE FROM forex_quote_cache"))
         self.db.commit()

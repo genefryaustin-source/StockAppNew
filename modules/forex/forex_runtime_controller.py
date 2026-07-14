@@ -17,7 +17,10 @@ class ForexRuntimeController:
 
     def __init__(self, store: Optional[ForexStateStore] = None, worker_id: str = "fx-runtime-controller") -> None:
         self.store = store or ForexStateStore()
-        self.queue = ForexExecutionQueue(self.store)
+        # ForexExecutionQueue takes no arguments (in-memory deque,
+        # no persistence) - passing self.store always raised TypeError,
+        # same bug found and fixed in forex_scheduler.py.
+        self.queue = ForexExecutionQueue()
         self.governor = ForexResourceGovernor(self.store)
         self.worker_id = worker_id
 
@@ -45,10 +48,18 @@ class ForexRuntimeController:
         return result
 
     def tick(self, max_jobs: int = 5) -> Dict[str, Any]:
+        # self.queue (ForexExecutionQueue) is a plain in-memory deque of
+        # ForexExecutionJob objects with no claim()/complete()/fail()
+        # methods - those never existed. The persisted job queue this
+        # method actually needs (claim-next-pending, mark succeeded/failed)
+        # is self.store (ForexStateStore), which already has exactly that
+        # API (claim_next_job / update_job_status) and is already used a
+        # few lines below for the SKIPPED case - this just wasn't used
+        # consistently for the other two outcomes.
         completed = []
         failed = []
         for _ in range(max(1, int(max_jobs))):
-            job = self.queue.claim(self.worker_id)
+            job = self.store.claim_next_job(self.worker_id)
             if not job:
                 break
             try:
@@ -56,10 +67,10 @@ class ForexRuntimeController:
                 if result.get("status") == ForexStatus.SKIPPED.value:
                     self.store.update_job_status(job["job_id"], ForexStatus.SKIPPED.value, error=result.get("reason"))
                 else:
-                    self.queue.complete(job["job_id"], result)
+                    self.store.update_job_status(job["job_id"], ForexStatus.SUCCEEDED.value, result=result)
                 completed.append(result)
             except Exception as exc:
-                failed_job = self.queue.fail(job["job_id"], str(exc))
+                failed_job = self.store.update_job_status(job["job_id"], ForexStatus.FAILED.value, error=str(exc))
                 failed.append({"job_id": job["job_id"], "error": str(exc), "job": failed_job})
         summary = {"completed": len(completed), "failed": len(failed), "completed_jobs": completed, "failed_jobs": failed}
         self.store.record_event("runtime_tick", f"Runtime tick completed {len(completed)} job(s), {len(failed)} failure(s)", payload=summary)

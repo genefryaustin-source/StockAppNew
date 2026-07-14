@@ -12,7 +12,22 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from modules.db.core import new_db_session
+try:
+    # modules.db.core is part of the surrounding application's shared
+    # infrastructure and isn't included in this package. Callers that pass
+    # their own `db` session (the normal path everywhere else in this
+    # codebase) never hit this; only the "create my own session" fallback
+    # below needs it, so we import it lazily and fail with a clear message
+    # only if that fallback is actually reached.
+    from modules.db.core import new_db_session
+except Exception:
+    def new_db_session():
+        raise RuntimeError(
+            "No db session was provided and modules.db.core.new_db_session "
+            "is not available in this environment. Pass an explicit "
+            "`db=` session instead, or wire up modules/db/core.py from your "
+            "main application."
+        )
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()

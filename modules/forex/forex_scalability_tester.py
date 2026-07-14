@@ -82,6 +82,15 @@ def _tick(max_jobs: int = 100) -> Dict[str, Any]:
 class ForexScalabilityTester:
     """Runs increasing workload tiers and summarizes scaling behavior."""
 
+    def run(self, jobs: Optional[int] = None, **kwargs) -> Dict[str, Any]:
+        """
+        Alias expected by forex_validation_center.py's stress-test fallback
+        path (run_stress_test() -> run() if ForexStressFramework is
+        unavailable), which calls this with jobs=<n>.
+        """
+        tiers = [jobs] if jobs else None
+        return self.test_scalability(tiers=tiers)
+
     def test_scalability(self, tiers: Optional[List[int]] = None, batch_size: int = 250) -> Dict[str, Any]:
         started = time.perf_counter()
         tiers = tiers or [100, 500, 1000, 2500]

@@ -29,7 +29,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Set
 
-from sqlalchemy import text
+from sqlalchemy import text, bindparam
+import json
 
 
 def _utc_now_naive() -> datetime:
@@ -61,6 +62,24 @@ def _row_to_dict(row: Any) -> Dict[str, Any]:
     return dict(row)
 
 
+def _json_payload(value: Any) -> Optional[str]:
+    """
+    Serialize dict/list payloads to a JSON string before binding as a SQL
+    parameter. Passing a raw Python dict straight to sqlite3/psycopg2 fails
+    (sqlite3.InterfaceError: unsupported type / psycopg2 can't adapt type
+    'dict'); a JSON string works for both SQLite (TEXT column) and Postgres
+    (implicit text->jsonb assignment cast on INSERT/UPDATE).
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, default=str)
+    except Exception:
+        return str(value)
+
+
 def _naive(value: Any) -> Any:
     if value is not None and hasattr(value, "replace"):
         try:
@@ -68,6 +87,24 @@ def _naive(value: Any) -> Any:
         except Exception:
             return value
     return value
+
+
+def _dialect_name(db: Any) -> str:
+    """Best-effort detection of the SQLAlchemy dialect (postgresql/sqlite/...)."""
+    try:
+        bind = getattr(db, "bind", None)
+        if bind is None and hasattr(db, "get_bind"):
+            bind = db.get_bind()
+        if bind is not None:
+            return bind.dialect.name
+    except Exception:
+        pass
+    try:
+        return db.dialect.name
+    except Exception:
+        pass
+    return "unknown"
+
 
 
 class ExecutionOrderRepository:
@@ -102,9 +139,16 @@ class ExecutionOrderRepository:
         if self._tables_ready:
             return
 
-        self.db.execute(text("""
+        dialect = _dialect_name(self.db)
+        id_column = (
+            "id INTEGER PRIMARY KEY AUTOINCREMENT"
+            if dialect == "sqlite"
+            else "id SERIAL PRIMARY KEY"
+        )
+
+        self.db.execute(text(f"""
             CREATE TABLE IF NOT EXISTS forex_trade_orders (
-                id SERIAL PRIMARY KEY,
+                {id_column},
                 tenant_id VARCHAR(100),
                 user_id VARCHAR(100),
                 portfolio_id VARCHAR(100),
@@ -180,16 +224,38 @@ class ExecutionOrderRepository:
         if self.db is None:
             return set()
 
-        rows = self.db.execute(
-            text("""
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name = :table
-            """),
-            {"table": table},
-        ).fetchall()
+        dialect = _dialect_name(self.db)
+        columns: Set[str] = set()
 
-        columns = {str(_row_to_dict(row).get("column_name")) for row in rows}
+        try:
+            if dialect == "sqlite":
+                # information_schema doesn't exist on SQLite; PRAGMA table_info
+                # works even against an empty table (unlike introspecting via
+                # a SELECT * LIMIT 1, which returns nothing to introspect).
+                rows = self.db.execute(text(f"PRAGMA table_info({table})")).fetchall()
+                columns = {str(_row_to_dict(row).get("name")) for row in rows}
+            else:
+                rows = self.db.execute(
+                    text("""
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_name = :table
+                    """),
+                    {"table": table},
+                ).fetchall()
+                columns = {str(_row_to_dict(row).get("column_name")) for row in rows}
+        except Exception:
+            columns = set()
+
+        if not columns:
+            # Last-resort fallback: introspect an actual row if one exists.
+            try:
+                row = self.db.execute(text(f"SELECT * FROM {table} LIMIT 1")).fetchone()
+                if row is not None:
+                    columns = set(_row_to_dict(row).keys())
+            except Exception:
+                pass
+
         self._column_cache[table] = columns
         return columns
 
@@ -318,8 +384,8 @@ class ExecutionOrderRepository:
             "filled_qty": _safe_float(units),
             "remaining_qty": 0.0,
             "leverage": getattr(context, "leverage", None) or getattr(position, "leverage", None),
-            "raw_payload": getattr(context, "raw_request", None) or {},
-            "validation_payload": getattr(context, "validation", None) or {},
+            "raw_payload": _json_payload(getattr(context, "raw_request", None) or {}),
+            "validation_payload": _json_payload(getattr(context, "validation", None) or {}),
             "execution_id": getattr(context, "execution_id", None),
             "correlation_id": getattr(context, "correlation_id", None),
             "position_id": getattr(context, "position_id", None) or getattr(position, "id", None),
@@ -378,8 +444,8 @@ class ExecutionOrderRepository:
             "filled_qty": 0.0,
             "remaining_qty": _safe_float(units),
             "leverage": getattr(context, "leverage", None),
-            "raw_payload": getattr(context, "raw_request", None) or {},
-            "validation_payload": getattr(context, "validation", None) or {},
+            "raw_payload": _json_payload(getattr(context, "raw_request", None) or {}),
+            "validation_payload": _json_payload(getattr(context, "validation", None) or {}),
             "execution_id": getattr(context, "execution_id", None),
             "correlation_id": getattr(context, "correlation_id", None),
             "position_id": getattr(context, "position_id", None),
@@ -527,6 +593,28 @@ class ExecutionOrderRepository:
 
         return _row_to_dict(row) if row is not None else None
 
+    def load_pending_orders(
+        self,
+        *,
+        account_id: Optional[str] = None,
+        portfolio_id: Optional[str] = None,
+        limit: int = 250,
+    ) -> List[Dict[str, Any]]:
+        """
+        forex_pending_orders_dashboard.py calls repo.load_pending_orders()
+        directly - that method never existed (only list_orders(), which
+        needs an explicit statuses= filter), so the dashboard raised
+        AttributeError on the very first render. Pending orders can sit in
+        either PENDING (resting, not yet accepted) or ACCEPTED (accepted by
+        the broker/pipeline but not yet filled) state.
+        """
+        return self.list_orders(
+            account_id=account_id,
+            portfolio_id=portfolio_id,
+            statuses=["pending", "accepted"],
+            limit=limit,
+        )
+
     def list_orders(
         self,
         *,
@@ -551,9 +639,11 @@ class ExecutionOrderRepository:
             where_parts.append("portfolio_id = :portfolio_id")
             params["portfolio_id"] = portfolio_id
 
-        if statuses:
+        has_statuses = bool(statuses)
+
+        if has_statuses:
             normalized = [str(status).lower() for status in statuses]
-            where_parts.append("lower(status) = ANY(:statuses)")
+            where_parts.append("lower(status) IN :statuses")
             params["statuses"] = normalized
 
         where_sql = (
@@ -562,16 +652,21 @@ class ExecutionOrderRepository:
             else ""
         )
 
-        rows = self.db.execute(
-            text(f"""
-                SELECT *
-                FROM forex_trade_orders
-                {where_sql}
-                ORDER BY COALESCE(filled_at, submitted_at, created_at) DESC, id DESC
-                LIMIT :limit
-            """),
-            params,
-        ).fetchall()
+        stmt = text(f"""
+            SELECT *
+            FROM forex_trade_orders
+            {where_sql}
+            ORDER BY COALESCE(filled_at, submitted_at, created_at) DESC, id DESC
+            LIMIT :limit
+        """)
+
+        if has_statuses:
+            # `IN :statuses` + expanding=True is portable across Postgres and
+            # SQLite (the old `= ANY(:statuses)` syntax is Postgres-only and
+            # raises on SQLite).
+            stmt = stmt.bindparams(bindparam("statuses", expanding=True))
+
+        rows = self.db.execute(stmt, params).fetchall()
 
         return [_row_to_dict(row) for row in rows]
 
@@ -619,7 +714,7 @@ class ExecutionOrderRepository:
             "actual_commission": result.get("commission"),
             "actual_slippage": result.get("slippage"),
             "notes": result.get("notes"),
-            "raw_payload": result,
+            "raw_payload": _json_payload(result),
             "created_at": created,
             "filled_at": filled_at,
             "updated_at": created,

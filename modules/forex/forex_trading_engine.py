@@ -22,6 +22,11 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
+#
+# One-time schema initialization.
+#
+_INITIALIZED = False
+
 ORDER_TYPES = {"MARKET", "LIMIT", "STOP", "STOP_LIMIT", "TAKE_PROFIT", "TRAILING_STOP"}
 ORDER_SIDES = {"BUY", "SELL"}
 ORDER_STATUSES = {
@@ -184,6 +189,15 @@ class ForexRiskManager:
         self.max_pair_exposure = max_pair_exposure
         self.max_portfolio_exposure = max_portfolio_exposure
         self.max_leverage = max_leverage
+        self.risk_manager = ForexRiskManager(self.forex_portfolio_engine)
+        self.execution_engine = ForexExecutionEngine(self.forex_service)
+        self.attribution_engine = ForexTradeAttributionEngine(db)
+
+        #
+        # Tables initialized during
+        # Forex bootstrap.
+        #
+        self._tables_ready = True
 
     def validate_order(self, order: ForexOrder) -> Tuple[bool, str]:
         account = self.portfolio_engine.get_account(account_id=order.account_id)
@@ -385,6 +399,15 @@ class ForexTradingEngine:
         self.attribution_engine = ForexTradeAttributionEngine(db)
 
     def ensure_tables(self) -> None:
+
+        global _INITIALIZED
+
+        if _INITIALIZED:
+            return
+
+        if self._tables_ready:
+            return
+
         if self.db is None:
             return
 
@@ -520,6 +543,9 @@ class ForexTradingEngine:
         if hasattr(self.db, "commit"):
             self.db.commit()
 
+        self._tables_ready = True
+        _INITIALIZED = True
+
     def submit_order(
         self,
         *,
@@ -535,7 +561,7 @@ class ForexTradingEngine:
         tif: str = DEFAULT_TIF,
         use_ai: bool = True,
     ) -> ForexOrder:
-        self.ensure_tables()
+        #self.ensure_tables()
 
         normalized_pair = normalize_pair(pair)
         normalized_side = side.upper().strip()
@@ -764,7 +790,7 @@ class ForexTradingEngine:
         if self.db is None:
             return
 
-        self.ensure_tables()
+        #self.ensure_tables()
         self.db.execute(text(
             """
             INSERT INTO forex_orders (
@@ -846,7 +872,7 @@ class ForexTradingEngine:
             )
 
         if self.db is not None:
-            self.ensure_tables()
+            #self.ensure_tables()
             self.db.execute(text(
                 """
                 INSERT INTO forex_trades (
@@ -884,7 +910,7 @@ class ForexTradingEngine:
         if self.db is None:
             return
 
-        self.ensure_tables()
+        #self.ensure_tables()
         self.db.execute(text(
             """
             INSERT INTO forex_trade_executions (
@@ -919,7 +945,7 @@ class ForexTradingEngine:
         if self.db is None:
             return
 
-        self.ensure_tables()
+        #self.ensure_tables()
         self.db.execute(text(
             """
             INSERT INTO forex_trade_audit_log (

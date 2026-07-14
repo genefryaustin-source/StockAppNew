@@ -28,7 +28,8 @@ Future:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, UTC
+from datetime import datetime, timezone as _timezone
+UTC = _timezone.utc  # UTC was only added to the datetime module in Python 3.11+
 from typing import Any, Dict, List, Optional
 import math
 

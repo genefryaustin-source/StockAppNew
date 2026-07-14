@@ -2,6 +2,13 @@
 modules/forex/forex_market_depth.py
 
 FX market depth and DOM summary.
+
+Liquidity/imbalance/depth-score metrics genuinely require an L2 order-book
+feed (bid/ask size at multiple levels), which forex_order_book.py no longer
+fabricates -- it now returns only the real top-of-book quote with no size
+data. So this module honestly reports those metrics as unavailable instead
+of summing placeholder sizes into a fake liquidity/imbalance number. Only
+the real spread (and status/pair) are populated from live data.
 """
 
 from __future__ import annotations
@@ -18,19 +25,23 @@ class ForexMarketDepth:
         from modules.forex.forex_order_book import get_forex_order_book
 
         book = get_forex_order_book(db=self.db).book(pair=pair)
-        bid_liquidity = sum(row.get("size_m", 0) for row in book.get("bids", []))
-        ask_liquidity = sum(row.get("size_m", 0) for row in book.get("asks", []))
-        imbalance = (bid_liquidity - ask_liquidity) / max(bid_liquidity + ask_liquidity, 1) * 100.0
+        status = book.get("status", "NO_DATA")
 
         return {
-            "status": "READY",
-            "pair": book.get("pair"),
-            "bid_liquidity_m": round(bid_liquidity, 2),
-            "ask_liquidity_m": round(ask_liquidity, 2),
-            "liquidity_imbalance_pct": round(imbalance, 4),
-            "dominant_side": "BID" if imbalance > 5 else "ASK" if imbalance < -5 else "BALANCED",
+            "status": status,
+            "pair": book.get("pair", pair),
+            "bid_liquidity_m": None,
+            "ask_liquidity_m": None,
+            "liquidity_imbalance_pct": None,
+            "dominant_side": "UNKNOWN",
             "spread": book.get("spread"),
-            "depth_score": round(max(0, min(100, 75 + abs(imbalance) / 2)), 2),
+            "depth_score": None,
+            "error": book.get("error"),
+            "note": (
+                "Liquidity/imbalance/depth-score require an L2 order-book feed, "
+                "which isn't connected -- only the live top-of-book spread above "
+                "is real. See forex_order_book.py."
+            ),
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 

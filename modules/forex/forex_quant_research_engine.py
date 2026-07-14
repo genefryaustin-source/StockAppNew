@@ -471,6 +471,66 @@ class ForexQuantResearchEngine:
             self.persist_result(result)
         return result
 
+    def research_dashboard(
+        self,
+        snapshot: Optional[Mapping[str, Any]] = None,
+        *,
+        pairs: Optional[Sequence[str]] = None,
+        persist: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Called by 5 different consumers (forex_ai_investment_committee.py,
+        forex_decision_engine.py, forex_enterprise_reporting.py,
+        forex_institutional_command_center_v2.py,
+        forex_portfolio_optimizer_v2.py) as
+        get_forex_quant_research_engine(db=...).research_dashboard(snapshot=snapshot),
+        expecting a dict with an "alpha_research": {"ideas": [...]} shape -
+        this method never existed at all (only run_research(), which takes
+        a price-data DataFrame directly rather than a shared "snapshot"
+        dict, and returns a differently-shaped result). All 5 callers hit
+        AttributeError on the very first use.
+
+        `snapshot` here is treated the same way other engines in this
+        codebase treat a shared runtime-context dict: if it happens to
+        carry a "market_data" payload, that's used; otherwise this
+        gracefully degrades to run_research(market_data=None), which
+        already returns a well-formed NO_DATA result rather than raising -
+        same fallback pattern used by ForexVaREngine.ensure_return_series()
+        and ForexHistoryService.get_market_data().
+        """
+
+        market_data = None
+        if isinstance(snapshot, Mapping):
+            market_data = snapshot.get("market_data") or snapshot.get("price_frame")
+
+        result = self.run_research(
+            market_data,
+            pairs=pairs,
+            persist=persist,
+        )
+
+        signals = result.get("signals") or []
+        ideas = [
+            {
+                "pair": s.get("symbol"),
+                "score": s.get("quant_score"),
+                "conviction": s.get("conviction"),
+                "direction": s.get("signal"),
+                "rationale": s.get("rationale"),
+            }
+            for s in signals
+        ]
+
+        return {
+            "snapshot": result.get("snapshot"),
+            "signals": signals,
+            "data_status": result.get("data_status"),
+            "alpha_research": {
+                "ideas": ideas,
+                "data_status": result.get("data_status"),
+            },
+        }
+
     def persist_result(self, result: Mapping[str, Any]) -> None:
         if self.db is None:
             return

@@ -22,7 +22,12 @@ class ForexScheduler:
 
     def __init__(self, registry: Optional[ForexJobRegistry] = None, queue: Optional[ForexExecutionQueue] = None) -> None:
         self.registry = registry or ForexJobRegistry()
-        self.queue = queue or ForexExecutionQueue(self.registry.store)
+        # ForexExecutionQueue is a simple in-memory deque-based queue - it
+        # has never taken a "store" argument (it doesn't persist anything).
+        # This always raised TypeError on the very first ForexScheduler()
+        # construction; caught by forex_validation_engine.py's own
+        # check_scheduler() self-test, which is how this was found.
+        self.queue = queue or ForexExecutionQueue()
 
     def schedule_cycle(
         self,

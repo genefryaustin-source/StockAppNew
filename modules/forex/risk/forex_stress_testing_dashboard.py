@@ -232,498 +232,218 @@ class ForexStressTestingDashboard:
 
     def render_scenarios(self):
 
-        st.info(
+        st.subheader("Institutional Scenario Analysis")
 
-            "Scenario Analysis workspace will be completed in Build 1.2"
-
+        scenario = st.selectbox(
+            "Stress Scenario",
+            self.engine.available_scenarios(),
         )
 
-    def render_historical(self):
+        col1, col2, col3 = st.columns(3)
 
-        st.info(
+        with col1:
+            if st.button(
+                "Run Scenario",
+                use_container_width=True,
+            ):
+                st.session_state["stress_result"] = (
+                    self.engine.execute(
+                        scenario
+                    )
+                )
 
-            "Historical Crisis workspace will be completed in Build 1.3"
+        with col2:
+            if st.button(
+                "Run Complete Suite",
+                use_container_width=True,
+            ):
+                self.engine.execute_all()
 
+        with col3:
+            if st.button(
+                "Persist Results",
+                use_container_width=True,
+            ):
+                self.engine.persist_all_results()
+
+                st.success(
+                    "Stress history saved."
+                )
+
+        st.divider()
+
+        result = st.session_state.get(
+            "stress_result"
         )
 
-    def render_multifactor(self):
+        if result is None:
+            history = self.engine.latest_results()
 
-        st.info(
+            if history:
+                result = history[-1]
 
-            "Multi-Factor workspace will be completed in Build 1.4"
+                if isinstance(result, dict):
+                    result = result
+                else:
+                    result = result.to_dict()
 
+        if result is None:
+            st.info(
+                "Execute a scenario to begin."
+            )
+            return
+
+        if hasattr(result, "to_dict"):
+            result = result.to_dict()
+
+        metrics = st.columns(5)
+
+        metrics[0].metric(
+            "Portfolio Before",
+            f"${result['portfolio_before']:,.2f}",
         )
 
-    def render_runtime(self):
-
-        st.info(
-
-            "Runtime History workspace will be completed in Build 2.1"
-
+        metrics[1].metric(
+            "Portfolio After",
+            f"${result['portfolio_after']:,.2f}",
         )
 
-    def render_executive(self):
-
-        st.info(
-
-            "Executive Report workspace will be completed in Build 2.2"
-
+        metrics[2].metric(
+            "PnL",
+            f"${result['pnl']:,.2f}",
         )
 
-
-
-
-# =============================================================================
-# Singleton
-# =============================================================================
-
-_DASHBOARD = None
-
-
-def get_forex_stress_testing_dashboard(
-
-    db=None,
-
-    portfolio=None,
-
-    tenant_id=None,
-
-    user_id=None,
-
-    portfolio_id=None,
-
-):
-
-    global _DASHBOARD
-
-    if (
-
-        _DASHBOARD is None
-
-        or _DASHBOARD.db is not db
-
-        or _DASHBOARD.portfolio is not portfolio
-
-        or _DASHBOARD.tenant_id != tenant_id
-
-        or _DASHBOARD.user_id != user_id
-
-        or _DASHBOARD.portfolio_id != portfolio_id
-
-    ):
-
-        _DASHBOARD = ForexStressTestingDashboard(
-
-            db=db,
-
-            portfolio=portfolio,
-
-            tenant_id=tenant_id,
-
-            user_id=user_id,
-
-            portfolio_id=portfolio_id,
-
+        metrics[3].metric(
+            "PnL %",
+            f"{result['pnl_pct']:.2%}",
         )
 
-    return _DASHBOARD
-
-# =============================================================================
-# Public Entry Point
-# =============================================================================
-
-def render_forex_stress_testing_dashboard(
-
-    db=None,
-
-    portfolio=None,
-
-    tenant_id=None,
-
-    user_id=None,
-
-    portfolio_id=None,
-
-):
-
-    return get_forex_stress_testing_dashboard(
-
-        db=db,
-
-        portfolio=portfolio,
-
-        tenant_id=tenant_id,
-
-        user_id=user_id,
-
-        portfolio_id=portfolio_id,
-
-    ).render()
-
-# =============================================================================
-# File: modules/forex/risk/forex_stress_testing_dashboard.py
-#
-# Sprint 30
-# Phase 4C-3-3-2-4
-#
-# Build 1.2
-#
-# Continue Immediately After Build 1.1
-#
-# Scenario Analysis Workspace
-# =============================================================================
-
-# ------------------------------------------------------------------
-# Scenario Analysis
-# ------------------------------------------------------------------
-
-def render_scenarios(self):
-
-st.subheader("Institutional Scenario Analysis")
-
-scenario = st.selectbox(
-
-"Stress Scenario",
-
-self.engine.available_scenarios(),
-
-)
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-
-if st.button(
-
-"Run Scenario",
-
-use_container_width=True,
-
-):
-st.session_state["stress_result"] = (
-
-self.engine.execute(
-
-scenario
-
-)
-
-)
-
-with col2:
-
-if st.button(
-
-"Run Complete Suite",
-
-use_container_width=True,
-
-):
-self.engine.execute_all()
-
-with col3:
-
-if st.button(
-
-"Persist Results",
-
-use_container_width=True,
-
-):
-self.engine.persist_all_results()
-
-st.success(
-
-"Stress history saved."
-
-)
-
-st.divider()
-
-result = st.session_state.get(
-
-"stress_result"
-
-)
-
-if result is None:
-
-history = self.engine.latest_results()
-
-if history:
-
-result = history[-1]
-
-if isinstance(result, dict):
-
-result = result
-
-else:
-
-result = result.to_dict()
-
-if result is None:
-st.info(
-
-"Execute a scenario to begin."
-
-)
-
-return
-
-if hasattr(result, "to_dict"):
-result = result.to_dict()
-
-metrics = st.columns(5)
-
-metrics[0].metric(
-
-"Portfolio Before",
-
-f"${result['portfolio_before']:,.2f}",
-
-)
-
-metrics[1].metric(
-
-"Portfolio After",
-
-f"${result['portfolio_after']:,.2f}",
-
-)
-
-metrics[2].metric(
-
-"PnL",
-
-f"${result['pnl']:,.2f}",
-
-)
-
-metrics[3].metric(
-
-"PnL %",
-
-f"{result['pnl_pct']:.2%}",
-
-)
-
-metrics[4].metric(
-
-"Survivability",
-
-f"{result['survivability_score']:.1f}",
-
-)
-
-st.divider()
-
-tabs = st.tabs(
-
-[
-
-"Scenario",
-
-"Scenario Metadata",
-
-"Scenario Library",
-
-"Executed Results",
-
-]
-
-)
-
-# --------------------------------------------------------------
-
-with tabs[0]:
-
-st.subheader(
-
-"Scenario Result"
-
-)
-
-st.json(
-
-result
-
-)
-
-# --------------------------------------------------------------
-
-with tabs[1]:
-
-st.subheader(
-
-"Scenario Metadata"
-
-)
-
-metadata = result.get(
-
-"metadata",
-
-{},
-
-)
-
-metadata_df = pd.DataFrame(
-
-[
-
-{
-
-"Field": k,
-
-"Value": v,
-
-}
-
-for k, v in
-
-metadata.items()
-
-]
-
-)
-
-st.dataframe(
-
-metadata_df,
-
-use_container_width=True,
-
-hide_index=True,
-
-)
-
-# --------------------------------------------------------------
-
-with tabs[2]:
-
-st.subheader(
-
-"Available Scenarios"
-
-)
-
-scenario_rows = []
-
-for name in self.engine.available_scenarios():
-definition = self.engine.get_scenario(
-
-name
-
-)
-
-scenario_rows.append(
-
-{
-
-"Scenario":
-
-definition.scenario.value,
-
-"Title":
-
-definition.title,
-
-"Shock":
-
-definition.shock_pct,
-
-"Volatility":
-
-definition.volatility_multiplier,
-
-"Liquidity":
-
-definition.liquidity_haircut,
-
-}
-
-)
-
-st.dataframe(
-
-pd.DataFrame(
-
-scenario_rows
-
-),
-
-use_container_width=True,
-
-hide_index=True,
-
-)
-
-# --------------------------------------------------------------
-
-with tabs[3]:
-
-st.subheader(
-
-"Executed Scenario Results"
-
-)
-
-results = pd.DataFrame(
-
-self.engine.latest_results()
-
-)
-
-if not results.empty:
-
-st.dataframe(
-
-results,
-
-use_container_width=True,
-
-hide_index=True,
-
-)
-
-else:
-
-st.info(
-
-"No executed scenarios."
-
-)
-
-st.divider()
-
-export = pd.DataFrame(
-
-self.engine.latest_results()
-
-)
-
-st.download_button(
-
-"Download Scenario Results",
-
-data=export.to_csv(
-
-index=False,
-
-).encode(
-
-"utf-8"
-
-),
-
-file_name="forex_stress_scenarios.csv",
-
-mime="text/csv",
-
-use_container_width=True,
-
-)
+        metrics[4].metric(
+            "Survivability",
+            f"{result['survivability_score']:.1f}",
+        )
+
+        st.divider()
+
+        tabs = st.tabs(
+            [
+                "Scenario",
+                "Scenario Metadata",
+                "Scenario Library",
+                "Executed Results",
+            ]
+        )
+
+        # --------------------------------------------------------------
+
+        with tabs[0]:
+            st.subheader(
+                "Scenario Result"
+            )
+
+            st.json(
+                result
+            )
+
+        # --------------------------------------------------------------
+
+        with tabs[1]:
+            st.subheader(
+                "Scenario Metadata"
+            )
+
+            metadata = result.get(
+                "metadata",
+                {},
+            )
+
+            metadata_df = pd.DataFrame(
+                [
+                    {
+                        "Field": k,
+                        "Value": v,
+                    }
+                    for k, v in metadata.items()
+                ]
+            )
+
+            st.dataframe(
+                metadata_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        # --------------------------------------------------------------
+
+        with tabs[2]:
+            st.subheader(
+                "Available Scenarios"
+            )
+
+            scenario_rows = []
+
+            for name in self.engine.available_scenarios():
+                definition = self.engine.get_scenario(
+                    name
+                )
+
+                scenario_rows.append(
+                    {
+                        "Scenario": definition.scenario.value,
+                        "Title": definition.title,
+                        "Shock": definition.shock_pct,
+                        "Volatility": definition.volatility_multiplier,
+                        "Liquidity": definition.liquidity_haircut,
+                    }
+                )
+
+            st.dataframe(
+                pd.DataFrame(
+                    scenario_rows
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        # --------------------------------------------------------------
+
+        with tabs[3]:
+            st.subheader(
+                "Executed Scenario Results"
+            )
+
+            results = pd.DataFrame(
+                self.engine.latest_results()
+            )
+
+            if not results.empty:
+                st.dataframe(
+                    results,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info(
+                    "No executed scenarios."
+                )
+
+            st.divider()
+
+            export = pd.DataFrame(
+                self.engine.latest_results()
+            )
+
+            st.download_button(
+                "Download Scenario Results",
+                data=export.to_csv(
+                    index=False,
+                ).encode(
+                    "utf-8"
+                ),
+                file_name="forex_stress_scenarios.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
 
 
 # =============================================================================
@@ -1708,3 +1428,101 @@ use_container_width=True,
             use_container_width=True,
 
         )
+
+    def render_executive(self):
+
+        st.info(
+
+            "Executive Report workspace will be completed in Build 2.2"
+
+        )
+
+
+
+
+# =============================================================================
+# Singleton
+# =============================================================================
+
+_DASHBOARD = None
+
+
+def get_forex_stress_testing_dashboard(
+
+    db=None,
+
+    portfolio=None,
+
+    tenant_id=None,
+
+    user_id=None,
+
+    portfolio_id=None,
+
+):
+
+    global _DASHBOARD
+
+    if (
+
+        _DASHBOARD is None
+
+        or _DASHBOARD.db is not db
+
+        or _DASHBOARD.portfolio is not portfolio
+
+        or _DASHBOARD.tenant_id != tenant_id
+
+        or _DASHBOARD.user_id != user_id
+
+        or _DASHBOARD.portfolio_id != portfolio_id
+
+    ):
+
+        _DASHBOARD = ForexStressTestingDashboard(
+
+            db=db,
+
+            portfolio=portfolio,
+
+            tenant_id=tenant_id,
+
+            user_id=user_id,
+
+            portfolio_id=portfolio_id,
+
+        )
+
+    return _DASHBOARD
+
+# =============================================================================
+# Public Entry Point
+# =============================================================================
+
+def render_forex_stress_testing_dashboard(
+
+    db=None,
+
+    portfolio=None,
+
+    tenant_id=None,
+
+    user_id=None,
+
+    portfolio_id=None,
+
+):
+
+    return get_forex_stress_testing_dashboard(
+
+        db=db,
+
+        portfolio=portfolio,
+
+        tenant_id=tenant_id,
+
+        user_id=user_id,
+
+        portfolio_id=portfolio_id,
+
+    ).render()

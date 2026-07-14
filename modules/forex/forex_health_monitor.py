@@ -15,6 +15,10 @@ class ForexHealthMonitor:
         self.db = db
         self.user = user
 
+    def run_all(self, **kwargs) -> Dict[str, Any]:
+        """Alias for forex_validation_center.py's generic run_all() dispatch."""
+        return self.snapshot()
+
     def snapshot(self) -> Dict[str, Any]:
         health: Dict[str, Any] = {
             "status": "healthy",

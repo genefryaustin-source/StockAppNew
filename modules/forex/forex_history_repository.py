@@ -44,7 +44,16 @@ def _to_naive_datetime(value: Any) -> Optional[datetime]:
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+        # pandas.Timestamp is a datetime subclass but sqlite3's parameter
+        # binder only accepts the exact builtin type, not subclasses -
+        # coerce down to a plain datetime.datetime either way.
+        naive = value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+        if type(naive) is not datetime:
+            naive = datetime(
+                naive.year, naive.month, naive.day,
+                naive.hour, naive.minute, naive.second, naive.microsecond,
+            )
+        return naive
     if isinstance(value, date):
         return datetime(value.year, value.month, value.day)
     parsed = pd.to_datetime(value, errors="coerce", utc=True)
@@ -64,7 +73,7 @@ def _safe_float(value: Any) -> Optional[float]:
     except Exception:
         return None
 
-
+_INITIALIZED = False
 class ForexHistoryRepository:
     def __init__(
         self,
@@ -80,6 +89,11 @@ class ForexHistoryRepository:
         self.portfolio_id = portfolio_id
 
     def ensure_tables(self):
+
+        global _INITIALIZED
+
+        if _INITIALIZED:
+            return
 
 
         if self.db is None:
@@ -151,6 +165,7 @@ class ForexHistoryRepository:
             ON {REFRESH_LOG_TABLE} (tenant_id, completed_at DESC)
         """))
         self.db.commit()
+        _INITIALIZED = True
 
     def normalize_history_frame(
         self,
@@ -234,7 +249,7 @@ class ForexHistoryRepository:
     ) -> int:
         if self.db is None:
             return 0
-        self.ensure_tables()
+        #self.ensure_tables()
         df = self.normalize_history_frame(data, provider=provider, interval=interval)
         if df.empty:
             return 0
@@ -272,6 +287,16 @@ class ForexHistoryRepository:
         """)
 
         for row in df.to_dict("records"):
+            asof_value = row.get("asof")
+            if asof_value is not None and hasattr(asof_value, "to_pydatetime"):
+                # DataFrame column construction can re-infer datetime64
+                # dtype even after _to_naive_datetime() normalized the
+                # values, which hands back pandas.Timestamp objects here -
+                # a datetime subclass sqlite3's binder rejects. Force it
+                # back down to a plain datetime.datetime.
+                asof_value = asof_value.to_pydatetime()
+                if getattr(asof_value, "tzinfo", None) is not None:
+                    asof_value = asof_value.astimezone(timezone.utc).replace(tzinfo=None)
             params = {
                 "id": str(uuid4()),
                 "tenant_id": str(self.tenant_id),
@@ -281,7 +306,7 @@ class ForexHistoryRepository:
                 "pair": row.get("pair"),
                 "base_currency": row.get("base_currency"),
                 "quote_currency": row.get("quote_currency"),
-                "asof": row.get("asof"),
+                "asof": asof_value,
                 "interval": row.get("interval") or interval,
                 "open": row.get("open"),
                 "high": row.get("high"),
@@ -311,7 +336,7 @@ class ForexHistoryRepository:
     ) -> pd.DataFrame:
         if self.db is None:
             return pd.DataFrame()
-        self.ensure_tables()
+        #self.ensure_tables()
         clauses = ["tenant_id = :tenant_id", "interval = :interval"]
         params: dict[str, Any] = {"tenant_id": str(self.tenant_id), "interval": interval, "limit": int(limit)}
         if pairs:
@@ -343,7 +368,7 @@ class ForexHistoryRepository:
     def latest_asof(self, pair: str, *, interval: str = "1day") -> Optional[datetime]:
         if self.db is None:
             return None
-        self.ensure_tables()
+        #self.ensure_tables()
         row = self.db.execute(text(f"""
             SELECT MAX(asof) AS latest
             FROM {PRICE_HISTORY_TABLE}
@@ -360,7 +385,7 @@ class ForexHistoryRepository:
     def coverage(self) -> list[dict[str, Any]]:
         if self.db is None:
             return []
-        self.ensure_tables()
+        #self.ensure_tables()
         rows = self.db.execute(text(f"""
             SELECT
                 symbol,
@@ -393,7 +418,7 @@ class ForexHistoryRepository:
     ) -> None:
         if self.db is None:
             return
-        self.ensure_tables()
+        #self.ensure_tables()
         p = normalize_pair(pair) if pair else None
         self.db.execute(text(f"""
             INSERT INTO {REFRESH_LOG_TABLE} (

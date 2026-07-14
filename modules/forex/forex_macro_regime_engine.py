@@ -83,7 +83,7 @@ class ForexMacroRegimeEngine:
 
 _ENGINE=None
 
-def get_forex_macro_regime_engine():
+def get_forex_macro_regime_engine(db=None, tenant_id=None, user_id=None, portfolio_id=None):
     global _ENGINE
     if _ENGINE is None:
         _ENGINE=ForexMacroRegimeEngine()

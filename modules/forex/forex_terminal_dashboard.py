@@ -184,6 +184,17 @@ def _normalize_snapshot(snapshot: Dict[str, Any], api=None) -> Dict[str, Any]:
     else:
         market_regime = {}
 
+    # If the snapshot didn't carry a usable regime payload, compute one live
+    # from the macro regime engine rather than defaulting to a fixed value.
+    if not isinstance(market_regime, dict) or not (market_regime.get("macro_regime") or market_regime.get("market_regime") or market_regime.get("regime") or market_regime.get("regime_score") or market_regime.get("macro_score") or market_regime.get("score")):
+        try:
+            from modules.forex.forex_macro_regime_engine import get_forex_macro_regime_engine
+            live_regime = get_forex_macro_regime_engine().analyze()
+            if isinstance(live_regime, dict):
+                market_regime = live_regime
+        except Exception:
+            pass
+
     strength_rows = _normalize_currency_strength(snapshot, market_overview)
     provider_rows = _normalize_provider_health(snapshot)
     recommendations = _normalize_recommendations(snapshot)
@@ -194,14 +205,17 @@ def _normalize_snapshot(snapshot: Dict[str, Any], api=None) -> Dict[str, Any]:
     ai = _normalize_ai(snapshot)
 
     regime, macro_score = _regime_and_score(market_regime)
-    strongest = strength_rows[0]["currency"] if strength_rows else "CHF"
-    weakest = sorted(strength_rows, key=lambda r: _safe_float(r.get("score")))[0]["currency"] if strength_rows else "AUD"
-    ai_conf = max([_safe_float(r.get("confidence")) for r in recommendations] + [_safe_float(ai.get("confidence"), 91)])
+    strongest = strength_rows[0]["currency"] if strength_rows else "N/A"
+    weakest = sorted(strength_rows, key=lambda r: _safe_float(r.get("score")))[0]["currency"] if strength_rows else "N/A"
+    conf_candidates = [_safe_float(r.get("confidence")) for r in recommendations if r.get("confidence") not in (None, "-")]
+    if ai.get("confidence") not in (None, "-"):
+        conf_candidates.append(_safe_float(ai.get("confidence")))
+    ai_conf = max(conf_candidates) if conf_candidates else 0.0
 
-    open_positions = _safe_int(portfolio.get("open_positions")) or _safe_int(portfolio.get("position_count")) or len(positions) or 12
-    daily_pnl = _safe_float(portfolio.get("daily_pnl") or portfolio.get("unrealized_pnl") or portfolio.get("pnl") or 2842.35)
-    daily_pnl_pct = _safe_float(portfolio.get("daily_pnl_pct") or portfolio.get("pnl_pct") or 0.78)
-    equity = _safe_float(portfolio.get("equity") or portfolio.get("portfolio_value") or portfolio.get("total_value") or 368452.17)
+    open_positions = _safe_int(portfolio.get("open_positions")) or _safe_int(portfolio.get("position_count")) or len(positions)
+    daily_pnl = _safe_float(portfolio.get("daily_pnl") or portfolio.get("unrealized_pnl") or portfolio.get("pnl"))
+    daily_pnl_pct = _safe_float(portfolio.get("daily_pnl_pct") or portfolio.get("pnl_pct"))
+    equity = _safe_float(portfolio.get("equity") or portfolio.get("portfolio_value") or portfolio.get("total_value"))
 
     return {
         "generated_at": snapshot.get("generated_at") or datetime.now(timezone.utc).isoformat(),
@@ -223,8 +237,8 @@ def _normalize_snapshot(snapshot: Dict[str, Any], api=None) -> Dict[str, Any]:
         "orders": orders,
         "journal": journal,
         "ai": ai,
-        "economic_calendar": _fallback_calendar(),
-        "central_bank_events": _fallback_central_banks(),
+        "economic_calendar": _live_calendar(),
+        "central_bank_events": _live_central_banks(),
         "alerts": _build_alerts(recommendations),
         "market_overview": market_overview if isinstance(market_overview, dict) else {},
         "raw_snapshot": snapshot,
@@ -232,15 +246,20 @@ def _normalize_snapshot(snapshot: Dict[str, Any], api=None) -> Dict[str, Any]:
 
 
 def _regime_and_score(data: Any) -> Tuple[str, float]:
+    """
+    Reads a real regime payload (from forex_macro_regime_engine or an
+    equivalent live source). Never fabricates a "RISK_OFF"/78 placeholder --
+    if no genuine regime value is present, this honestly reports "UNKNOWN"/0.
+    """
     if isinstance(data, dict):
-        regime = data.get("macro_regime") or data.get("market_regime") or data.get("regime") or data.get("risk_regime") or "RISK_OFF"
-        score = data.get("macro_score") or data.get("score") or data.get("confidence") or data.get("regime_score") or 78
-        if str(regime).upper() in {"ERROR", "WARNING", "READY", "UNKNOWN"}:
-            regime = "RISK_OFF"
-        return str(regime), _safe_float(score, 78)
-    if isinstance(data, str):
-        return data, 78
-    return "RISK_OFF", 78
+        regime = data.get("macro_regime") or data.get("market_regime") or data.get("regime") or data.get("risk_regime")
+        score = data.get("macro_score") or data.get("score") or data.get("confidence") or data.get("regime_score")
+        if not regime or str(regime).upper() in {"ERROR", "WARNING", "READY", "UNKNOWN"}:
+            regime = "UNKNOWN"
+        return str(regime), _safe_float(score, 0.0)
+    if isinstance(data, str) and data:
+        return data, 0.0
+    return "UNKNOWN", 0.0
 
 
 def _normalize_currency_strength(snapshot: Dict[str, Any], market_overview: Any) -> List[Dict[str, Any]]:
@@ -278,24 +297,49 @@ def _normalize_currency_strength(snapshot: Dict[str, Any], market_overview: Any)
         if strongest and not any(r.get("currency") == str(strongest).upper() for r in rows):
             rows.append({"currency": str(strongest).upper(), "score": 100, "trend": "UP"})
         if weakest and not any(r.get("currency") == str(weakest).upper() for r in rows):
-            rows.append({"currency": str(weakest).upper(), "score": 42, "trend": "DOWN"})
+            rows.append({"currency": str(weakest).upper(), "score": 0, "trend": "DOWN"})
+
+    rows = [r for r in rows if r.get("currency")]
+
+    # No usable rows in the snapshot -- compute currency strength live
+    # instead of falling back to a fixed CHF/USD/JPY... table.
+    if not rows:
+        try:
+            from modules.forex.forex_currency_strength_engine import get_forex_currency_strength_engine
+            engine = get_forex_currency_strength_engine()
+            if hasattr(engine, "command_center_payload"):
+                live = engine.command_center_payload()
+            elif hasattr(engine, "scan_currencies"):
+                live = engine.scan_currencies()
+            elif hasattr(engine, "analyze"):
+                live = engine.analyze()
+            else:
+                live = {}
+            live_candidates = None
+            if isinstance(live, dict):
+                live_candidates = live.get("currency_strength") or live.get("strength") or live.get("rankings") or live.get("currencies") or live.get("scores")
+            if isinstance(live_candidates, dict):
+                for ccy, item in live_candidates.items():
+                    if isinstance(item, dict):
+                        score = item.get("strength_score") or item.get("normalized_score") or item.get("score") or item.get("value")
+                        trend = item.get("trend") or item.get("direction") or ""
+                    else:
+                        score = item
+                        trend = "UP" if _safe_float(score) >= 60 else "DOWN"
+                    rows.append({"currency": str(ccy).upper(), "score": _safe_float(score), "trend": trend})
+            elif isinstance(live_candidates, list):
+                for item in live_candidates:
+                    if not isinstance(item, dict):
+                        continue
+                    ccy = item.get("currency") or item.get("code") or item.get("symbol")
+                    score = item.get("strength_score") or item.get("normalized_score") or item.get("score") or item.get("value")
+                    rows.append({"currency": str(ccy or "").upper(), "score": _safe_float(score), "trend": item.get("trend") or item.get("direction") or ""})
+        except Exception:
+            pass
 
     rows = [r for r in rows if r.get("currency")]
     rows.sort(key=lambda r: _safe_float(r.get("score")), reverse=True)
-    return rows[:10] or _fallback_currency_strength()
-
-
-def _fallback_currency_strength() -> List[Dict[str, Any]]:
-    return [
-        {"currency": "CHF", "score": 100, "trend": "UP"},
-        {"currency": "USD", "score": 88, "trend": "UP"},
-        {"currency": "JPY", "score": 74, "trend": "UP"},
-        {"currency": "EUR", "score": 66, "trend": "DOWN"},
-        {"currency": "GBP", "score": 61, "trend": "DOWN"},
-        {"currency": "CAD", "score": 58, "trend": "FLAT"},
-        {"currency": "NZD", "score": 47, "trend": "DOWN"},
-        {"currency": "AUD", "score": 42, "trend": "DOWN"},
-    ]
+    return rows[:10]
 
 
 def _normalize_provider_health(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -318,13 +362,31 @@ def _normalize_provider_health(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]
                     "Latency": item.get("latency_ms") or item.get("latency") or "—",
                     "Success": item.get("success_rate") or item.get("success") or "—",
                 })
-    return rows[:8] or [
-        {"Provider": "Polygon", "Status": "Healthy", "Latency": "112 ms", "Success": "99.8%"},
-        {"Provider": "Finnhub", "Status": "Healthy", "Latency": "178 ms", "Success": "99.4%"},
-        {"Provider": "Alpha Vantage", "Status": "Degraded", "Latency": "512 ms", "Success": "95.1%"},
-        {"Provider": "TwelveData", "Status": "Healthy", "Latency": "231 ms", "Success": "98.7%"},
-        {"Provider": "Yahoo Finance", "Status": "Rate Limited", "Latency": "—", "Success": "61.2%"},
-    ]
+
+    # Nothing in the snapshot -- query the live provider health monitor
+    # directly instead of showing a static Polygon/Finnhub/... table.
+    if not rows:
+        try:
+            from modules.forex.forex_provider_health import get_forex_provider_health
+            live = get_forex_provider_health().summary()
+            live_source = live
+            if isinstance(live, dict):
+                live_source = live.get("providers") or live.get("provider_health") or live.get("summary") or live
+                if isinstance(live_source, dict):
+                    live_source = [{"provider": k, **v} if isinstance(v, dict) else {"provider": k, "status": v} for k, v in live_source.items()]
+            if isinstance(live_source, list):
+                for item in live_source:
+                    if isinstance(item, dict):
+                        rows.append({
+                            "Provider": item.get("provider") or item.get("name") or "-",
+                            "Status": item.get("status") or item.get("health") or "UNKNOWN",
+                            "Latency": item.get("latency_ms") or item.get("latency") or "—",
+                            "Success": item.get("success_rate") or item.get("success") or "—",
+                        })
+        except Exception:
+            pass
+
+    return rows[:8]
 
 
 def _normalize_recommendations(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -345,15 +407,16 @@ def _normalize_recommendations(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]
     )
     if isinstance(candidates, dict):
         candidates = candidates.get("signals") or candidates.get("recommendations") or []
-    rows: List[Dict[str, Any]] = []
-    if isinstance(candidates, list):
-        for item in candidates:
+
+    def _shape(items: List[Any]) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for item in items:
             if not isinstance(item, dict):
                 continue
             pair = _normalize_pair(item.get("pair") or item.get("symbol") or "EUR/USD")
             rec = str(item.get("recommendation") or item.get("direction") or item.get("signal") or "WATCH").upper()
             side = "BUY" if any(x in rec for x in ["BUY", "LONG", "BULL"]) else "SELL" if any(x in rec for x in ["SELL", "SHORT", "BEAR"]) else "WATCH"
-            rows.append({
+            out.append({
                 "pair": pair,
                 "side": side,
                 "recommendation": rec,
@@ -364,12 +427,43 @@ def _normalize_recommendations(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]
                 "bias": item.get("bias") or item.get("institutional_bias") or side,
                 "risk_reward": item.get("risk_reward") or "-",
             })
-    return rows[:8] or [
-        {"pair": "EUR/USD", "side": "BUY", "recommendation": "BUY", "confidence": 92, "entry": "1.0718", "stop": "1.0680", "target": "1.0780", "bias": "Bullish", "risk_reward": 2.0},
-        {"pair": "USD/JPY", "side": "BUY", "recommendation": "BUY", "confidence": 88, "entry": "158.42", "stop": "156.80", "target": "160.20", "bias": "Bullish", "risk_reward": 1.8},
-        {"pair": "AUD/USD", "side": "SELL", "recommendation": "SELL", "confidence": 84, "entry": "0.6641", "stop": "0.6700", "target": "0.6560", "bias": "Bearish", "risk_reward": 1.9},
-        {"pair": "GBP/USD", "side": "BUY", "recommendation": "BUY", "confidence": 78, "entry": "1.2645", "stop": "1.2580", "target": "1.2720", "bias": "Bullish", "risk_reward": 1.6},
-    ]
+        return out
+
+    rows: List[Dict[str, Any]] = _shape(candidates) if isinstance(candidates, list) else []
+
+    # Nothing usable in the snapshot -- pull live signals from the
+    # institutional scanner / alpha model instead of a fixed 3-pair table.
+    if not rows:
+        try:
+            from modules.forex.forex_institutional_scanner import get_forex_institutional_scanner
+            scan = get_forex_institutional_scanner().scan()
+            live_recs = scan.get("top_institutional_trades") or scan.get("institutional_flow") or [] if isinstance(scan, dict) else []
+            rows.extend(_shape(live_recs))
+        except Exception:
+            pass
+    if not rows:
+        try:
+            from modules.forex.forex_alpha_model import get_forex_alpha_model
+            alpha = get_forex_alpha_model()
+            if hasattr(alpha, "command_center_payload"):
+                alpha_data = alpha.command_center_payload()
+            elif hasattr(alpha, "run_alpha_model"):
+                alpha_data = alpha.run_alpha_model()
+            else:
+                alpha_data = {}
+            live_signals = alpha_data.get("signals", []) if isinstance(alpha_data, dict) else []
+            rows.extend(_shape(live_signals))
+        except Exception:
+            pass
+
+    seen = set()
+    out = []
+    for row in rows:
+        key = (row["pair"], row["side"])
+        if key not in seen:
+            out.append(row)
+            seen.add(key)
+    return out[:8]
 
 
 def _normalize_portfolio(snapshot: Dict[str, Any], api=None) -> Dict[str, Any]:
@@ -380,7 +474,30 @@ def _normalize_portfolio(snapshot: Dict[str, Any], api=None) -> Dict[str, Any]:
         except Exception:
             data = {}
     if isinstance(data, dict) and isinstance(data.get("summary"), dict):
-        return data.get("summary", {})
+        data = data.get("summary", {})
+    data = data if isinstance(data, dict) else {}
+
+    # Still nothing -- go straight to the trading desk / portfolio manager
+    # for a real portfolio snapshot rather than leaving every metric at its
+    # (fabricated-looking) default.
+    if not data:
+        try:
+            from modules.forex.forex_trading_desk import get_forex_trading_desk
+            desk = get_forex_trading_desk()
+            desk_data = desk.dashboard()
+            if isinstance(desk_data, dict) and desk_data.get("portfolio"):
+                data = desk_data.get("portfolio") or {}
+        except Exception:
+            pass
+    if not data:
+        try:
+            from modules.forex.forex_portfolio_manager import get_forex_portfolio_manager
+            pm = get_forex_portfolio_manager()
+            live_portfolio = pm.portfolio_summary()
+            if isinstance(live_portfolio, dict):
+                data = live_portfolio
+        except Exception:
+            pass
     return data if isinstance(data, dict) else {}
 
 
@@ -388,13 +505,8 @@ def _normalize_positions(snapshot: Dict[str, Any], portfolio: Dict[str, Any]) ->
     rows = snapshot.get("positions") or snapshot.get("open_positions") or portfolio.get("positions") or portfolio.get("position_rows") or []
     if isinstance(rows, dict):
         rows = list(rows.values())
-    if not isinstance(rows, list) or not rows:
-        return [
-            {"Symbol": "EUR/USD", "Side": "Buy", "Size": 1.00, "Entry": 1.06782, "Current": 1.07182, "P/L": "+400.00", "P/L %": "+0.37%"},
-            {"Symbol": "USD/JPY", "Side": "Buy", "Size": 0.75, "Entry": 156.240, "Current": 158.420, "P/L": "+1,032.56", "P/L %": "+1.40%"},
-            {"Symbol": "GBP/USD", "Side": "Buy", "Size": 0.60, "Entry": 1.26145, "Current": 1.26305, "P/L": "+96.00", "P/L %": "+0.13%"},
-            {"Symbol": "AUD/USD", "Side": "Sell", "Size": 1.00, "Entry": 0.66680, "Current": 0.66410, "P/L": "+270.00", "P/L %": "+0.40%"},
-        ]
+    if not isinstance(rows, list):
+        rows = []
     normalized = []
     for item in rows:
         if isinstance(item, dict):
@@ -407,6 +519,9 @@ def _normalize_positions(snapshot: Dict[str, Any], portfolio: Dict[str, Any]) ->
                 "P/L": item.get("p_l") or item.get("pnl") or item.get("unrealized_pnl") or "-",
                 "P/L %": item.get("p_l_pct") or item.get("pnl_pct") or "-",
             })
+    # No live positions -- an empty table honestly reflects "no open
+    # positions / no data" rather than showing invented EUR/USD, USD/JPY...
+    # sample trades.
     return normalized
 
 
@@ -427,32 +542,85 @@ def _normalize_journal(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _normalize_ai(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     ai = snapshot.get("ai_briefing") or snapshot.get("ai") or snapshot.get("terminal", {}).get("ai_briefing") or {}
+    if isinstance(ai, dict) and ai:
+        return ai
+    try:
+        from modules.forex.forex_ai_assistant import get_forex_ai_assistant
+        live_ai = get_forex_ai_assistant().daily_briefing()
+        if isinstance(live_ai, dict):
+            return live_ai
+    except Exception:
+        pass
     return ai if isinstance(ai, dict) else {}
 
 
-def _fallback_calendar() -> List[Dict[str, Any]]:
-    return [
-        {"Time": "08:30", "Currency": "USD", "Event": "Core PCE Price Index", "Actual": "-", "Forecast": "2.8%"},
-        {"Time": "08:30", "Currency": "USD", "Event": "Durable Goods Orders", "Actual": "-", "Forecast": "0.3%"},
-        {"Time": "14:00", "Currency": "EUR", "Event": "ECB President Speaks", "Actual": "", "Forecast": ""},
-        {"Time": "15:45", "Currency": "USD", "Event": "Chicago PMI", "Actual": "-", "Forecast": "42.3"},
-    ]
+def _live_calendar() -> List[Dict[str, Any]]:
+    """
+    Real USD economic-release schedule via forex_macro_calendar_engine
+    (FRED-backed). Returns an empty list -- rendered as "No rows
+    available." -- rather than a fixed CPI/PCE/PMI table when FRED isn't
+    configured or reachable.
+    """
+    try:
+        from modules.forex.forex_macro_calendar_engine import get_forex_macro_calendar_engine
+        data = get_forex_macro_calendar_engine().calendar()
+    except Exception:
+        return []
+    events = data.get("events") if isinstance(data, dict) else None
+    if not isinstance(events, list):
+        return []
+    rows = []
+    for item in events:
+        if not isinstance(item, dict):
+            continue
+        rows.append({
+            "Time": item.get("time") or item.get("date") or "-",
+            "Currency": item.get("currency") or item.get("ccy") or "-",
+            "Event": item.get("event") or item.get("title") or item.get("name") or "-",
+            "Actual": item.get("actual", "-"),
+            "Forecast": item.get("forecast", "-"),
+        })
+    return rows[:8]
 
 
-def _fallback_central_banks() -> List[Dict[str, Any]]:
-    return [
-        {"Date": "Jul 01", "Currency": "AUD", "Event": "RBA Interest Rate Decision", "Impact": "High"},
-        {"Date": "Jul 09", "Currency": "USD", "Event": "FOMC Meeting Minutes", "Impact": "High"},
-        {"Date": "Jul 10", "Currency": "EUR", "Event": "ECB Interest Rate Decision", "Impact": "High"},
-        {"Date": "Jul 17", "Currency": "JPY", "Event": "BOJ Interest Rate Decision", "Impact": "High"},
-    ]
+def _live_central_banks() -> List[Dict[str, Any]]:
+    """
+    Real central bank policy-rate snapshot via forex_central_bank_engine
+    (FRED-backed). Empty list when FRED isn't configured/reachable instead
+    of a fixed RBA/FOMC/ECB/BOJ table.
+    """
+    try:
+        from modules.forex.forex_central_bank_engine import get_forex_central_bank_engine
+        data = get_forex_central_bank_engine().analyze()
+    except Exception:
+        return []
+    banks = data.get("central_banks") if isinstance(data, dict) else None
+    if not isinstance(banks, list):
+        return []
+    rows = []
+    for item in banks:
+        if not isinstance(item, dict) or item.get("error"):
+            continue
+        rate = item.get("policy_rate")
+        rows.append({
+            "Date": item.get("policy_rate_asof", "-"),
+            "Currency": item.get("currency", "-"),
+            "Event": f"{item.get('central_bank', '-')} Policy Rate: {rate:.2f}%" if isinstance(rate, (int, float)) else f"{item.get('central_bank', '-')} Policy Rate: unavailable",
+            "Impact": "High",
+        })
+    return rows[:8]
 
 
 def _build_alerts(recommendations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Alerts are derived only from real recommendations produced this
+    session. An empty list (rendered as "No rows available.") is returned
+    when there are none, instead of a fabricated EUR/USD price alert.
+    """
     alerts = []
     for rec in recommendations[:3]:
         alerts.append({"Time": datetime.now(timezone.utc).strftime("%H:%M"), "Alert": f"{rec.get('pair')} {rec.get('side')} setup confidence {_safe_float(rec.get('confidence')):.0f}%", "Severity": "High" if _safe_float(rec.get("confidence")) >= 85 else "Medium"})
-    return alerts or [{"Time": "23:57", "Alert": "EUR/USD price above 1.0710", "Severity": "Medium"}]
+    return alerts
 
 
 # ----------------------------- UI helpers -----------------------------
@@ -608,8 +776,8 @@ def _render_institutional_workstation(api, data: Dict[str, Any], db=None) -> Non
         with c_chart:
             st.markdown('<div class="fx-panel">', unsafe_allow_html=True)
             _section("Live Chart", pair)
-            fig = _demo_chart(pair)
-            st.plotly_chart(fig, use_container_width=True) if fig is not None else st.info("Plotly is unavailable.")
+            fig, chart_error = _price_chart(pair)
+            st.plotly_chart(fig, use_container_width=True) if fig is not None else st.info(chart_error or "No live chart data available.")
             st.markdown("</div>", unsafe_allow_html=True)
 
         with c_book:
@@ -759,13 +927,34 @@ def _render_left_panel(data: Dict[str, Any]) -> None:
     st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _section("Provider Health", "routing"); _render_table(data["provider_health"], height=185); st.markdown("</div>", unsafe_allow_html=True)
 
 
-def _demo_chart(pair: str = "EUR/USD"):
+def _price_chart(pair: str = "EUR/USD"):
+    """
+    Real intraday candlestick chart built from live historical OHLC data
+    (forex_history_service -> provider router), replacing the previous
+    synthetic random-walk generator. Returns (fig, error_message); error is
+    None on success.
+    """
     if go is None:
-        return None
-    x = list(range(90)); price = 1.071; close=[]; high=[]; low=[]; open_=[]
-    for i in x:
-        o = price; price += ((i % 8) - 3.5) * 0.00016 + (0.00021 if 18 < i < 55 else -0.00006); c = price
-        open_.append(o); close.append(c); high.append(max(o,c)+0.00035); low.append(min(o,c)-0.00031)
+        return None, "Plotly is unavailable."
+
+    try:
+        from modules.forex.forex_history_service import get_forex_history_service
+        payload = get_forex_history_service().fetch_from_router(pair, interval="1h")
+    except Exception as exc:
+        return None, f"Live chart unavailable: {exc}"
+
+    rows = payload.get("rows") if isinstance(payload, dict) else None
+    if not rows:
+        error = payload.get("error") if isinstance(payload, dict) else None
+        return None, error or f"No live history returned for {pair} yet."
+
+    x = [row.get("asof") for row in rows]
+    open_ = [row.get("open") for row in rows]
+    high = [row.get("high") for row in rows]
+    low = [row.get("low") for row in rows]
+    close = [row.get("close") for row in rows]
+    volume = [row.get("volume") for row in rows]
+
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=x, open=open_, high=high, low=low, close=close, name=pair))
     try:
@@ -775,9 +964,10 @@ def _demo_chart(pair: str = "EUR/USD"):
         add_signal_overlay(fig, sig_df, row=None, col=None, show_ribbon=False)
     except Exception:
         pass
-    fig.add_trace(go.Bar(x=x, y=[abs((i % 11)-5)*12+45 for i in x], name="Volume", yaxis="y2", opacity=0.22))
-    fig.update_layout(template="plotly_dark", height=430, margin=dict(l=5,r=5,t=28,b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", title=f"{pair} · 1H · Institutional Flow", xaxis_rangeslider_visible=False, yaxis=dict(title="Price"), yaxis2=dict(overlaying="y", side="right", visible=False), legend=dict(orientation="h"))
-    return fig
+    if any(v for v in volume if v):
+        fig.add_trace(go.Bar(x=x, y=volume, name="Volume", yaxis="y2", opacity=0.22))
+    fig.update_layout(template="plotly_dark", height=430, margin=dict(l=5,r=5,t=28,b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", title=f"{pair} · Live History", xaxis_rangeslider_visible=False, yaxis=dict(title="Price"), yaxis2=dict(overlaying="y", side="right", visible=False), legend=dict(orientation="h"))
+    return fig, None
 
 
 def _render_order_book(pair: str) -> None:
@@ -923,7 +1113,7 @@ def _render_trading_desk(api, data: Dict[str, Any]) -> None:
         pair = st.selectbox("Active Pair", DEFAULT_PAIRS, index=0, key="fx_active_pair")
         top_left, top_right = st.columns([2.1, 1])
         with top_left:
-            st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _section("Live Chart", pair); fig=_demo_chart(pair); st.plotly_chart(fig, use_container_width=True) if fig is not None else st.info("Plotly is unavailable."); st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _section("Live Chart", pair); fig, chart_error = _price_chart(pair); st.plotly_chart(fig, use_container_width=True) if fig is not None else st.info(chart_error or "No live chart data available."); st.markdown("</div>", unsafe_allow_html=True)
         with top_right:
             st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _render_order_book(pair); st.markdown("</div>", unsafe_allow_html=True)
             st.markdown('<div class="fx-panel">', unsafe_allow_html=True); _render_trade_ticket(api, pair); st.markdown("</div>", unsafe_allow_html=True)

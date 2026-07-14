@@ -957,27 +957,28 @@ class ForexProviderRouter:
                 if is_auth_error(msg):
                     continue
 
-        payload = {
-            "status": "OK",
+        # Reaching here means every provider in the failover chain was
+        # tried and none returned usable rows (or none were configured/
+        # reachable at all) - the loop above already returns early inside
+        # `if rows:` on the first success. This tail previously built a
+        # fake "status": "OK" response by reading `response`/`provider`/
+        # `rows` left over from the *last* loop iteration - stale at best,
+        # and flat-out unbound (UnboundLocalError) whenever `ranked` was
+        # empty or the last provider raised before assigning `response`.
+        # A real failure needs to be reported as one, not cached as a
+        # false "OK" with garbage data.
+        return {
+            "status": "ERROR",
             "pair": pair,
-            "provider": response.get("provider") or provider.provider,
+            "provider": None,
             "interval": interval,
             "start_date": str(start_date),
             "end_date": str(end_date),
-            "rows": rows,
-            "raw": response.get("raw") or {},
+            "rows": [],
+            "raw": {},
+            "error": "; ".join(errors) if errors else "No Forex history provider returned usable rows",
             "failover_errors": list(errors),
         }
-
-        self._history_cache.put(
-            pair,
-            payload,
-            interval=interval,
-            start_date=start_date,
-            end_date=end_date,
-        )
-
-        return payload
 
     def get_daily_history(
         self,

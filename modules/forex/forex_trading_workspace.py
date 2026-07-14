@@ -31,6 +31,12 @@ class ForexTradingWorkspace:
         from modules.forex.forex_phase12_production_services import get_forex_phase12_production_services
 
         pair = kwargs.get("pair") or "EUR/USD"
+        # Several calls below pass `pair=pair` explicitly alongside `**kwargs`.
+        # If "pair" is left in kwargs, Python raises "got multiple values for
+        # keyword argument 'pair'" the moment a caller includes pair= in the
+        # kwargs it hands to workspace_snapshot(). Strip it once here so every
+        # downstream call is safe.
+        kwargs = {k: v for k, v in kwargs.items() if k != "pair"}
 
         workstation = get_forex_institutional_workstation(db=self.db)
         state = workstation.terminal_state(**kwargs)

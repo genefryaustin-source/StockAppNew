@@ -295,8 +295,11 @@ def _extract_snapshot(
     """
     Pull a best-effort institutional snapshot from the existing backend.
 
-    The function is deliberately tolerant: when a module is unavailable, it
-    returns a placeholder section instead of breaking the UI.
+    This function only ever returns data that came from a real engine/provider
+    call. When a source is unavailable or empty, the corresponding section is
+    left empty (or flagged via ``snapshot["data_status"]``) instead of being
+    padded with invented numbers. The UI layer is responsible for rendering an
+    honest "no data" state for empty sections.
     """
     snapshot: Dict[str, Any] = {
         "generated_at": _now(),
@@ -309,11 +312,21 @@ def _extract_snapshot(
         "open_orders": [],
         "filled_orders": [],
         "journal": [],
+        "performance": {},
+        "equity_curve": [],
         "ai_briefing": {},
         "economic_calendar": [],
         "central_bank_events": [],
         "alerts": [],
         "raw": {},
+        # Per-section live/unavailable status, filled in below as each
+        # source is actually queried. The UI uses this to label a panel
+        # honestly (live / no API key configured / error) instead of
+        # presenting static or missing data as real-time.
+        "data_status": {
+            "economic_calendar": "unknown",
+            "central_bank_events": "unknown",
+        },
     }
 
     # Terminal / command center data
@@ -356,7 +369,7 @@ def _extract_snapshot(
     except Exception as exc:
         snapshot["raw"]["command_center_error"] = str(exc)
 
-    # Currency strength
+    # Currency strength (live: computed from real FX quotes)
     try:
         from modules.forex.forex_currency_strength_engine import get_forex_currency_strength_engine
         strength = get_forex_currency_strength_engine()
@@ -372,12 +385,24 @@ def _extract_snapshot(
         snapshot["currency_strength"] = _normalize_strength(data)
     except Exception as exc:
         snapshot["raw"]["currency_strength_error"] = str(exc)
-        snapshot["currency_strength"] = _fallback_strength()
 
-    if not snapshot["currency_strength"]:
-        snapshot["currency_strength"] = _fallback_strength()
+    # Market regime: if the terminal/service didn't supply one, compute a real
+    # regime from live currency strength rather than defaulting to a fixed
+    # value. This is a genuine calculation (forex_macro_regime_engine), not a
+    # canned placeholder.
+    if not snapshot["market_regime"]:
+        try:
+            from modules.forex.forex_macro_regime_engine import get_forex_macro_regime_engine
+            regime_engine = get_forex_macro_regime_engine()
+            regime_data = regime_engine.analyze(force_refresh=force_refresh)
+            snapshot["raw"]["macro_regime"] = regime_data
+            if isinstance(regime_data, dict):
+                snapshot["market_regime"] = regime_data
+        except Exception as exc:
+            snapshot["raw"]["macro_regime_error"] = str(exc)
 
-    # Institutional scanner / recommendations
+    # Institutional scanner / recommendations (live: derived from the alpha
+    # model, which runs against real quotes)
     try:
         from modules.forex.forex_institutional_scanner import get_forex_institutional_scanner
         scanner = get_forex_institutional_scanner()
@@ -402,10 +427,7 @@ def _extract_snapshot(
     except Exception as exc:
         snapshot["raw"]["alpha_error"] = str(exc)
 
-    if not snapshot["recommendations"]:
-        snapshot["recommendations"] = _fallback_recommendations()
-
-    # Portfolio / orders / risk / performance / journal
+    # Portfolio / orders / journal
     try:
         from modules.forex.forex_trading_desk import get_forex_trading_desk
         desk = get_forex_trading_desk(db=db)
@@ -421,6 +443,7 @@ def _extract_snapshot(
             snapshot["open_orders"] = desk_data.get("open_orders", []) or []
             snapshot["filled_orders"] = desk_data.get("filled_orders", []) or []
             snapshot["journal"] = desk_data.get("journal", {}).get("trades", []) if isinstance(desk_data.get("journal"), dict) else []
+            snapshot["performance"] = desk_data.get("performance", {}) or {}
             if not snapshot.get("provider_health"):
                 snapshot["provider_health"] = _normalize_provider_health(desk_data.get("provider_health", {}))
     except Exception as exc:
@@ -446,6 +469,32 @@ def _extract_snapshot(
     except Exception as exc:
         snapshot["raw"]["portfolio_error"] = str(exc)
 
+    # Equity curve (live: built from persisted equity snapshots, not a chart
+    # of synthetic numbers)
+    try:
+        from modules.forex.forex_portfolio_engine import get_forex_portfolio_engine
+        pe = get_forex_portfolio_engine(
+            db=db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            portfolio_id=portfolio_id,
+        )
+        pe_snapshot = pe.get_terminal_snapshot(
+            portfolio_id=portfolio_id,
+            refresh=force_refresh,
+            persist=False,
+            include_orders=False,
+            include_history=True,
+        )
+        pe_snapshot = pe_snapshot if isinstance(pe_snapshot, dict) else {}
+        pe_performance = pe_snapshot.get("performance", {}) or {}
+        snapshot["raw"]["equity_curve_source"] = pe_performance
+        snapshot["equity_curve"] = pe_performance.get("equity_curve", []) or []
+        if not snapshot["performance"]:
+            snapshot["performance"] = pe_performance
+    except Exception as exc:
+        snapshot["raw"]["equity_curve_error"] = str(exc)
+
     try:
         from modules.forex.forex_provider_health import get_forex_provider_health
         ph = get_forex_provider_health().summary()
@@ -453,9 +502,6 @@ def _extract_snapshot(
         snapshot["provider_health"] = _normalize_provider_health(ph)
     except Exception as exc:
         snapshot["raw"]["provider_health_error"] = str(exc)
-
-    if not snapshot["provider_health"]:
-        snapshot["provider_health"] = _fallback_provider_health()
 
     # AI briefing
     try:
@@ -468,20 +514,39 @@ def _extract_snapshot(
         snapshot["raw"]["ai_error"] = str(exc)
         snapshot["ai_briefing"] = {}
 
-    # Macro / central banks
+    # Macro / central banks -- live via FRED (providers/fred_provider.py).
     try:
         from modules.forex.forex_central_bank_engine import get_forex_central_bank_engine
         cb = get_forex_central_bank_engine()
         cb_data = cb.analyze() if hasattr(cb, "analyze") else {}
         snapshot["raw"]["central_banks"] = cb_data
-        snapshot["central_bank_events"] = _normalize_events(cb_data)
+        snapshot["central_bank_events"] = _normalize_central_bank_rates(cb_data)
+        if isinstance(cb_data, dict) and cb_data.get("fred_configured") and snapshot["central_bank_events"]:
+            snapshot["data_status"]["central_bank_events"] = "live"
+        elif isinstance(cb_data, dict) and not cb_data.get("fred_configured"):
+            snapshot["data_status"]["central_bank_events"] = "no_api_key"
+        else:
+            snapshot["data_status"]["central_bank_events"] = "error"
     except Exception as exc:
         snapshot["raw"]["central_bank_error"] = str(exc)
+        snapshot["data_status"]["central_bank_events"] = "error"
 
-    if not snapshot["central_bank_events"]:
-        snapshot["central_bank_events"] = _fallback_central_bank_events()
+    try:
+        from modules.forex.forex_macro_calendar_engine import get_forex_macro_calendar_engine
+        calendar_engine = get_forex_macro_calendar_engine()
+        calendar_data = calendar_engine.calendar() if hasattr(calendar_engine, "calendar") else {}
+        snapshot["raw"]["economic_calendar"] = calendar_data
+        snapshot["economic_calendar"] = _normalize_events(calendar_data)
+        if isinstance(calendar_data, dict) and calendar_data.get("fred_configured") and snapshot["economic_calendar"]:
+            snapshot["data_status"]["economic_calendar"] = "live"
+        elif isinstance(calendar_data, dict) and not calendar_data.get("fred_configured"):
+            snapshot["data_status"]["economic_calendar"] = "no_api_key"
+        else:
+            snapshot["data_status"]["economic_calendar"] = "error"
+    except Exception as exc:
+        snapshot["raw"]["economic_calendar_error"] = str(exc)
+        snapshot["data_status"]["economic_calendar"] = "error"
 
-    snapshot["economic_calendar"] = _fallback_calendar()
     snapshot["alerts"] = _build_alerts(snapshot)
 
     return snapshot
@@ -530,19 +595,6 @@ def _normalize_strength(data: Any) -> List[Dict[str, Any]]:
     return rows[:10]
 
 
-def _fallback_strength() -> List[Dict[str, Any]]:
-    return [
-        {"currency": "CHF", "score": 100, "trend": "UP"},
-        {"currency": "USD", "score": 88, "trend": "UP"},
-        {"currency": "JPY", "score": 74, "trend": "UP"},
-        {"currency": "EUR", "score": 66, "trend": "DOWN"},
-        {"currency": "GBP", "score": 61, "trend": "DOWN"},
-        {"currency": "CAD", "score": 58, "trend": "FLAT"},
-        {"currency": "NZD", "score": 47, "trend": "DOWN"},
-        {"currency": "AUD", "score": 42, "trend": "DOWN"},
-    ]
-
-
 def _normalize_provider_health(data: Any) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
 
@@ -569,16 +621,6 @@ def _normalize_provider_health(data: Any) -> List[Dict[str, Any]]:
                 elif isinstance(item, str):
                     rows.append({"provider": name, "status": item, "latency": "-", "success": "-"})
     return rows[:8]
-
-
-def _fallback_provider_health() -> List[Dict[str, Any]]:
-    return [
-        {"provider": "Polygon", "status": "Healthy", "latency": "112 ms", "success": "99.8%"},
-        {"provider": "Finnhub", "status": "Healthy", "latency": "178 ms", "success": "99.4%"},
-        {"provider": "Alpha Vantage", "status": "Degraded", "latency": "512 ms", "success": "95.1%"},
-        {"provider": "TwelveData", "status": "Healthy", "latency": "231 ms", "success": "98.7%"},
-        {"provider": "Yahoo Finance", "status": "Rate Limited", "latency": "—", "success": "61.2%"},
-    ]
 
 
 def _normalize_recommendations(rows: Any) -> List[Dict[str, Any]]:
@@ -616,15 +658,6 @@ def _normalize_recommendations(rows: Any) -> List[Dict[str, Any]]:
     return out[:8]
 
 
-def _fallback_recommendations() -> List[Dict[str, Any]]:
-    return [
-        {"pair": "EUR/USD", "side": "BUY", "recommendation": "BUY", "confidence": 92, "entry": "1.0718", "stop": "1.0680", "target": "1.0780", "bias": "Bullish", "risk_reward": 2.0},
-        {"pair": "USD/JPY", "side": "BUY", "recommendation": "BUY", "confidence": 88, "entry": "158.42", "stop": "156.80", "target": "160.20", "bias": "Bullish", "risk_reward": 1.8},
-        {"pair": "AUD/USD", "side": "SELL", "recommendation": "SELL", "confidence": 84, "entry": "0.6641", "stop": "0.6700", "target": "0.6560", "bias": "Bearish", "risk_reward": 1.9},
-        {"pair": "GBP/USD", "side": "BUY", "recommendation": "BUY", "confidence": 78, "entry": "1.2645", "stop": "1.2580", "target": "1.2720", "bias": "Bullish", "risk_reward": 1.6},
-    ]
-
-
 def _normalize_events(data: Any) -> List[Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
     candidates = []
@@ -644,25 +677,48 @@ def _normalize_events(data: Any) -> List[Dict[str, Any]]:
     return events[:8]
 
 
-def _fallback_calendar() -> List[Dict[str, Any]]:
-    return [
-        {"time": "08:30", "currency": "USD", "event": "Core PCE Price Index", "actual": "-", "forecast": "2.8%"},
-        {"time": "08:30", "currency": "USD", "event": "Durable Goods Orders", "actual": "-", "forecast": "0.3%"},
-        {"time": "14:00", "currency": "EUR", "event": "ECB President Speaks", "actual": "", "forecast": ""},
-        {"time": "15:45", "currency": "USD", "event": "Chicago PMI", "actual": "-", "forecast": "42.3"},
-    ]
+def _normalize_central_bank_rates(data: Any) -> List[Dict[str, Any]]:
+    """
+    Shape forex_central_bank_engine's live FRED-backed rows for display:
+    currency, policy rate, bias, as-of date, and whether the series is the
+    bank's exact published rate or the closest live proxy available.
+    """
+    rows: List[Dict[str, Any]] = []
+    banks = data.get("central_banks") if isinstance(data, dict) else None
+    if not isinstance(banks, list):
+        return rows
 
-
-def _fallback_central_bank_events() -> List[Dict[str, Any]]:
-    return [
-        {"date": "Jul 01", "currency": "AUD", "event": "RBA Interest Rate Decision", "impact": "High"},
-        {"date": "Jul 09", "currency": "USD", "event": "FOMC Meeting Minutes", "impact": "High"},
-        {"date": "Jul 10", "currency": "EUR", "event": "ECB Interest Rate Decision", "impact": "High"},
-        {"date": "Jul 17", "currency": "JPY", "event": "BOJ Interest Rate Decision", "impact": "High"},
-    ]
+    for item in banks:
+        if not isinstance(item, dict):
+            continue
+        if item.get("error"):
+            rows.append({
+                "central_bank": item.get("central_bank", "-"),
+                "currency": item.get("currency", "-"),
+                "policy_rate": "unavailable",
+                "bias": "-",
+                "asof": "-",
+                "note": item.get("error"),
+            })
+            continue
+        rate = item.get("policy_rate")
+        rows.append({
+            "central_bank": item.get("central_bank", "-"),
+            "currency": item.get("currency", "-"),
+            "policy_rate": f"{rate:.2f}%" if isinstance(rate, (int, float)) else "-",
+            "bias": item.get("policy_bias", "-"),
+            "asof": item.get("policy_rate_asof", "-"),
+            "note": "proxy (closest live series)" if item.get("proxy") else "official rate",
+        })
+    return rows
 
 
 def _build_alerts(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Alerts are derived only from real recommendations produced this session.
+    When there are none, this returns an empty list -- the UI shows an
+    honest "no rows available" state rather than two invented alerts.
+    """
     recs = snapshot.get("recommendations") or []
     alerts = []
     for rec in recs[:3]:
@@ -674,18 +730,18 @@ def _build_alerts(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
             "alert": f"{pair} {side} setup confidence {conf:.0f}%",
             "severity": "High" if conf >= 85 else "Medium",
         })
-    if not alerts:
-        alerts = [
-            {"time": "23:57", "alert": "EUR/USD price above key level", "severity": "Medium"},
-            {"time": "23:53", "alert": "USD/JPY momentum extended", "severity": "Medium"},
-        ]
     return alerts
 
 
 def _market_summary(snapshot: Dict[str, Any]) -> Tuple[str, float, str, str, float]:
+    """
+    Derive the top-ribbon market summary strictly from live data. When a
+    value genuinely is not available yet, this returns "N/A" / 0.0 rather
+    than a fabricated placeholder -- callers must render that honestly.
+    """
     regime_obj = snapshot.get("market_regime") or {}
-    regime = "RISK-OFF"
-    macro_score = 78.0
+    regime: Any = "N/A"
+    macro_score = 0.0
 
     if isinstance(regime_obj, dict):
         regime = (
@@ -701,20 +757,27 @@ def _market_summary(snapshot: Dict[str, Any]) -> Tuple[str, float, str, str, flo
             or regime_obj.get("confidence")
             or macro_score
         )
-    elif isinstance(regime_obj, str):
+    elif isinstance(regime_obj, str) and regime_obj:
         regime = regime_obj
 
-    strength = snapshot.get("currency_strength") or _fallback_strength()
-    strongest = strength[0]["currency"] if strength else "CHF"
-    weakest = sorted(strength, key=lambda r: _safe_float(r.get("score")))[0]["currency"] if strength else "AUD"
+    strength = snapshot.get("currency_strength") or []
+    strongest = strength[0]["currency"] if strength else "N/A"
+    weakest = sorted(strength, key=lambda r: _safe_float(r.get("score")))[0]["currency"] if strength else "N/A"
 
     recs = snapshot.get("recommendations") or []
-    ai_conf = max([_safe_float(r.get("confidence")) for r in recs] + [91.0])
+    confidences = [_safe_float(r.get("confidence")) for r in recs]
+    ai_conf = max(confidences) if confidences else 0.0
 
     return str(regime).replace("_", "-").upper(), macro_score, strongest, weakest, ai_conf
 
 
 def _portfolio_metrics(snapshot: Dict[str, Any]) -> Tuple[int, float, float, float]:
+    """
+    Read live portfolio metrics only. If the portfolio backend genuinely has
+    nothing yet (e.g. no live account/position sync configured), this returns
+    honest zeros -- it no longer substitutes a fabricated demo account
+    ($368,452.17 equity / 12 phantom positions) when the account is empty.
+    """
     portfolio = snapshot.get("portfolio") or {}
     positions = snapshot.get("positions") or []
 
@@ -737,15 +800,6 @@ def _portfolio_metrics(snapshot: Dict[str, Any]) -> Tuple[int, float, float, flo
         equity = summary.get("equity") or summary.get("portfolio_value") or summary.get("total_value") or 0
     else:
         open_positions, daily_pnl, daily_pct, equity = 0, 0, 0, 0
-
-    if not equity:
-        equity = 368452.17 if open_positions == 0 else 0
-    if not daily_pnl:
-        daily_pnl = 2842.35 if open_positions == 0 else daily_pnl
-    if not daily_pct:
-        daily_pct = 0.78 if open_positions == 0 else daily_pct
-    if not open_positions:
-        open_positions = 12 if not positions else len(positions)
 
     return _safe_int(open_positions), _safe_float(daily_pnl), _safe_float(daily_pct), _safe_float(equity)
 
@@ -795,43 +849,85 @@ def _render_left_panel(snapshot: Dict[str, Any]) -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def _demo_chart():
+def _price_chart(pair: str = "EUR/USD"):
+    """
+    Build an intraday price chart for `pair` from the live history pipeline
+    (forex_history_service -> provider router -> real market data provider).
+    Returns (None, reason) instead of a chart whenever real history rows
+    aren't available -- it never draws a synthetic price path.
+    """
     if go is None:
-        return None
-    x = list(range(70))
-    prices = []
-    price = 1.071
-    for i in x:
-        price += ((i % 7) - 3) * 0.00018 + (0.00025 if 15 < i < 45 else -0.00009)
-        prices.append(price)
+        return None, "Plotly is unavailable."
+
+    try:
+        from modules.forex.forex_history_service import get_forex_history_service
+        history_service = get_forex_history_service()
+        payload = history_service.fetch_from_router(pair, interval="1h")
+    except Exception as exc:
+        return None, f"Live chart unavailable: {exc}"
+
+    rows = payload.get("rows") if isinstance(payload, dict) else None
+    if not rows:
+        error = payload.get("error") if isinstance(payload, dict) else None
+        return None, error or f"No live history returned for {pair} yet."
+
+    x = [row.get("asof") or row.get("date") for row in rows]
+    closes = [_safe_float(row.get("close")) for row in rows]
+    volumes = [_safe_float(row.get("volume")) for row in rows]
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=x,
-        y=prices,
-        mode="lines",
-        name="EUR/USD",
-        line=dict(width=2),
-    ))
-    fig.add_trace(go.Bar(
-        x=x,
-        y=[abs((i % 9) - 4) * 18 + 60 for i in x],
-        name="Volume",
-        yaxis="y2",
-        opacity=0.25,
-    ))
+    fig.add_trace(go.Scatter(x=x, y=closes, mode="lines", name=pair, line=dict(width=2)))
+    if any(volumes):
+        fig.add_trace(go.Bar(x=x, y=volumes, name="Volume", yaxis="y2", opacity=0.25))
     fig.update_layout(
         template="plotly_dark",
         height=390,
         margin=dict(l=10, r=10, t=28, b=18),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        title="EUR/USD · 1H · Institutional Flow",
+        title=f"{pair} · Live History",
         yaxis=dict(title="Price"),
         yaxis2=dict(title="Vol", overlaying="y", side="right", showgrid=False, visible=False),
         legend=dict(orientation="h"),
     )
-    return fig
+    return fig, None
+
+
+def _top_of_book(pair: str = "EUR/USD"):
+    """
+    Real top-of-book bid/ask/mid from the live quote pipeline. There is no
+    broker/ECN market-depth feed wired into this codebase, so this
+    deliberately does not synthesize a multi-level order book -- it returns
+    only what a live quote actually gives us.
+    """
+    try:
+        from modules.forex.forex_price_service import get_forex_price_service
+        quote = get_forex_price_service().get_quote(pair)
+    except Exception as exc:
+        return None, f"Quote unavailable: {exc}"
+
+    if not isinstance(quote, dict) or quote.get("error"):
+        error = quote.get("error") if isinstance(quote, dict) else None
+        return None, error or "No live quote available."
+
+    bid = quote.get("bid")
+    ask = quote.get("ask")
+    mid = quote.get("mid")
+    if mid is None and bid is not None and ask is not None:
+        mid = (_safe_float(bid) + _safe_float(ask)) / 2
+
+    provider = quote.get("provider", "-")
+    rows = []
+    if ask is not None:
+        rows.append({"price": ask, "side": "Ask", "provider": provider})
+    if mid is not None:
+        rows.append({"price": mid, "side": "Mid", "provider": provider})
+    if bid is not None:
+        rows.append({"price": bid, "side": "Bid", "provider": provider})
+
+    if not rows:
+        return None, "No live quote available."
+    return rows, None
 
 
 def _render_recommendation_cards(recommendations: List[Dict[str, Any]]) -> None:
@@ -863,29 +959,28 @@ def _render_recommendation_cards(recommendations: List[Dict[str, Any]]) -> None:
 
 
 def _render_center_panel(snapshot: Dict[str, Any]) -> None:
+    chart_pair = st.session_state.get("fx_inst_trade_pair", "EUR/USD")
+
     top_left, top_right = st.columns([2.2, 1])
     with top_left:
         st.markdown('<div class="fx-card-tight">', unsafe_allow_html=True)
-        _panel_title("Live Trading Desk", "EUR/USD")
-        fig = _demo_chart()
+        _panel_title("Live Trading Desk", chart_pair)
+        fig, chart_error = _price_chart(chart_pair)
         if fig is not None:
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Plotly is unavailable.")
+            st.info(chart_error or "No live chart data available.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     with top_right:
         st.markdown('<div class="fx-card-tight">', unsafe_allow_html=True)
-        _panel_title("Order Book", "EUR/USD")
-        order_book = [
-            {"price": "1.07210", "size_m": 12.0, "side": "Ask"},
-            {"price": "1.07207", "size_m": 8.5, "side": "Ask"},
-            {"price": "1.07204", "size_m": 10.0, "side": "Ask"},
-            {"price": "1.07182", "size_m": 0.3, "side": "Mid"},
-            {"price": "1.07179", "size_m": 6.2, "side": "Bid"},
-            {"price": "1.07176", "size_m": 9.8, "side": "Bid"},
-        ]
-        _render_df(order_book, height=205)
+        _panel_title("Top of Book", chart_pair)
+        top_of_book, book_error = _top_of_book(chart_pair)
+        if top_of_book:
+            _render_df(top_of_book, height=150)
+        else:
+            st.info(book_error or "No live quote available.")
+        st.caption("Full L2 order-book depth requires a broker/ECN market-depth feed, which isn't connected -- only the live top-of-book quote is shown above.")
         st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown('<div class="fx-card-tight">', unsafe_allow_html=True)
@@ -920,6 +1015,9 @@ def _briefing_text(snapshot: Dict[str, Any]) -> str:
         if narrative:
             return str(narrative)
 
+    if regime == "N/A" or strongest == "N/A" or weakest == "N/A":
+        return "Live market-regime and currency-strength data isn't available yet -- check provider health below."
+
     return (
         f"Markets remain in a **{regime}** regime. "
         f"{_currency_flag(strongest)} **{strongest}** is currently the strongest currency, while "
@@ -932,25 +1030,44 @@ def _render_right_panel(snapshot: Dict[str, Any]) -> None:
     st.markdown('<div class="fx-card-tight">', unsafe_allow_html=True)
     _panel_title("AI Market Briefing", datetime.now(timezone.utc).strftime("%H:%M UTC"))
     st.markdown(_briefing_text(snapshot))
-    st.caption("Key Takeaways")
     regime, _, strongest, weakest, _ = _market_summary(snapshot)
-    st.markdown(
-        f"""
+    if strongest != "N/A" and weakest != "N/A":
+        st.caption("Key Takeaways")
+        st.markdown(
+            f"""
 - {strongest} remains a leadership currency
 - {weakest} remains under pressure
 - {regime} conditions favor disciplined sizing
 - Watch central-bank and inflation catalysts
-        """
-    )
+            """
+        )
     st.markdown("</div>", unsafe_allow_html=True)
 
+    data_status = snapshot.get("data_status", {})
+
+    _STATUS_CHIP = {"live": "live · FRED", "no_api_key": "not connected", "error": "error", "unknown": "unknown"}
+    _STATUS_CAPTION = {
+        "no_api_key": "FRED_API_KEY isn't configured yet -- add it to enable this live feed.",
+        "error": "The live FRED lookup failed this refresh -- see Developer/Debug for details.",
+    }
+
     st.markdown('<div class="fx-card-tight">', unsafe_allow_html=True)
-    _panel_title("Economic Calendar", "today")
+    cal_status = data_status.get("economic_calendar", "unknown")
+    _panel_title("Economic Calendar", _STATUS_CHIP.get(cal_status, cal_status))
+    if cal_status != "live":
+        st.caption(_STATUS_CAPTION.get(cal_status, "Live status unknown."))
+    else:
+        st.caption("Live FRED release calendar -- USD releases only (see Developer/Debug for coverage notes).")
     _render_df(snapshot.get("economic_calendar", []), height=180)
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="fx-card-tight">', unsafe_allow_html=True)
-    _panel_title("Central Bank Events", "upcoming")
+    cb_status = data_status.get("central_bank_events", "unknown")
+    _panel_title("Central Bank Policy Rates", _STATUS_CHIP.get(cb_status, cb_status))
+    if cb_status != "live":
+        st.caption(_STATUS_CAPTION.get(cb_status, "Live status unknown."))
+    else:
+        st.caption("Live FRED policy rates -- rows marked 'proxy' use the closest live series for that bank, not its exact published rate.")
     _render_df(snapshot.get("central_bank_events", []), height=170)
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -960,15 +1077,6 @@ def _render_right_panel(snapshot: Dict[str, Any]) -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def _fallback_positions() -> List[Dict[str, Any]]:
-    return [
-        {"symbol": "EUR/USD", "side": "Buy", "size_lots": 1.00, "entry": 1.06782, "current": 1.07182, "p_l": "+400.00", "p_l_pct": "+0.37%"},
-        {"symbol": "USD/JPY", "side": "Buy", "size_lots": 0.75, "entry": 156.240, "current": 158.420, "p_l": "+1,032.56", "p_l_pct": "+1.40%"},
-        {"symbol": "GBP/USD", "side": "Buy", "size_lots": 0.60, "entry": 1.26145, "current": 1.26305, "p_l": "+96.00", "p_l_pct": "+0.13%"},
-        {"symbol": "AUD/USD", "side": "Sell", "size_lots": 1.00, "entry": 0.66680, "current": 0.66410, "p_l": "+270.00", "p_l_pct": "+0.40%"},
-    ]
-
-
 def _render_bottom_panel(snapshot: Dict[str, Any]) -> None:
     st.markdown('<div class="fx-card-tight">', unsafe_allow_html=True)
     tab_positions, tab_orders, tab_journal, tab_exec, tab_curve = st.tabs(
@@ -976,8 +1084,7 @@ def _render_bottom_panel(snapshot: Dict[str, Any]) -> None:
     )
 
     with tab_positions:
-        positions = snapshot.get("positions") or _fallback_positions()
-        _render_df(positions, height=230)
+        _render_df(snapshot.get("positions") or [], height=230)
 
     with tab_orders:
         _render_df(snapshot.get("open_orders") or [], height=230)
@@ -989,14 +1096,17 @@ def _render_bottom_panel(snapshot: Dict[str, Any]) -> None:
         _render_df(snapshot.get("filled_orders") or [], height=230)
 
     with tab_curve:
-        if go is not None:
-            x = list(range(30))
-            y = [100000 + i * 320 + ((i % 5) - 2) * 450 for i in x]
+        equity_curve = snapshot.get("equity_curve") or []
+        if go is not None and equity_curve:
+            x = [row.get("date") for row in equity_curve]
+            y = [_safe_float(row.get("equity")) for row in equity_curve]
             fig = go.Figure(go.Scatter(x=x, y=y, mode="lines", fill="tozeroy", name="Equity"))
             fig.update_layout(template="plotly_dark", height=230, margin=dict(l=5, r=5, t=20, b=5), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig, use_container_width=True)
-        else:
+        elif go is None:
             st.info("Plotly unavailable.")
+        else:
+            st.info("No equity history available yet.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 

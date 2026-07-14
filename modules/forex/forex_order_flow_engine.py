@@ -12,7 +12,7 @@ class ForexOrderFlowEngine:
         imbalance=micro["liquidity"]["depth"].get("liquidity_imbalance_pct",0)
         return {"status":"READY","pair":pair,"dealer_bias":"BUY" if imbalance>5 else "SELL" if imbalance<-5 else "NEUTRAL","imbalance_pct":imbalance,"microstructure":micro,"generated_at":datetime.now(timezone.utc).isoformat()}
 _ENGINE=None
-def get_forex_order_flow_engine(db=None):
+def get_forex_order_flow_engine(db=None, tenant_id=None, user_id=None, portfolio_id=None):
     global _ENGINE
     if _ENGINE is None or (db is not None and _ENGINE.db is None): _ENGINE=ForexOrderFlowEngine(db=db)
     return _ENGINE

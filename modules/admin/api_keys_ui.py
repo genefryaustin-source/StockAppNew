@@ -203,3 +203,54 @@ def render_api_keys_tab(db, user):
                 st.rerun()
             except Exception as e:
                 st.error(f"Could not save key: {e}")
+
+    # --- Broker connectivity test (Alpaca, Tradier, IBKR, and any future
+    # broker providers) -- unlike a market-data key, a broker credential
+    # only matters if it can actually place/read orders, so brokers get a
+    # live connectivity check here instead of just "key saved".
+    _broker_test = {
+        "ALPACA_API_KEY": ("Alpaca", "modules.portfolio.brokers.alpaca_broker", "AlpacaBroker", {"live": False}),
+        "ALPACA_API_SECRET": ("Alpaca", "modules.portfolio.brokers.alpaca_broker", "AlpacaBroker", {"live": False}),
+        "TRADIER_ACCESS_TOKEN": ("Tradier", "modules.portfolio.brokers.tradier_broker", "TradierBroker", {"sandbox": True}),
+        "TRADIER_ACCOUNT_ID": ("Tradier", "modules.portfolio.brokers.tradier_broker", "TradierBroker", {"sandbox": True}),
+        "IBKR_ACCOUNT_ID": ("Interactive Brokers", "modules.portfolio.brokers.ibkr_broker", "IBKRBroker", {}),
+        "IBKR_GATEWAY_URL": ("Interactive Brokers", "modules.portfolio.brokers.ibkr_broker", "IBKRBroker", {}),
+        "PORTFOLIOSCIENCE_API_KEY": ("PortfolioScience RiskAPI", "modules.risk_providers.portfolioscience_provider", "PortfolioScienceRiskProvider", {}),
+        "FACTSET_API_USERNAME": ("FactSet Open:Risk", "modules.risk_providers.factset_provider", "FactSetRiskProvider", {}),
+        "FACTSET_API_KEY": ("FactSet Open:Risk", "modules.risk_providers.factset_provider", "FactSetRiskProvider", {}),
+        "CUSTOM_RISK_PROVIDER_BASE_URL": ("Custom Risk Provider", "modules.risk_providers.custom_provider", "CustomRiskProvider", {}),
+        "CUSTOM_RISK_PROVIDER_API_KEY": ("Custom Risk Provider", "modules.risk_providers.custom_provider", "CustomRiskProvider", {}),
+        "ONDO_API_KEY": ("Ondo Finance", "modules.tokenized_assets.ondo_provider", "OndoProvider", {}),
+        "SECURITIZE_API_KEY": ("Securitize", "modules.tokenized_assets.securitize_provider", "SecuritizeProvider", {}),
+        "SECURITIZE_API_SECRET": ("Securitize", "modules.tokenized_assets.securitize_provider", "SecuritizeProvider", {}),
+        "CUSTOM_TOKENIZED_ASSET_BASE_URL": ("Custom Tokenized Asset Provider", "modules.tokenized_assets.custom_provider", "CustomTokenizedAssetProvider", {}),
+        "CUSTOM_TOKENIZED_ASSET_API_KEY": ("Custom Tokenized Asset Provider", "modules.tokenized_assets.custom_provider", "CustomTokenizedAssetProvider", {}),
+        "CCXT_EXCHANGE_ID": ("Crypto Exchange", "modules.portfolio.brokers.ccxt_broker", "CCXTBroker", {"sandbox": True}),
+        "CCXT_API_KEY": ("Crypto Exchange", "modules.portfolio.brokers.ccxt_broker", "CCXTBroker", {"sandbox": True}),
+        "CCXT_API_SECRET": ("Crypto Exchange", "modules.portfolio.brokers.ccxt_broker", "CCXTBroker", {"sandbox": True}),
+    }
+    if selected_provider in _broker_test:
+        label, module_path, class_name, kwargs = _broker_test[selected_provider]
+        st.divider()
+        st.markdown(f"#### Test {label} connection")
+        if label == "Interactive Brokers":
+            st.caption(
+                "Checks that the Client Portal Gateway is reachable and that you're "
+                "currently logged in (IBKR requires an interactive browser login with "
+                "2FA -- this can't be automated)."
+            )
+        else:
+            st.caption(
+                "Checks that credentials are set and the provider accepts them."
+            )
+        if st.button(f"🔌 Test {label} Connection", key=f"apikey_test_{selected_provider}"):
+            try:
+                import importlib
+                provider_cls = getattr(importlib.import_module(module_path), class_name)
+                result = provider_cls(**kwargs).test_connection()
+                if result["ok"]:
+                    st.success(f"✅ {result['detail']}")
+                else:
+                    st.error(f"❌ {result['detail']}")
+            except Exception as e:
+                st.error(f"❌ Could not test connection: {e}")

@@ -36,6 +36,10 @@ class ForexDiagnosticEngine:
         ]
         return self.engine.run_checks(checks, name="Forex Runtime Diagnostics").to_dict()
 
+    def run_all(self, **kwargs) -> Dict[str, Any]:
+        """Alias for forex_validation_center.py's generic run_all() dispatch."""
+        return self.diagnose()
+
     def diagnose(self) -> Dict[str, Any]:
         module = self.module_diagnostics()
         runtime = self.runtime_diagnostics()

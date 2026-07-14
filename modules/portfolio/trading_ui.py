@@ -149,7 +149,17 @@ def render_trading_ui(
     totals = accounting.record_snapshot(portfolio_id)
 
     col1, col2, col3 = st.columns(3)
-    broker_name = col1.selectbox("Broker", ["paper", "alpaca"], index=0, key=f"broker_name_{portfolio_id}")
+    from modules.portfolio.brokers.broker_settings import enabled_brokers_for_tenant
+    _tenant_id = st.session_state.get("user", {}).get("tenant_id")
+    broker_choices = enabled_brokers_for_tenant(db_session, _tenant_id)
+    from modules.admin.broker_settings_ui import _BROKER_INFO
+    broker_labels = {"paper": "Paper", **{k: v[0] for k, v in _BROKER_INFO.items()}}
+    broker_name = col1.selectbox(
+        "Broker", broker_choices, index=0, key=f"broker_name_{portfolio_id}",
+        format_func=lambda k: broker_labels.get(k, k.title()),
+    )
+    if len(broker_choices) == 1:
+        col1.caption("Ask a tenant admin to enable additional brokers under Admin > Brokers.")
     enable_live = bool(trading_cfg.get("ENABLE_LIVE_TRADING", False))
     mode = col2.selectbox(
         "Mode",
@@ -167,6 +177,22 @@ def render_trading_ui(
         broker_name=broker_name,
         live=live,
     )
+
+    if broker_name != "paper" and not getattr(broker, "configured", True):
+        if broker_name == "ibkr":
+            st.warning(
+                "🔌 Interactive Brokers isn't set up yet for this account. Add your Client "
+                "Portal Gateway URL under **Admin > API Keys**, make sure the gateway is "
+                "running, and log in via its browser page (including 2FA). Falling back to "
+                "Paper broker behavior until it's connected."
+            )
+        else:
+            st.warning(
+                f"🔌 {broker_name.title()} isn't connected yet for this account. Add your API "
+                "key/secret under **Admin > API Keys** to enable live order routing, "
+                "positions, and buying power here. Falling back to Paper broker behavior "
+                "until it's configured."
+            )
 
     try:
         buying_power = broker.get_buying_power()

@@ -94,11 +94,50 @@ def request_json(url: str, *, params: Optional[dict[str, Any]] = None, headers: 
     return r.json()
 
 
+def _streamlit_secret(name: str) -> str:
+    """
+    Best-effort lookup of `name` inside Streamlit's secrets.toml, checking
+    both a flat key and common nested sections (e.g. [providers], [fred],
+    [stock_providers]) since apps organize secrets.toml differently.
+    Never raises: if Streamlit isn't installed or secrets.toml doesn't
+    exist, this simply returns "".
+    """
+    try:
+        import streamlit as st
+    except Exception:
+        return ""
+
+    try:
+        secrets = st.secrets
+    except Exception:
+        return ""
+
+    try:
+        if name in secrets:
+            return str(secrets[name] or "").strip()
+    except Exception:
+        pass
+
+    for section in ("providers", "fred", "stock_providers", "api_keys", "forex"):
+        try:
+            table = secrets.get(section)
+        except Exception:
+            table = None
+        if isinstance(table, dict) and name in table:
+            return str(table[name] or "").strip()
+
+    return ""
+
+
 def env_key(*names: str) -> str:
     for n in names:
         v = os.getenv(n)
         if v:
             return v.strip()
+    for n in names:
+        v = _streamlit_secret(n)
+        if v:
+            return v
     return ""
 
 

@@ -88,19 +88,21 @@ class ForexPositionManagementEngine:
             db=db,
         )
 
-        self.snapshot_pipeline = (
-            ExecutionSnapshotPipeline(
-                db=db,
-            )
-        )
+        # ExecutionSnapshotPipeline requires portfolio_engine /
+        # execution_repository / execution_query (see
+        # execution_pipeline_factory.py), not a bare db= kwarg - it never
+        # accepted one. get_execution_service() above already builds a
+        # fully-wired ExecutionPipeline with a correctly-constructed
+        # snapshot_pipeline; reuse that single instance instead of trying
+        # (and failing) to build a second, differently-wired one here.
+        self.snapshot_pipeline = self.execution_service.pipeline.snapshot_pipeline
 
-        self.recorder = (
-            ExecutionEventRecorder(
-                db=db,
-                actor=actor,
-                source=source,
-            )
-        )
+        # Same issue as snapshot_pipeline above: ExecutionEventRecorder
+        # takes engine=/actor=/source= (an ExecutionEventEngine plus the
+        # ExecutionActor/ExecutionSource enums), never a bare db= kwarg.
+        # Reuse the one the execution service's pipeline already built
+        # correctly rather than constructing a second, broken one.
+        self.recorder = self.execution_service.pipeline.recorder
 
     # ------------------------------------------------------------------
     # Position Loading
@@ -923,6 +925,40 @@ class ForexPositionManagementEngine:
         )
 
     # ------------------------------------------------------------------
+    # Partial Profit Support
+    # ------------------------------------------------------------------
+
+    def close_partial_position(
+        self,
+        position_id: str,
+        *,
+        quantity: float,
+        stage: Optional[str] = None,
+        reason: Optional[str] = None,
+        requested_price: Optional[float] = None,
+    ) -> ExecutionContext:
+        """
+        Reduce a position by `quantity` on behalf of a partial-profit
+        target (ForexPartialProfitManager.manage_position()). This was
+        referenced and documented (see the docstring/comments in
+        forex_partial_profit_manager.py) but never implemented, which made
+        every partial-profit exit fail with AttributeError. `stage` and
+        `reason` are audit context only - the caller's own decision object
+        already records them - the actual reduction is identical to
+        scale_out()/reduce_units().
+        """
+
+        return self.scale_out(
+
+            position_id,
+
+            quantity=quantity,
+
+            requested_price=requested_price,
+
+        )
+
+    # ------------------------------------------------------------------
 
     def reduce_units(
         self,
@@ -938,290 +974,290 @@ class ForexPositionManagementEngine:
 
         )
 
-        # ------------------------------------------------------------------
-        # Flatten Account
-        # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Flatten Account
+    # ------------------------------------------------------------------
 
-        def flatten_account(
-                self,
-                *,
-                account_id: str,
-        ) -> List[ExecutionContext]:
-            """
-            Close every open position for an account.
-            """
+    def flatten_account(
+            self,
+            *,
+            account_id: str,
+    ) -> List[ExecutionContext]:
+        """
+        Close every open position for an account.
+        """
 
-            results: List[ExecutionContext] = []
+        results: List[ExecutionContext] = []
 
-            positions = self.load_positions(
-                account_id=account_id,
-            )
+        positions = self.load_positions(
+            account_id=account_id,
+        )
 
-            for position in positions:
+        for position in positions:
 
-                if not self.is_open(position):
-                    continue
+            if not self.is_open(position):
+                continue
 
-                try:
+            try:
 
-                    result = self.close_position(
+                result = self.close_position(
+                    position["position_id"],
+                )
+
+                results.append(result)
+
+            except Exception:
+                continue
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Flatten Portfolio
+    # ------------------------------------------------------------------
+
+    def flatten_portfolio(
+            self,
+            *,
+            portfolio_id: str,
+    ) -> List[ExecutionContext]:
+
+        results: List[ExecutionContext] = []
+
+        positions = self.load_positions(
+            portfolio_id=portfolio_id,
+        )
+
+        for position in positions:
+
+            if not self.is_open(position):
+                continue
+
+            try:
+
+                results.append(
+
+                    self.close_position(
                         position["position_id"],
                     )
 
-                    results.append(result)
+                )
 
-                except Exception:
-                    continue
+            except Exception:
+                pass
 
-            return results
+        return results
 
-        # ------------------------------------------------------------------
-        # Flatten Portfolio
-        # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Flatten Symbol
+    # ------------------------------------------------------------------
 
-        def flatten_portfolio(
-                self,
-                *,
-                portfolio_id: str,
-        ) -> List[ExecutionContext]:
+    def flatten_symbol(
+            self,
+            *,
+            symbol: str,
+            account_id: Optional[str] = None,
+    ) -> List[ExecutionContext]:
 
-            results: List[ExecutionContext] = []
+        results: List[ExecutionContext] = []
 
-            positions = self.load_positions(
-                portfolio_id=portfolio_id,
-            )
+        positions = self.load_symbol_positions(
 
-            for position in positions:
+            symbol,
 
-                if not self.is_open(position):
-                    continue
+            account_id=account_id,
 
-                try:
+        )
 
-                    results.append(
+        for position in positions:
 
-                        self.close_position(
-                            position["position_id"],
-                        )
+            if not self.is_open(position):
+                continue
 
-                    )
+            try:
 
-                except Exception:
-                    pass
+                results.append(
 
-            return results
+                    self.close_position(
 
-        # ------------------------------------------------------------------
-        # Flatten Symbol
-        # ------------------------------------------------------------------
-
-        def flatten_symbol(
-                self,
-                *,
-                symbol: str,
-                account_id: Optional[str] = None,
-        ) -> List[ExecutionContext]:
-
-            results: List[ExecutionContext] = []
-
-            positions = self.load_symbol_positions(
-
-                symbol,
-
-                account_id=account_id,
-
-            )
-
-            for position in positions:
-
-                if not self.is_open(position):
-                    continue
-
-                try:
-
-                    results.append(
-
-                        self.close_position(
-
-                            position["position_id"]
-
-                        )
+                        position["position_id"]
 
                     )
 
-                except Exception:
-                    pass
+                )
 
-            return results
+            except Exception:
+                pass
 
-        # ------------------------------------------------------------------
-        # Refresh Snapshots
-        # ------------------------------------------------------------------
+        return results
 
-        def refresh_all_snapshots(
-                self,
-                *,
-                account_id=None,
-                portfolio_id=None,
-        ) -> int:
+    # ------------------------------------------------------------------
+    # Refresh Snapshots
+    # ------------------------------------------------------------------
 
-            refreshed = 0
+    def refresh_all_snapshots(
+            self,
+            *,
+            account_id=None,
+            portfolio_id=None,
+    ) -> int:
 
-            positions = self.load_positions(
+        refreshed = 0
 
-                account_id=account_id,
+        positions = self.load_positions(
 
-                portfolio_id=portfolio_id,
+            account_id=account_id,
 
-            )
+            portfolio_id=portfolio_id,
 
-            for row in positions:
+        )
 
-                try:
+        for row in positions:
 
-                    context = self._build_context(
-                        row,
-                    )
-
-                    self.snapshot_pipeline.refresh(
-                        context,
-                    )
-
-                    refreshed += 1
-
-                except Exception:
-                    pass
-
-            return refreshed
-
-        # ------------------------------------------------------------------
-        # Verify All Positions
-        # ------------------------------------------------------------------
-
-        def verify_all_positions(
-                self,
-                *,
-                account_id=None,
-                portfolio_id=None,
-        ) -> Dict[str, Any]:
-
-            verified = 0
-
-            failed = 0
-
-            positions = self.load_positions(
-
-                account_id=account_id,
-
-                portfolio_id=portfolio_id,
-
-            )
-
-            for row in positions:
+            try:
 
                 context = self._build_context(
                     row,
                 )
 
-                if self.verify(context):
+                self.snapshot_pipeline.refresh(
+                    context,
+                )
 
-                    verified += 1
+                refreshed += 1
 
-                else:
+            except Exception:
+                pass
 
-                    failed += 1
+        return refreshed
 
-            return {
+    # ------------------------------------------------------------------
+    # Verify All Positions
+    # ------------------------------------------------------------------
 
-                "positions": len(positions),
+    def verify_all_positions(
+            self,
+            *,
+            account_id=None,
+            portfolio_id=None,
+    ) -> Dict[str, Any]:
 
-                "verified": verified,
+        verified = 0
 
-                "failed": failed,
+        failed = 0
 
-            }
+        positions = self.load_positions(
 
-        # ------------------------------------------------------------------
-        # Synchronize
-        # ------------------------------------------------------------------
+            account_id=account_id,
 
-        def synchronize_positions(
-                self,
-                *,
-                account_id=None,
-                portfolio_id=None,
-        ) -> Dict[str, Any]:
-            """
-            Refresh snapshots then verify every position.
-            """
+            portfolio_id=portfolio_id,
 
-            refreshed = self.refresh_all_snapshots(
+        )
 
-                account_id=account_id,
+        for row in positions:
 
-                portfolio_id=portfolio_id,
-
+            context = self._build_context(
+                row,
             )
 
-            verification = self.verify_all_positions(
+            if self.verify(context):
 
-                account_id=account_id,
+                verified += 1
 
-                portfolio_id=portfolio_id,
+            else:
 
-            )
+                failed += 1
 
-            return {
+        return {
 
-                "snapshots_refreshed": refreshed,
+            "positions": len(positions),
 
-                "verification": verification,
+            "verified": verified,
 
-            }
+            "failed": failed,
 
-        # ------------------------------------------------------------------
-        # Health
-        # ------------------------------------------------------------------
+        }
 
-        def health(self) -> Dict[str, Any]:
+    # ------------------------------------------------------------------
+    # Synchronize
+    # ------------------------------------------------------------------
 
-            return {
+    def synchronize_positions(
+            self,
+            *,
+            account_id=None,
+            portfolio_id=None,
+    ) -> Dict[str, Any]:
+        """
+        Refresh snapshots then verify every position.
+        """
 
-                "healthy": True,
+        refreshed = self.refresh_all_snapshots(
 
-                "service": self.__class__.__name__,
+            account_id=account_id,
 
-                "version": "FX-1",
+            portfolio_id=portfolio_id,
 
-                "last_check": "OK",
+        )
 
-                "capabilities": [
+        verification = self.verify_all_positions(
 
-                    "load_positions",
+            account_id=account_id,
 
-                    "modify_position",
+            portfolio_id=portfolio_id,
 
-                    "close_position",
+        )
 
-                    "reverse_position",
+        return {
 
-                    "scale_in",
+            "snapshots_refreshed": refreshed,
 
-                    "scale_out",
+            "verification": verification,
 
-                    "flatten_account",
+        }
 
-                    "flatten_portfolio",
+    # ------------------------------------------------------------------
+    # Health
+    # ------------------------------------------------------------------
 
-                    "flatten_symbol",
+    def health(self) -> Dict[str, Any]:
 
-                    "verify",
+        return {
 
-                    "snapshot_refresh",
+            "healthy": True,
 
-                ],
+            "service": self.__class__.__name__,
 
-            }
+            "version": "FX-1",
+
+            "last_check": "OK",
+
+            "capabilities": [
+
+                "load_positions",
+
+                "modify_position",
+
+                "close_position",
+
+                "reverse_position",
+
+                "scale_in",
+
+                "scale_out",
+
+                "flatten_account",
+
+                "flatten_portfolio",
+
+                "flatten_symbol",
+
+                "verify",
+
+                "snapshot_refresh",
+
+            ],
+
+        }
 
 # ==============================================================================
 # Singleton Factory

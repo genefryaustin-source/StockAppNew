@@ -53,7 +53,7 @@ def render_crypto_page(db, user):
     with tabs[2]: _render_defi()
     with tabs[3]: _render_sentiment_news()
     with tabs[4]: _render_ai_analysis()
-    with tabs[5]: _render_portfolio_tracker()
+    with tabs[5]: _render_portfolio_tracker(db, user)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -947,7 +947,7 @@ def _render_risk_scanner():
 # TAB 5 — PORTFOLIO TRACKER
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _render_portfolio_tracker():
+def _render_portfolio_tracker(db=None, user=None):
     st.subheader("📈 Crypto Portfolio Tracker")
     st.caption("Track your holdings · AI portfolio advice · Rebalancing suggestions")
 
@@ -957,7 +957,14 @@ def _render_portfolio_tracker():
 
     port_key = "crypto_portfolio"
     if port_key not in st.session_state:
-        st.session_state[port_key] = []
+        loaded = []
+        if db is not None and user is not None:
+            try:
+                from modules.crypto.portfolio_sync import load_crypto_holdings_from_portfolio
+                loaded = load_crypto_holdings_from_portfolio(db, user)
+            except Exception:
+                loaded = []
+        st.session_state[port_key] = loaded
 
     col_sym, col_qty, col_add = st.columns([2, 2, 1])
     with col_sym:
@@ -982,6 +989,12 @@ def _render_portfolio_tracker():
     holdings = st.session_state[port_key]
 
     if not holdings:
+        if db is not None and user is not None:
+            try:
+                from modules.crypto.portfolio_sync import sync_crypto_holdings_to_portfolio
+                sync_crypto_holdings_to_portfolio(db, user, [])
+            except Exception:
+                pass
         st.info("Add holdings above to track your crypto portfolio.")
         return
 
@@ -1001,28 +1014,52 @@ def _render_portfolio_tracker():
         else:
             enriched.append({**h, "price": 0, "value": 0, "change_7d": 0})
 
-    # Portfolio table
-    rows = []
-    for e in enriched:
-        pct = e["value"] / max(1, total_value) * 100
-        rows.append({
-            "Symbol":    e["symbol"],
-            "Qty":       e["qty"],
-            "Price":     f"${e['price']:,.4f}" if e["price"] < 10 else f"${e['price']:,.2f}",
-            "Value":     f"${e['value']:,.2f}",
-            "Weight":    f"{pct:.1f}%",
-            "7d %":      f"{e['change_7d']:+.2f}%",
-        })
+    if db is not None and user is not None:
+        try:
+            from modules.crypto.portfolio_sync import sync_crypto_holdings_to_portfolio
+            sync_crypto_holdings_to_portfolio(db, user, enriched)
+        except Exception as e:
+            st.caption(f"⚠️ Couldn't sync holdings to the Risk Layer this refresh: {e}")
 
     c1,c2 = st.columns(2)
     c1.metric("Total Portfolio Value", f"${total_value:,.2f}")
     c2.metric("Assets", len(enriched))
 
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.caption("Edit Qty to update a position, check Remove and save to delete it.")
+    edit_df = pd.DataFrame([{
+        "Symbol": e["symbol"], "Qty": e["qty"],
+        "Price": e["price"], "Value": e["value"],
+        "7d %": e["change_7d"], "Remove": False,
+    } for e in enriched])
 
-    col_clear, col_ai = st.columns([1, 2])
+    edited = st.data_editor(
+        edit_df,
+        use_container_width=True,
+        hide_index=True,
+        disabled=["Symbol", "Price", "Value", "7d %"],
+        column_config={
+            "Qty": st.column_config.NumberColumn("Qty", min_value=0.0, step=0.000001, format="%.6f"),
+            "Price": st.column_config.NumberColumn("Price", format="$%.4f"),
+            "Value": st.column_config.NumberColumn("Value", format="$%.2f"),
+            "7d %": st.column_config.NumberColumn("7d %", format="%+.2f%%"),
+            "Remove": st.column_config.CheckboxColumn("Remove"),
+        },
+        key="port_editor",
+    )
+
+    col_save, col_clear, col_ai = st.columns([1, 1, 2])
+    with col_save:
+        if st.button("💾 Save Changes", key="port_save", type="primary", use_container_width=True):
+            kept = edited[~edited["Remove"]]
+            new_holdings = []
+            for h in holdings:
+                match = kept[kept["Symbol"] == h["symbol"]]
+                if not match.empty:
+                    new_holdings.append({**h, "qty": float(match.iloc[0]["Qty"])})
+            st.session_state[port_key] = new_holdings
+            st.rerun()
     with col_clear:
-        if st.button("🗑 Clear Portfolio", key="port_clear"):
+        if st.button("🗑 Clear All", key="port_clear", use_container_width=True):
             st.session_state[port_key] = []
             st.rerun()
     with col_ai:
