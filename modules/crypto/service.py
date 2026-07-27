@@ -47,6 +47,9 @@ def render_crypto_page(db, user):
         "🤖 AI Analysis",
         "📈 Portfolio Tracker",
         "💱 Trade",
+        "🕵️ Wallet Intelligence",
+        "🏦 Exchange Intelligence",
+        "🌐 DeFi Intelligence",
     ])
 
     with tabs[0]: _render_market_overview()
@@ -56,6 +59,15 @@ def render_crypto_page(db, user):
     with tabs[4]: _render_ai_analysis()
     with tabs[5]: _render_portfolio_tracker(db, user)
     with tabs[6]: _render_crypto_trading(db, user)
+    with tabs[7]:
+        from modules.crypto.crypto_wallet_intelligence_ui import render_wallet_intelligence
+        render_wallet_intelligence(db, user)
+    with tabs[8]:
+        from modules.crypto.crypto_exchange_intelligence_ui import render_exchange_intelligence
+        render_exchange_intelligence(db, user)
+    with tabs[9]:
+        from modules.crypto.crypto_defi_intelligence_ui import render_defi_intelligence
+        render_defi_intelligence(db, user)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
