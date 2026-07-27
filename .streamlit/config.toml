@@ -2,6 +2,7 @@
 headless = true
 enableStaticServing = false
 
+
 [theme]
 primaryColor = "#28D7FF"
 backgroundColor = "#050B14"

@@ -1,0 +1,11 @@
+market_data:
+
+  polygon_api_key: "YOUR_POLYGON_API_KEY"
+
+  fmp_api_key: "YOUR_FMP_API_KEY"
+
+  enable_yahoo_fallback: true
+
+  cache_dir: "cache"
+
+  request_timeout: 10

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320">
+<defs>
+<linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#33E6FF"/><stop offset="100%" stop-color="#157DFF"/></linearGradient>
+<linearGradient id="silver" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#F2F6FA"/><stop offset="100%" stop-color="#A9B4C2"/></linearGradient>
+</defs>
+<circle cx="150" cy="160" r="88" fill="none" stroke="url(#blue)" stroke-width="16"/>
+<line x1="205" y1="215" x2="245" y2="255" stroke="url(#blue)" stroke-width="14" stroke-linecap="round"/>
+<path d="M70 235 L145 70 L220 235" fill="none" stroke="url(#silver)" stroke-width="16"/>
+<line x1="105" y1="175" x2="185" y2="175" stroke="url(#silver)" stroke-width="12"/>
+<rect x="82" y="200" width="12" height="35" fill="url(#blue)"/>
+<rect x="100" y="180" width="12" height="55" fill="url(#blue)"/>
+<rect x="118" y="155" width="12" height="80" fill="url(#blue)"/>
+<rect x="136" y="128" width="12" height="107" fill="url(#blue)"/>
+<polyline points="118,175 150,145 178,122 208,105" fill="none" stroke="#4BE9FF" stroke-width="4"/>
+<circle cx="150" cy="145" r="5" fill="#4BE9FF"/><circle cx="178" cy="122" r="5" fill="#4BE9FF"/><circle cx="208" cy="105" r="5" fill="#4BE9FF"/>
+<text x="300" y="155" font-family="Segoe UI,Arial,sans-serif" font-size="82" font-weight="700"><tspan fill="url(#blue)">AIQ</tspan><tspan fill="url(#silver)">Intellus</tspan></text>
+<text x="302" y="205" font-family="Segoe UI,Arial,sans-serif" font-size="24" letter-spacing="4" fill="#36DFFF">ENTERPRISE INVESTMENT INTELLIGENCE PLATFORM</text>
+</svg>

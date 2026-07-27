@@ -40,31 +40,50 @@ class ForexOrderManagementEngine:
         )
         return get_forex_terminal_execution_service(db=self.db).cancel_order(broker_order_id)
 
-    def open_orders(self) -> List[Dict[str, Any]]:
-        return self._orders_by_status({"open", "pending", "submitted", "new"})
+    def open_orders(self, *, account_id: Optional[str] = None, portfolio_id: Optional[str] = None) -> List[
+        Dict[str, Any]]:
+        return self._orders_by_status(
+            {"open", "pending", "submitted", "new"},
+            account_id=account_id,
+            portfolio_id=portfolio_id,
+        )
 
-    def filled_orders(self) -> List[Dict[str, Any]]:
-        return self._orders_by_status({"filled", "complete", "completed", "closed"})
 
+    def filled_orders(self, *, account_id: Optional[str] = None, portfolio_id: Optional[str] = None) -> List[
+        Dict[str, Any]]:
+        return self._orders_by_status(
+            {"filled", "complete", "completed", "closed"},
+            account_id=account_id,
+            portfolio_id=portfolio_id,
+        )
     def order_status(self, broker_order_id: str) -> Optional[Dict[str, Any]]:
         if self.db is None:
             return None
         return self._order_repository().get_order(broker_order_id=broker_order_id)
 
-    def _orders_by_status(self, statuses) -> List[Dict[str, Any]]:
+    def _orders_by_status(self, statuses, *, account_id: Optional[str] = None, portfolio_id: Optional[str] = None) -> \
+    List[Dict[str, Any]]:
         if self.db is None:
             return []
-        # Delegate to ExecutionOrderRepository instead of hand-rolling raw
-        # SQL here: it already owns the forex_trade_orders schema, handles
-        # Postgres vs SQLite differences, and is the single source of truth
-        # every other part of the execution pipeline writes through.
-        return self._order_repository().list_orders(statuses=list(statuses))
+        return self._order_repository().list_orders(
+            statuses=list(statuses),
+            account_id=account_id,
+            portfolio_id=portfolio_id,
+        )
 
     def _order_repository(self):
         from modules.execution.execution_order_repository import (
             ExecutionOrderRepository,
         )
-        return ExecutionOrderRepository(self.db)
+
+        current_bind = getattr(self.db, "bind", None) if self.db is not None else None
+        cached_repo = getattr(self, "_order_repo_cache", None)
+        cached_bind = getattr(cached_repo.db, "bind", None) if cached_repo is not None and cached_repo.db is not None else None
+
+        if cached_repo is None or current_bind is not cached_bind:
+            self._order_repo_cache = ExecutionOrderRepository(self.db)
+
+        return self._order_repo_cache
 
     def _ensure_execution_tables(self) -> None:
 

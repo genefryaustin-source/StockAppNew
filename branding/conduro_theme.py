@@ -27,7 +27,8 @@ def _asset_data_uri(filename: str) -> str:
 
 
 def conduro_logo_uri() -> str:
-    return _asset_data_uri("conduro-logo.svg")
+    #return _asset_data_uri("conduro-logo.svg")
+    return _asset_data_uri("AIQIntellus.png")
 
 
 def conduro_mark_uri() -> str:
@@ -37,7 +38,7 @@ def conduro_mark_uri() -> str:
 def load_conduro_theme() -> None:
     """Inject Conduro Ventures / Stock Research Terminal visual styling."""
     logo_uri = conduro_logo_uri()
-    mark_uri = conduro_mark_uri()
+    #mark_uri = conduro_mark_uri()
 
     st.markdown(
         f"""
@@ -352,15 +353,15 @@ hr {{
 
 
 def render_conduro_header(
-    title: str = "Stock Research Terminal",
+    title: str = "Quantitative Intelligence Platform",
     subtitle: str = "AI-powered equity research, portfolio analytics, options intelligence, and professional research workflows.",
-    kicker: str = "Conduro Ventures LLC",
-    status: str = "Research Terminal",
+    kicker: str = "AIQ Intellus",
+    status: str = "Quantitative Intelligence Platform",
 ) -> None:
     logo_uri = conduro_logo_uri()
     mark_uri = conduro_mark_uri()
 
-    logo_html = f'<img class="conduro-logo" src="{logo_uri}" alt="Conduro Ventures LLC">' if logo_uri else '<strong>Conduro Ventures LLC</strong>'
+    logo_html = f'<img class="conduro-logo" src="{logo_uri}" alt="">' if logo_uri else '<strong>AIQ Intellus</strong>'
     mark_html = f'<img class="conduro-mark" src="{mark_uri}" alt="Conduro mark">' if mark_uri else ""
 
     st.markdown(

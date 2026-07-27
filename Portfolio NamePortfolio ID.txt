@@ -1,0 +1,37 @@
+Portfolio Name	Portfolio ID
+Forex Test	08acb1da-dfe9-4ca0-97d8-b980161e66f1
+Tenant 1 Client 1 Portfolio	7223b59d-661d-4b4f-8d45-13c6357d54a6
+Tenant 1 Client 1 Portfolio 2	2f334662-d198-40ef-9014-90ee1172886b
+Older Test Portfolio	81f6da55-d906-41a9-b030-8a55c2be4bf7
+Newer Test Portfolio	1f7d22a7-ab48-4529-a97a-b28d97e76c19
+
+2cc80ec3-6ec6-4213-84f7-b0470b54703d	
+1929b4a2-2847-44a8-8043-d2d8c1545fc3
+
+To DO look into quantedOptions.com
+
+18d2aa59-6aad-4e9b-a6b5-76ec5cfb106f
+
+http://localhost:8000/api/v1/portfolio/   provides a list of portfolios
+
+http://localhost:8000/api/v1/portfolio/d275a381-f83f-4e78-a139-fb4c1f24d948  by a portfolio ID
+
+
+
+
+Future 
+The next logical additions for institutional-grade portfolio capabilities would be:
+
+Portfolio Optimization API (efficient frontier, target volatility, target return, maximum Sharpe ratio, minimum variance).
+Factor Exposure API (sector, style, beta, market-cap, momentum, value, quality, and factor decomposition).
+Performance Attribution API (Brinson attribution, allocation vs. selection effects, benchmark-relative performance).
+Scenario Analysis API (interest-rate shocks, sector rotations, recession scenarios, historical stress events).
+
+With the current implementation, your risk endpoint already provides a solid foundation for these future capabilities.
+
+
+
+
+
+
+

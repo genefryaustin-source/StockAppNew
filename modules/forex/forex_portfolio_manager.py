@@ -6,6 +6,20 @@ Forex Portfolio Manager
 Connects Forex analytics to portfolio-style position tracking, mark-to-market,
 risk exposure, and paper-trading-ready order/position summaries.
 
+Position data (load_positions and everything downstream of it --
+mark_positions, portfolio_summary, currency_exposure, risk_metrics) is
+sourced from modules.forex.forex_portfolio_engine.ForexPortfolioEngine,
+the same canonical engine ForexTerminalExecutionService writes to on
+every real fill and the external REST API reads from. This used to run
+its own separate raw SQL against a forex_positions schema this class's
+own (permanently-disabled) ensure_tables() never actually created --
+which meant it was reading ForexPortfolioEngine's table by accident,
+then a downstream method read the result assuming a column name
+("avg_price") that column never had, so avg_price/unrealized_pnl/
+market_value silently computed to 0.0 for every real position on every
+dashboard using this class. Fixed by sourcing directly from the engine
+with the field names it actually has.
+
 This module is intentionally database-tolerant:
 - If a SQLAlchemy db/session is supplied, it can read/write Forex positions.
 - If no db is supplied, it operates from in-memory/demo inputs.
@@ -13,6 +27,7 @@ This module is intentionally database-tolerant:
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -40,6 +55,8 @@ from modules.forex.forex_portfolio_crud_engine import (
 
 DEFAULT_ACCOUNT_CURRENCY = "USD"
 DEFAULT_STARTING_CASH = 100000.0
+
+logger = logging.getLogger(__name__)
 _INITIALIZED = False
 
 def utc_now_iso() -> str:
@@ -214,105 +231,80 @@ class ForexPortfolioManager:
             tenant_id: Optional[str] = None,
             force_refresh: bool = False,
     ) -> List[Dict[str, Any]]:
-        if self.db is None or text is None:
+        """
+        Open forex positions, sourced from ForexPortfolioEngine --
+        the same canonical engine ForexTerminalExecutionService writes
+        to on every real fill, and what the external REST API
+        (GET /api/v1/forex/positions) reads. force_refresh is accepted
+        for backward compatibility with existing callers but has no
+        effect: this always reads live, there's no cache to bypass
+        anymore (see class docstring).
+
+        Previously this ran its own raw "SELECT * FROM forex_positions"
+        against a schema this class's own (dead -- see ensure_tables)
+        table definition didn't actually match, then a downstream
+        method (mark_positions) read the result assuming a column name
+        ("avg_price") that was never actually present -- avg_price,
+        unrealized_pnl, and market_value silently computed as 0.0 for
+        every real position on every dashboard that called this.
+        """
+        if self.db is None:
             return []
 
-        #self.ensure_tables()
-        #
-        # Sprint 26 Portfolio Cache
-        #
-        print("=" * 80)
-        print("LOAD_POSITIONS (CACHE)")
-        cached = self.cache.get_positions(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            portfolio_id=portfolio_id,
-        )
-
-        if cached is not None and not force_refresh:
-
-            print("POSITION CACHE HIT")
-
-            return cached
-
-        print("POSITION CACHE MISS")
-
-        where = ["status = 'OPEN'"]
-        params = {}
-
-        if portfolio_id:
-            where.append("portfolio_id = :portfolio_id")
-            params["portfolio_id"] = str(portfolio_id)
-
-        if user_id:
-            where.append("user_id = :user_id")
-            params["user_id"] = str(user_id)
-
-        if tenant_id:
-            where.append("tenant_id = :tenant_id")
-            params["tenant_id"] = str(tenant_id)
-
-        print("=" * 80)
-        print("LOAD_POSITIONS (DATABASE)")
-        print("Checking database session...")
-
         try:
-            # Clears any previous failed transaction
-            self.db.rollback()
+            from modules.forex.forex_portfolio_engine import get_forex_portfolio_engine
 
-            # Tests whether the connection is still alive
-            self.db.execute(text("SELECT 1"))
+            engine = get_forex_portfolio_engine(
+                tenant_id=tenant_id or self.tenant_id,
+                user_id=user_id or self.user_id,
+                portfolio_id=portfolio_id or self.portfolio_id,
+                db=self.db,
+            )
 
-            print("SESSION OK")
+            positions = engine.list_positions(status="OPEN")
 
-        except Exception as exc:
-            print("SESSION DEAD")
-            print(type(exc))
-            print(exc)
+        except Exception:
+            logger.exception("Failed to load forex positions.")
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
+            return []
 
-            import traceback
-            traceback.print_exc()
-
-            raise
-
-        print("Running forex_positions query...")
-        import time
-
-        age = time.time() - getattr(self.db, "_created_at", time.time())
-
-        print(f"SESSION AGE: {age:.1f} seconds")
-        rows = self.db.execute(
-            text(f"""
-                SELECT *
-                FROM forex_positions
-                WHERE {' AND '.join(where)}
-                ORDER BY updated_at DESC
-            """),
-            params,
-        ).fetchall()
-        import time
-
-        age = time.time() - getattr(self.db, "_created_at", time.time())
-
-        print(f"SESSION AGE: {age:.1f} seconds")
-        print(f"Retrieved {len(rows)} positions")
-
-        positions = [
-            dict(r._mapping)
-            for r in rows
+        return [
+            {
+                "id": p.id,
+                "tenant_id": p.tenant_id,
+                "user_id": p.user_id,
+                "portfolio_id": p.portfolio_id,
+                "account_id": p.account_id,
+                "pair": p.pair,
+                "side": p.side,
+                "units": p.units,
+                # "avg_price" (not avg_entry_price) is deliberate --
+                # every downstream method in this class (mark_positions,
+                # portfolio_summary, currency_exposure, risk_metrics)
+                # was written against this key name; renaming here
+                # keeps every one of those working unchanged while
+                # fixing the actual bug (the *source* they were being
+                # fed from, not the field name itself).
+                "avg_price": p.avg_entry_price,
+                "current_price": p.current_price,
+                "notional_value": p.notional_value,
+                "market_value": p.market_value,
+                "unrealized_pnl": p.unrealized_pnl,
+                "realized_pnl": p.realized_pnl,
+                "stop_price": p.stop_price,
+                "target_price": p.target_price,
+                "leverage": p.leverage,
+                "status": p.status,
+                "base_currency": p.base_currency,
+                "quote_currency": p.quote_currency,
+                "opened_at": p.opened_at,
+                "updated_at": p.updated_at,
+            }
+            for p in positions
         ]
-
-        #
-        # Store for future requests
-        #
-        self.cache.set_positions(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            portfolio_id=portfolio_id,
-            positions=positions,
-        )
-
-        return positions
 
     def save_position(
         self,
@@ -477,21 +469,9 @@ class ForexPortfolioManager:
         tenant_id: Optional[str] = None,
         force_refresh: bool = False,
     ) -> Dict[str, Any]:
-        #
-        # Sprint 26 Portfolio Summary Cache
-        #
-        cached = self.cache.get_summary(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            portfolio_id=portfolio_id,
-        )
-
-        if cached is not None and not force_refresh:
-            print("PORTFOLIO SUMMARY CACHE HIT")
-
-            return cached
-
-        print("PORTFOLIO SUMMARY CACHE MISS")
+        # force_refresh accepted for backward compatibility; no effect
+        # -- this always reads live from ForexPortfolioEngine now (see
+        # class docstring), so there's no cache to bypass.
         try:
             if positions is None:
 
@@ -557,13 +537,6 @@ class ForexPortfolioManager:
             "currency_exposure": exposure,
             "risk": self.risk_metrics(marked),
         }
-
-        self.cache.set_summary(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            portfolio_id=portfolio_id,
-            summary=summary,
-        )
 
         return summary
 
@@ -940,9 +913,26 @@ def get_forex_portfolio_manager(
     normalized_tenant_id = str(tenant_id) if tenant_id is not None else "default"
     normalized_user_id = str(user_id) if user_id is not None else "default"
 
+    # Comparing db session objects by identity (db is not db) meant
+    # every distinct session instance -- even one pointed at the exact
+    # same database -- looked "different" and triggered a full
+    # ForexPortfolioManager rebuild. Confirmed directly: this was the
+    # SAME bug as the one already fixed in
+    # get_forex_portfolio_crud_engine(), one layer further out --
+    # fixing the inner crud engine alone wasn't enough, since THIS
+    # factory rebuilds the whole manager (re-running its entire
+    # __init__, not just the crud-engine lookup) on every single
+    # Streamlit rerun for the same reason. Comparing the underlying
+    # engine (db.bind) instead of the session object fixes this the
+    # same way: different sessions against the SAME database correctly
+    # reuse the cached manager, while a genuinely different database
+    # still correctly triggers a rebuild.
+    current_bind = getattr(db, "bind", None) if db is not None else None
+    cached_bind = getattr(_MANAGER.db, "bind", None) if _MANAGER is not None and _MANAGER.db is not None else None
+
     if (
             _MANAGER is None
-            or _MANAGER.db is not db
+            or (db is not None and current_bind is not cached_bind)
             or _MANAGER.tenant_id != normalized_tenant_id
             or _MANAGER.user_id != normalized_user_id
             or _MANAGER.portfolio_id != portfolio_id
@@ -955,5 +945,3 @@ def get_forex_portfolio_manager(
         )
 
     return _MANAGER
-
-

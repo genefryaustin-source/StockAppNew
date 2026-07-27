@@ -20,7 +20,7 @@ from branding.conduro_theme import load_conduro_theme, render_conduro_header
 # MUST BE FIRST STREAMLIT COMMAND
 # MUST BE FIRST STREAMLIT COMMAND
 st.set_page_config(
-    page_title="Equity Research Terminal",
+    page_title="Quantitative Intelligence Platform",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -385,9 +385,9 @@ try:
 
 
     render_conduro_header(
-        title="Stock Research Terminal",
+        title="Quantitative Intelligence Platform",
         subtitle="AI-powered equity research, portfolio analytics, options intelligence, and advisor workflows.",
-        kicker="Conduro Ventures LLC",
+        #kicker="AIQ Intellus",
         status=user.get("role", "User").replace("_", " ").title() if user else "User"
     )
 
@@ -428,7 +428,7 @@ try:
     # ============================================================
     # SIDEBAR
     # ============================================================
-    st.sidebar.markdown("## Conduro Ventures\n\n**Stock Research Terminal**")
+    st.sidebar.markdown("## AIQ Intellus\n\n**Quantitative Intelligence Platform**")
     st.sidebar.markdown(f"**Version:** {VERSION}")
     #st.sidebar.info("Conduro Ventures Research Platform")
     st.sidebar.markdown(datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"))
@@ -1178,29 +1178,26 @@ try:
             st.error(f"Crypto module failed: {e}")
             st.exception(e)
 
+
+
     elif page == "Forex":
         if not check_page(user, "Forex", db):
             require_page(user, "Forex", db)
             st.stop()
 
         try:
-            from modules.forex.forex_master_workspace import render_forex_master_workspace
+            from modules.forex.forex_terminal_v2 import render_forex_terminal_v2
 
-            print("=" * 80)
-            print("APP.PY FOREX ENTRY")
-            print("USER =", user)
-            print("USER TYPE =", type(user))
-            print("=" * 80)
             run_page(
                 "Forex",
-                render_forex_master_workspace,
+                render_forex_terminal_v2,
                 db,
                 user,
             )
 
         except Exception as e:
             safe_rollback(db)
-            st.error(f"Forex module failed: {e}")
+            st.error(f"Forex v2 module failed: {e}")
             st.exception(e)
 
     elif page == "Investment Committee":

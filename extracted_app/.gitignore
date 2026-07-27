@@ -1,0 +1,105 @@
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+
+# ========================
+# Virtual Environment
+# ========================
+.venv/
+venv/
+env/
+
+# ========================
+# Build / Distribution
+# ========================
+build/
+dist/
+installer/
+installer_assets/
+
+# ========================
+# Cache folders
+# ========================
+cache/
+market_cache/
+market_data_cache/
+
+# ========================
+# Streamlit - IMPORTANT
+# ========================
+.streamlit/secrets.toml
+installer_assets/secrets.toml
+
+# ========================
+# Other secrets / env files
+# ========================
+.env
+.env.*
+*.pem
+*.key
+
+# ========================
+# IDE files
+# ========================
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+
+# ========================
+# OS files
+# ========================
+.DS_Store
+Thumbs.db
+
+# ========================
+# Logs & databases
+# ========================
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+# ========================
+# Archives / zipped snapshots
+# Not meant to be version-controlled -- if app.zip etc. are
+# already tracked, run: git rm --cached <path> to untrack them.
+# ========================
+*.zip
+*.7z
+*.tar
+*.tar.gz
+
+# ========================
+# Office docs / generated reports
+# (e.g. exported chat reports, assessments) -- not app source
+# ========================
+*.docx
+*.doc
+*.xlsx
+*.pptx
+
+# ========================
+# Backup / scratch / ad-hoc files
+# ========================
+* - Copy.py
+* - Copy.*
+*.bak
+*.orig
+*_old.py
+*_backup.py
+
+# Ad-hoc root-level scratch scripts (not part of the app)
+/yahoo.py
+/yahoomultiple.py
+/yahoosimple.py
