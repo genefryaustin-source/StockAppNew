@@ -559,10 +559,13 @@ def run_liquidity_validation(
 ) -> dict[str, Any]:
     from modules.options.options_data_service import get_options_chain
 
-    try:
-        chain_data = get_options_chain(ticker, expiration=expiration)
-    except TypeError:
-        chain_data = get_options_chain(ticker)
+    chain_data = get_options_chain(ticker)
+
+    if expiration and isinstance(chain_data, dict):
+        all_rows = chain_data.get("all_rows")
+        if isinstance(all_rows, pd.DataFrame) and "expiry" in all_rows.columns:
+            filtered = all_rows[all_rows["expiry"].astype(str) == str(expiration)]
+            chain_data = {**chain_data, "all_rows": filtered}
 
     result = audit_chain_liquidity(chain_data)
     result["ticker"] = ticker

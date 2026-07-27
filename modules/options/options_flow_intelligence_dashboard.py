@@ -1,5 +1,24 @@
 """
+modules/options/options_flow_intelligence_dashboard.py
+
 Sprint 4 Phase 2 — Institutional Flow Intelligence Dashboard.
+
+CHANGES:
+- Fixed: _extract_flow_source() checked chain_data for a "contracts" key
+  before falling back to "all_rows" -- but every real provider sets
+  "contracts" to a plain integer row count (int(len(df)), see
+  options_data_service.py / providers/common.py), never actual flow rows.
+  Confirmed directly that none of the other preferred keys checked
+  ("flows"/"alerts"/"unusual"/"items"/"rows") are ever set by any provider
+  either, so in practice this function always matched "contracts" and
+  returned an integer instead of the real chain data -- meaning the entire
+  "Flow" workspace always silently showed "no qualifying options flow"
+  regardless of how much real flow data existed. Removed "contracts" from
+  the preferred-keys list so this correctly falls through to the real
+  "all_rows" data.
+- Verified with a realistic, multi-row chain_data sample: confirmed the
+  extracted source is now the real DataFrame (not an int), and that
+  build_flow_regime_report() correctly reports available: True on it.
 """
 from __future__ import annotations
 
@@ -13,7 +32,14 @@ from modules.options.options_flow_regime_engine import build_flow_regime_report,
 def _extract_flow_source(chain_data: dict[str, Any] | None) -> Any:
     if not chain_data:
         return {}
-    for key in ("flows", "alerts", "unusual", "items", "rows", "contracts"):
+    # "contracts" is deliberately excluded here -- confirmed it's
+    # always a plain integer row count (int(len(df))) set by every
+    # real provider, never actual flow rows. Confirmed none of the
+    # other keys checked below ("flows"/"alerts"/"unusual"/"items"/
+    # "rows") are ever set by any provider either, so in practice this
+    # always fell through to matching "contracts" and returning an
+    # integer instead of the real chain data.
+    for key in ("flows", "alerts", "unusual", "items", "rows"):
         if key in chain_data:
             return chain_data[key]
     return chain_data.get("all_rows", chain_data)

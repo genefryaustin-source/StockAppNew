@@ -283,12 +283,6 @@ def validate_call_put_skew(surface: pd.DataFrame) -> list[VolatilityAuditCheck]:
                 },
             )
         ]
-    print("=" * 80)
-    print("CALL PUT SKEW COLUMNS")
-    print("=" * 80)
-    print(surface.columns.tolist())
-    print("MISSING:", missing)
-    print("=" * 80)
     usable = surface.dropna(
         subset=required
     )
@@ -537,16 +531,6 @@ def validate_atm_quality(surface: pd.DataFrame) -> list[VolatilityAuditCheck]:
 
 def audit_chain_volatility(chain_data: dict[str, Any]) -> dict[str, Any]:
     surface = _prepare_surface_frame(chain_data)
-    print("=" * 80)
-    print("VOLATILITY SURFACE")
-    print("=" * 80)
-    print(type(surface))
-    print(surface.columns.tolist() if hasattr(surface, "columns") else "NO COLUMNS")
-
-    if isinstance(surface, pd.DataFrame) and not surface.empty:
-        print(surface.head(3).to_dict("records"))
-
-    print("=" * 80)
 
     checks: list[VolatilityAuditCheck] = []
     checks.extend(validate_iv_availability(surface))
@@ -579,10 +563,13 @@ def run_volatility_validation(
 ) -> dict[str, Any]:
     from modules.options.options_data_service import get_options_chain
 
-    try:
-        chain_data = get_options_chain(ticker, expiration=expiration)
-    except TypeError:
-        chain_data = get_options_chain(ticker)
+    chain_data = get_options_chain(ticker)
+
+    if expiration and isinstance(chain_data, dict):
+        all_rows = chain_data.get("all_rows")
+        if isinstance(all_rows, pd.DataFrame) and "expiry" in all_rows.columns:
+            filtered = all_rows[all_rows["expiry"].astype(str) == str(expiration)]
+            chain_data = {**chain_data, "all_rows": filtered}
 
     result = audit_chain_volatility(chain_data)
     result["ticker"] = ticker

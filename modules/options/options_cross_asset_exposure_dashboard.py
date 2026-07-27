@@ -1,13 +1,20 @@
-
 from __future__ import annotations
 import streamlit as st
+from modules.options.options_portfolio_engine import load_portfolio_positions
 from modules.options.options_cross_asset_exposure_engine import (
     build_cross_asset_exposure_report,
     summarize_cross_asset_exposure,
 )
 
-def render_cross_asset_exposure_dashboard(positions=None):
+def render_cross_asset_exposure_dashboard(ticker: str = "", paper: bool = True, positions=None):
     st.subheader("🌐 Cross-Asset Exposure Intelligence")
+    st.caption(
+        "Currently reflects options positions only, bucketed under 'Options' -- "
+        "not a true app-wide view across equities/crypto/futures/fixed income yet."
+    )
+
+    if positions is None:
+        positions = load_portfolio_positions(ticker=ticker, paper=paper)
 
     report = build_cross_asset_exposure_report(positions or [])
 

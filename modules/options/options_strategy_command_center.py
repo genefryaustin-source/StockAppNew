@@ -46,16 +46,6 @@ def _load_candidates(ticker: str, force_refresh: bool = False) -> list[dict[str,
     key = f"phase5_strategy_candidates_{ticker.upper()}"
     if force_refresh or key not in st.session_state:
         chain = _load_chain(ticker, force_refresh=force_refresh)
-        st.write("CHAIN TYPE", type(chain))
-
-        if isinstance(chain, dict):
-            st.write("CHAIN KEYS", list(chain.keys())[:50])
-
-        print("=" * 80)
-        print("STRATEGY CHAIN OBJECT")
-        print(type(chain))
-        print(chain.keys() if isinstance(chain, dict) else "NOT DICT")
-        print("=" * 80)
         with st.spinner("Building and scoring strategy candidates..."):
             st.session_state[key] = generate_strategy_candidates(ticker, chain, include_context=True)
     return list(st.session_state.get(key, []) or [])

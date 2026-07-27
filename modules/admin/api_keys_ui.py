@@ -142,67 +142,129 @@ def render_api_keys_tab(db, user):
                     st.success(f"Reverted to the platform default ({PLATFORM_KEY_GRACE_PERIOD_DAYS} days).")
                     st.rerun()
 
+    st.info(f"Managing provider API keys for tenant: `{tenant_id}`")
+
     existing = {row.provider: row for row in list_tenant_keys(db, tenant_id)}
+    provider_labels = {code: label for code, label, _url in KNOWN_PROVIDERS}
+
+    # Quick-reference links to every provider's key page.
+    st.markdown("#### Provider signup pages")
+    link_cols = st.columns(len(KNOWN_PROVIDERS))
+    for col, (_code, label, url) in zip(link_cols, KNOWN_PROVIDERS):
+        col.link_button(label, url, use_container_width=True)
+
+    # ---------------------------------------------------------
+    # Existing keys: update and remove are intentionally kept
+    # separate from creation so the UI never looks update-only.
+    # ---------------------------------------------------------
+    st.markdown("#### Configured keys")
 
     if existing:
-        st.markdown("#### Currently configured")
         for provider, row in existing.items():
             label, _url = _PROVIDER_INFO.get(provider, (provider, None))
-            c1, c2, c3 = st.columns([3, 2, 1])
+            c1, c2, c3 = st.columns([3, 3, 1])
             c1.write(f"**{label}**")
             c2.caption(
                 f"...{row.key_suffix}  •  updated "
                 f"{row.updated_at.strftime('%Y-%m-%d %H:%M') if row.updated_at else '—'}"
             )
-            if c3.button("Remove", key=f"apikey_remove_{provider}"):
+
+            if c3.button("Remove", key=f"apikey_remove_{tenant_id}_{provider}"):
                 delete_tenant_key(db, tenant_id, provider)
-                st.success(f"Removed your {label} key. Falling back to the platform key.")
+                st.success(f"Removed the {label} key for tenant `{tenant_id}`.")
                 st.rerun()
-        st.divider()
+
+            with st.expander(f"Update {label} key", expanded=False):
+                replacement_value = st.text_input(
+                    "Replacement API key",
+                    type="password",
+                    key=f"apikey_update_value_{tenant_id}_{provider}",
+                    placeholder="Paste a replacement key.",
+                )
+                if st.button(
+                    f"💾 Update {label}",
+                    key=f"apikey_update_btn_{tenant_id}_{provider}",
+                ):
+                    if not replacement_value.strip():
+                        st.warning("Enter the replacement key value first.")
+                    else:
+                        try:
+                            set_tenant_key(
+                                db,
+                                tenant_id,
+                                provider,
+                                replacement_value,
+                                user_id=user.get("user_id"),
+                            )
+                            st.success(f"Updated the {label} key for tenant `{tenant_id}`.")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Could not update key: {exc}")
     else:
-        st.info("No tenant-specific keys configured yet -- using the platform's shared keys.")
+        st.info("No tenant-specific keys are configured yet.")
 
-    st.markdown("#### Add / update a key")
-    st.caption("Don't have a key for a provider yet? Click its link below to get one.")
+    st.divider()
 
-    # Quick-reference links to every provider's key page, so there's
-    # nowhere to hunt around -- click, sign up, paste, save.
-    link_cols = st.columns(len(KNOWN_PROVIDERS))
-    for col, (code, label, url) in zip(link_cols, KNOWN_PROVIDERS):
-        col.link_button(label, url, use_container_width=True)
+    # ---------------------------------------------------------
+    # New key creation: only providers not already configured
+    # are shown, making this a true and unmistakable Add form.
+    # ---------------------------------------------------------
+    st.markdown("#### ➕ Add a new provider key")
+    st.caption(
+        f"The new key will be created for tenant `{tenant_id}`. "
+        "Providers that already have a key are managed above."
+    )
 
-    provider_labels = {code: label for code, label, _url in KNOWN_PROVIDERS}
+    available_providers = [
+        code for code, _label, _url in KNOWN_PROVIDERS if code not in existing
+    ]
+
+    add_provider = None
+    if not available_providers:
+        st.success("Every supported provider already has a tenant-specific key configured.")
+    else:
+        with st.form(f"apikey_create_form_{tenant_id}", clear_on_submit=True):
+            add_provider = st.selectbox(
+                "Provider",
+                available_providers,
+                format_func=lambda code: provider_labels[code],
+                key=f"apikey_create_provider_{tenant_id}",
+            )
+            new_key_value = st.text_input(
+                "New API key",
+                type="password",
+                key=f"apikey_create_value_{tenant_id}",
+                placeholder="Paste the new key here — it is encrypted before storage.",
+            )
+            create_submitted = st.form_submit_button("➕ Create key", type="primary")
+
+            if create_submitted:
+                if not new_key_value.strip():
+                    st.error("Enter a key value first.")
+                else:
+                    try:
+                        set_tenant_key(
+                            db,
+                            tenant_id,
+                            add_provider,
+                            new_key_value,
+                            user_id=user.get("user_id"),
+                        )
+                        st.success(
+                            f"Created the {provider_labels[add_provider]} key "
+                            f"for tenant `{tenant_id}`."
+                        )
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Could not create key: {exc}")
+
+    # Keep connectivity testing independent from the create/update forms.
     selected_provider = st.selectbox(
-        "Provider",
+        "Provider to test",
         list(provider_labels.keys()),
         format_func=lambda code: provider_labels[code],
-        key="apikey_provider_select",
+        key=f"apikey_test_provider_{tenant_id}",
     )
-
-    new_key_value = st.text_input(
-        "API key",
-        type="password",
-        key="apikey_new_value",
-        placeholder="Paste the key here -- it's encrypted before it's stored.",
-    )
-
-    if st.button("💾 Save key", key="apikey_save_btn"):
-        if not new_key_value.strip():
-            st.warning("Enter a key value first.")
-        else:
-            try:
-                set_tenant_key(
-                    db, tenant_id, selected_provider, new_key_value,
-                    user_id=user.get("user_id"),
-                )
-                st.success(
-                    f"Saved your {provider_labels[selected_provider]} key. "
-                    "It will be used instead of the platform's shared key "
-                    "from now on."
-                )
-                st.rerun()
-            except Exception as e:
-                st.error(f"Could not save key: {e}")
 
     # --- Broker connectivity test (Alpaca, Tradier, IBKR, and any future
     # broker providers) -- unlike a market-data key, a broker credential

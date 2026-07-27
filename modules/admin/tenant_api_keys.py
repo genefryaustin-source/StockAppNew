@@ -83,6 +83,7 @@ KNOWN_PROVIDERS = [
     ("SEC_EDGAR_IDENTITY", "SEC EDGAR (contact identity, e.g. 'Name email@domain.com')", "https://www.sec.gov/os/webmaster-faq#developers"),
     ("FINTEL_API_KEY", "Fintel", "https://fintel.io/"),
     ("QUIVER_API_KEY", "QuiverQuant", "https://www.quiverquant.com/"),
+    ("ETHERSCAN_API_KEY","Etherscan","https://etherscan.io/myapikey"),
 ]
 
 

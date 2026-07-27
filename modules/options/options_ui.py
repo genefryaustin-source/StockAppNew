@@ -570,15 +570,54 @@ def render_options_trading_page(db, user: dict):
         elif workspace == "🏢 Operations":
             render_institutional_operations_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🧠 Portfolio Optimization AI":
-            render_portfolio_optimization_ai_dashboard(ticker=ticker, paper=paper)
+            from modules.options.options_institutional_report_builder import build_cio_level_reports
+            _po_reports = build_cio_level_reports(ticker=ticker, paper=paper, chain_data=chain_data)
+            render_portfolio_optimization_ai_dashboard(
+                ticker=ticker, paper=paper, positions=_po_reports["positions"],
+                risk_report=_po_reports["risk_report"], construction_report=_po_reports["construction_report"],
+                income_report=_po_reports["income_report"], liquidity_report=_po_reports["liquidity_provider_report"],
+                market_maker_report=_po_reports["market_maker_report"],
+                volatility_report=_po_reports["volatility_report"],
+            )
         elif workspace == "🤖 Trade Selection":
-            render_autonomous_trade_selection_dashboard(ticker=ticker, paper=paper)
+            from modules.options.options_institutional_report_builder import build_shared_institutional_reports
+
+            shared_reports = build_shared_institutional_reports(ticker=ticker, paper=paper, chain_data=chain_data)
+            render_autonomous_trade_selection_dashboard(
+                ticker=ticker, paper=paper,
+                portfolio_value=shared_reports["portfolio_cash"],
+                csp_report=shared_reports["csp_report"],
+                covered_call_report=shared_reports["covered_call_report"],
+                wheel_report=shared_reports["wheel_report"],
+                income_command_report=shared_reports["income_command_report"],
+                volatility_command_report=shared_reports["volatility_command_report"],
+            )
         elif workspace == "🧭 Risk Rebalancing":
-            render_autonomous_risk_rebalancing_dashboard(ticker=ticker, paper=paper)
+            from modules.options.options_institutional_report_builder import build_cio_level_reports
+            _rr_reports = build_cio_level_reports(ticker=ticker, paper=paper, chain_data=chain_data)
+            render_autonomous_risk_rebalancing_dashboard(
+                ticker=ticker, paper=paper, positions=_rr_reports["positions"],
+                risk_report=_rr_reports["risk_report"], greeks_report=_rr_reports["greeks_report"],
+                guardrails_report=_rr_reports["guardrails_report"],
+                liquidity_report=_rr_reports["liquidity_provider_report"],
+                market_maker_report=_rr_reports["market_maker_report"],
+                volatility_report=_rr_reports["volatility_report"],
+            )
         elif workspace == "💰 Auto Income":
             render_autonomous_income_management_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🏛 CIO Dashboard":
-            render_institutional_options_cio_dashboard(ticker=ticker, paper=paper)
+            from modules.options.options_institutional_report_builder import build_cio_level_reports
+
+            cio_reports = build_cio_level_reports(ticker=ticker, paper=paper, chain_data=chain_data)
+            render_institutional_options_cio_dashboard(
+                ticker=ticker, paper=paper,
+                portfolio_optimization_report=cio_reports["portfolio_optimization_report"],
+                trade_selection_report=cio_reports["trade_selection_report"],
+                risk_rebalancing_report=cio_reports["risk_rebalancing_report"],
+                auto_income_report=cio_reports["auto_income_report"],
+                volatility_report=cio_reports["volatility_report"],
+                market_maker_report=cio_reports["market_maker_report"],
+            )
         elif workspace == "💰 Income Command":
             render_income_command_center_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🛡 Portfolio Risk":
@@ -588,7 +627,12 @@ def render_options_trading_page(db, user: dict):
         elif workspace == "📈 Greeks":
             render_greeks_exposure_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🚦 Guardrails":
-            render_risk_guardrails_dashboard(ticker=ticker, paper=paper)
+            from modules.options.options_institutional_report_builder import build_cio_level_reports
+            _gr_reports = build_cio_level_reports(ticker=ticker, paper=paper, chain_data=chain_data)
+            render_risk_guardrails_dashboard(
+                ticker=ticker, paper=paper,
+                positions=_gr_reports["positions"], risk_report=_gr_reports["risk_report"],
+            )
         elif workspace == "🏗 Construction":
             render_portfolio_construction_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🔄 Lifecycle":
@@ -610,7 +654,7 @@ def render_options_trading_page(db, user: dict):
         elif workspace == "🧭 Dynamic Risk":
             render_dynamic_risk_adjustment_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🌐 Cross Asset":
-            render_cross_asset_exposure_dashboard()
+            render_cross_asset_exposure_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🤖 Auto Manager":
             render_autonomous_portfolio_manager_dashboard(ticker=ticker, paper=paper)
         elif workspace == "🏭 Strategy Factory":
@@ -1013,25 +1057,26 @@ def _render_order_ticket(
                 "Sell to Close": "sell_to_close",
             }
 
-            req = OptionsOrderRequest(
-                option_symbol=occ_symbol,
-                qty=int(qty),
-                side=alpaca_side,
-                position_intent=position_intent_map.get(side, "buy_to_open"),
-                order_type=order_type.lower(),
-                tif=tif,
-                limit_price=limit_price,
-            )
-            broker = AlpacaOptionsBroker(paper=paper)
-            with st.spinner("Submitting order…"):
-                resp = broker.submit_order(req)
+            from modules.options.options_trading_service import OptionsTradingService
 
-            if resp.status == "error":
-                st.error(f"❌ Order failed: {resp.error}")
+            service = OptionsTradingService(db, paper=paper)
+            with st.spinner("Submitting order…"):
+                result = service.submit_order(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    option_symbol=occ_symbol,
+                    qty=int(qty),
+                    side=alpaca_side,
+                    position_intent=position_intent_map.get(side, "buy_to_open"),
+                    order_type=order_type.lower(),
+                    tif=tif,
+                    limit_price=limit_price,
+                )
+
+            if not result.success:
+                st.error(f"❌ Order failed: {result.message}")
             else:
-                st.success(f"✅ Order submitted — ID: `{resp.order_id}` Status: **{resp.status}**")
-                ensure_tables(db)
-                save_order(db, tenant_id, user_id, req, resp)
+                st.success(f"✅ Order submitted — ID: `{result.broker_order_id}` Status: **{result.status}**")
                 for k in list(st.session_state.keys()):
                     if "opt_pos" in k or k == "opt_positions":
                         del st.session_state[k]
@@ -1190,9 +1235,10 @@ ACTIVE_ORDER_STATUSES = {
 def _sync_option_order_statuses(db, tenant_id: str, paper: bool) -> None:
     """Refresh local option order statuses from Alpaca without breaking the UI."""
     try:
-        ensure_tables(db)
-        broker = AlpacaOptionsBroker(paper=paper)
-        sync_option_orders(db, broker, tenant_id)
+        from modules.options.options_trading_service import OptionsTradingService
+
+        service = OptionsTradingService(db, paper=paper)
+        service.reconcile_pending_orders(tenant_id=tenant_id)
     except Exception as exc:
         st.warning(f"Order status sync unavailable: {exc}")
 

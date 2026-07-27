@@ -547,7 +547,7 @@ def _get_option_positions(paper: bool = True) -> list[dict]:
     try:
         from modules.options.options_broker import AlpacaOptionsBroker
         broker = AlpacaOptionsBroker(paper=paper)
-        pos = broker.get_positions()
+        pos = broker.list_options_positions()
         if pos:
             return [p.__dict__ if hasattr(p, "__dict__") else dict(p) for p in pos]
     except Exception:

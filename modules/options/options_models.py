@@ -4,9 +4,12 @@ DB table for persisting options positions and orders locally.
 Auto-created on first load — no migration needed.
 """
 from __future__ import annotations
+import logging
 from sqlalchemy import text
 import uuid
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 def ensure_tables(db):
     db.execute(text("""
@@ -255,12 +258,6 @@ def get_positions(db, tenant_id: str) -> list[dict]:
 
 
 def sync_option_orders(db, broker, tenant_id):
-
-    print("=" * 80)
-    print("SYNC OPTION ORDERS STARTED")
-    print("TENANT:", tenant_id)
-    print("=" * 80)
-
     rows = db.execute(text("""
         SELECT broker_order_id
         FROM options_orders
@@ -273,12 +270,7 @@ def sync_option_orders(db, broker, tenant_id):
         if not oid:
             continue
 
-        print("CHECKING ORDER:", oid)
-
         order = broker.get_order(oid)
-
-        print("BROKER RESPONSE:")
-        print(order)
 
         if not order:
             continue
@@ -307,21 +299,6 @@ def update_order_status(
 
     now = datetime.now(timezone.utc).isoformat()
 
-    print("=" * 80)
-    print("UPDATE ORDER STATUS")
-    print("BROKER ORDER ID:", broker_order_id)
-    print("STATUS:", status)
-    print("FILL PRICE:", fill_price)
-    print("FILLED QTY:", filled_qty)
-    check = db.execute(text("""
-        SELECT COUNT(*)
-        FROM options_orders
-        WHERE broker_order_id = :oid
-    """), {
-        "oid": broker_order_id
-    }).scalar()
-
-    print("MATCHING ROWS:", check)
     result = db.execute(text("""
         UPDATE options_orders
         SET
@@ -338,10 +315,9 @@ def update_order_status(
         "broker_order_id": broker_order_id,
     })
 
-    print("ROWS UPDATED:", result.rowcount)
-
     try:
         db.commit()
-        print("COMMIT SUCCESS")
-    except Exception as e:
-        print("COMMIT FAILED:", e)
+    except Exception:
+        logger.exception(
+            "Failed to commit order status update | broker_order_id=%s", broker_order_id,
+        )

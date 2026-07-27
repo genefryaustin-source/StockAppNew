@@ -295,19 +295,6 @@ def audit_chain_pricing(
     dividend_yield: float = DEFAULT_DIVIDEND_YIELD,
 ) -> dict[str, Any]:
     df = _extract_chain_frame(chain_data)
-    print("=" * 80)
-    print("PRICING DF COLUMNS")
-    print("=" * 80)
-    print(df.columns.tolist())
-
-    print("=" * 80)
-    print("PRICING DF SAMPLE")
-    print("=" * 80)
-
-    if not df.empty:
-        print(df.head(3).to_dict("records"))
-
-    print("=" * 80)
 
     result: dict[str, Any] = {
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -353,15 +340,6 @@ def audit_chain_pricing(
     # If mid is absent, calculate it from bid/ask.
     missing_mid = work["mid_num"].isna() & work["bid_num"].notna() & work["ask_num"].notna()
     work.loc[missing_mid, "mid_num"] = (work.loc[missing_mid, "bid_num"] + work.loc[missing_mid, "ask_num"]) / 2.0
-
-    print("=" * 80)
-    print("PRICING NULL COUNTS")
-    print("=" * 80)
-
-    print("Underlying NaN:", work["underlying_num"].isna().sum())
-    print("DTE <= 0:", (work["dte_num"] <= 0).sum())
-    print("IV NaN:", work["iv_num"].isna().sum())
-    print("MID NaN:", work["mid_num"].isna().sum())
 
     work = work.dropna(subset=["strike_num", "underlying_num", "iv_num", "dte_num", "mid_num"])
     work = work[
@@ -524,10 +502,13 @@ def run_pricing_validation(
 ) -> dict[str, Any]:
     from modules.options.options_data_service import get_options_chain
 
-    try:
-        chain_data = get_options_chain(ticker, expiration=expiration)
-    except TypeError:
-        chain_data = get_options_chain(ticker)
+    chain_data = get_options_chain(ticker)
+
+    if expiration and isinstance(chain_data, dict):
+        all_rows = chain_data.get("all_rows")
+        if isinstance(all_rows, pd.DataFrame) and "expiry" in all_rows.columns:
+            filtered = all_rows[all_rows["expiry"].astype(str) == str(expiration)]
+            chain_data = {**chain_data, "all_rows": filtered}
 
     result = audit_chain_pricing(
         chain_data=chain_data,
