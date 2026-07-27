@@ -23,7 +23,7 @@ def render_login(db):
     <div style="background:rgba(12,21,36,.85);border:1px solid rgba(103,232,249,.18);
     border-radius:24px;padding:30px;margin-bottom:25px;">
     <h2 style="margin-top:0;color:white;">Sign In</h2>
-    <p style="color:#A8B3C7;">Access your Stock Research Terminal workspace.</p>
+    <p style="color:#A8B3C7;">Access your Equities Research Terminal workspace.</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -58,6 +58,6 @@ def render_login(db):
     <hr>
     <div style="text-align:center;color:#A8B3C7;font-size:12px;">
     © 2026 Conduro Ventures LLC<br>
-    Stock Research Terminal
+    Equities Research Terminal
     </div>
     """, unsafe_allow_html=True)
