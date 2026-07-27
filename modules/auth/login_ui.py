@@ -10,9 +10,9 @@ def render_login(db):
     <div class="conduro-shell">
         <div class="conduro-brandbar">
             <div>
-                <div class="conduro-kicker">CONDURO VENTURES LLC</div>
-                <div class="conduro-title">Stock Research Terminal</div>
-                <div class="conduro-subtitle">AI-Powered Equity Research Platform</div>
+                <div class="conduro-kicker">AIQ Intellus</div>
+                <div class="conduro-title">Quantitative Intelligence Platform</div>
+                <div class="conduro-subtitle">AI-Powered Equities Research Platform</div>
             </div>
             <div class="conduro-pill">Professional Edition</div>
         </div>
