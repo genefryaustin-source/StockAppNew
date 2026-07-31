@@ -20,7 +20,7 @@ from branding.conduro_theme import load_conduro_theme, render_conduro_header
 # MUST BE FIRST STREAMLIT COMMAND
 # MUST BE FIRST STREAMLIT COMMAND
 st.set_page_config(
-    page_title="Quantitative Intelligence Platform",
+    page_title="Equity Research Terminal",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -51,6 +51,47 @@ def init_db_once():
 init_db_once()
 
 from modules.db.core import SessionLocal
+
+
+@st.cache_resource
+def init_universe_refresh_scheduler_once():
+    """
+    Connects the 72-hour universe refresh scheduler (staleness check,
+    throttled provider-safe batched refresh, analytics_snapshots
+    update) to the running app. @st.cache_resource guarantees this
+    runs exactly once per process, the same pattern already used for
+    init_db_once() above -- not once per user session.
+    """
+    from modules.universe.universe_refresh_scheduler_service import (
+        ensure_universe_refresh_scheduler_started,
+    )
+    ensure_universe_refresh_scheduler_started(SessionLocal)
+
+
+init_universe_refresh_scheduler_once()
+
+
+@st.cache_resource
+def init_job_queue_runner_once():
+    """
+    Makes the manual "Universe Refresh Engine" job queue self-driving:
+    a background thread that automatically picks up and runs any
+    queued universe_refresh job (including the follow-up batches
+    job_runner.py now auto-queues when a run finishes with progress
+    made but backlog still remaining), so a large universe's stale
+    backlog keeps getting processed without needing "Run Next Job"
+    clicked again after each batch. Genuinely separate system from
+    init_universe_refresh_scheduler_once() above -- that one drives
+    the 72-hour due-checking cadence for a different job table; this
+    one drains the manual job queue promptly whenever it has work.
+    """
+    from modules.universe.job_queue_runner_service import (
+        ensure_job_queue_runner_started,
+    )
+    ensure_job_queue_runner_started(SessionLocal)
+
+
+init_job_queue_runner_once()
 
 
 def new_db_session():
@@ -385,9 +426,9 @@ try:
 
 
     render_conduro_header(
-        title="Quantitative Intelligence Platform",
+        title="Stock Research Terminal",
         subtitle="AI-powered equity research, portfolio analytics, options intelligence, and advisor workflows.",
-        #kicker="AIQ Intellus",
+        kicker="Conduro Ventures LLC",
         status=user.get("role", "User").replace("_", " ").title() if user else "User"
     )
 
@@ -428,7 +469,7 @@ try:
     # ============================================================
     # SIDEBAR
     # ============================================================
-    st.sidebar.markdown("## AIQ Intellus\n\n**Quantitative Intelligence Platform**")
+    st.sidebar.markdown("## Conduro Ventures\n\n**Stock Research Terminal**")
     st.sidebar.markdown(f"**Version:** {VERSION}")
     #st.sidebar.info("Conduro Ventures Research Platform")
     st.sidebar.markdown(datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"))
@@ -584,7 +625,7 @@ try:
             ("📈 Trading & Portfolio", [
                 "Portfolio","Portfolio Construction","Portfolio Deployment",
                 "Portfolio Construction & Capital Allocation",
-                "Options Flow","Options Trading", "Crypto","Forex","Alerts",
+                "Options Flow","Options Trading", "Crypto","Forex","Forex (New)","Alerts",
                 "Risk Layer",
             ]),
             ("🧠 Strategy", [
@@ -1178,9 +1219,34 @@ try:
             st.error(f"Crypto module failed: {e}")
             st.exception(e)
 
-
-
     elif page == "Forex":
+        if not check_page(user, "Forex", db):
+            require_page(user, "Forex", db)
+            st.stop()
+
+        try:
+            from modules.forex.forex_master_workspace import render_forex_master_workspace
+
+            print("=" * 80)
+            from datetime import datetime, timezone
+
+            print("FOREX ENTRY TIMESTAMP:", datetime.now(timezone.utc).isoformat())
+            print("USER =", user)
+            print("USER TYPE =", type(user))
+            print("=" * 80)
+            run_page(
+                "Forex",
+                render_forex_master_workspace,
+                db,
+                user,
+            )
+
+        except Exception as e:
+            safe_rollback(db)
+            st.error(f"Forex module failed: {e}")
+            st.exception(e)
+
+    elif page == "Forex (New)":
         if not check_page(user, "Forex", db):
             require_page(user, "Forex", db)
             st.stop()
@@ -1189,7 +1255,7 @@ try:
             from modules.forex.forex_terminal_v2 import render_forex_terminal_v2
 
             run_page(
-                "Forex",
+                "Forex (New)",
                 render_forex_terminal_v2,
                 db,
                 user,

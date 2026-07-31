@@ -1663,7 +1663,7 @@ def run_vectorized_price_analytics(
     print(f"🚀 VECTOR ANALYTICS START: {len(clean_symbols)} symbols")
 
     if not clean_symbols:
-        return []
+        return [], db
 
     # ---------------------------------
     # BUILD SHARED CACHE
@@ -1686,7 +1686,7 @@ def run_vectorized_price_analytics(
 
     if not price_cache:
         print("🚨 VECTOR CACHE EMPTY")
-        return []
+        return [], db
 
     print(f"✅ VECTOR CACHE READY: {len(price_cache)} symbols")
 
@@ -1770,4 +1770,4 @@ def run_vectorized_price_analytics(
 
     print(f"✅ VECTOR ANALYTICS COMPLETE: {len(results)} snapshots")
 
-    return results
+    return results, db

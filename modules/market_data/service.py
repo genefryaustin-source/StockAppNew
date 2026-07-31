@@ -1,5 +1,6 @@
 import os
 import time
+import logging
 from datetime import datetime, UTC, timedelta
 from typing import Dict, Iterable, Optional, Any
 
@@ -10,15 +11,23 @@ import yfinance as yf
 from diskcache import Cache
 from sqlalchemy import func, text
 
+logger = logging.getLogger(__name__)
+
 from modules.utils.symbol_utils import normalize_symbol, is_valid_symbol
 from modules.market_data.models import PriceHistory
 from modules.utils.paths import get_cache_dir
 from modules.utils.config import get_secret
 from modules.market_data.providers.marketdata_provider import (
     get_history as marketdata_history,
+    MarketDataCreditLimitException,
+    MarketDataRateLimitException,
 )
 from modules.market_data.providers.alpha_vantage_provider import (
     get_history as alpha_history,
+)
+from modules.market_data.providers.twelvedata_provider import (
+    get_history as twelvedata_history,
+    TwelveDataRateLimitException,
 )
 from modules.market_data.providers.polygon import (
     fetch_ohlcv as polygon_history,
@@ -61,6 +70,17 @@ FAILED_SYMBOL_TTL_SECONDS = 60 * 30
 # repeatedly refetching the same symbols during one Streamlit rerun.
 _LATEST_PRICE_CACHE: Dict[str, tuple[float, float]] = {}
 LATEST_PRICE_TTL_SECONDS = 60 * 5
+
+# The on-disk price-history cache was previously written with no
+# expiry at all (plain CACHE[key] = df, never CACHE.set(key, df,
+# expire=...)) -- which is almost certainly why the cache check
+# itself was disabled (`if False and ...`) rather than the caller
+# risking indefinitely stale historical bars. 15 minutes balances
+# freshness (short enough that even the still-forming, most-recent
+# bar of a "1d" series won't be meaningfully stale) against cutting
+# down on redundant provider calls when multiple parts of the app
+# request the same symbol's history within a short window.
+PRICE_HISTORY_CACHE_TTL_SECONDS = 60 * 15
 
 
 # ---------------------------------------------------
@@ -487,10 +507,8 @@ def get_price_history_internal(
     force_refresh=False,
     provider_override=None,
 ):
-    print("🔥 PRICE HISTORY CALLED:", symbol)
     sym = _valid_base_symbol(symbol)
     router = get_provider_router()
-    print("PROVIDER OVERRIDE:", provider_override)
 
     if provider_override:
         provider_override = provider_override.upper()
@@ -499,20 +517,17 @@ def get_price_history_internal(
         return _empty_history()
 
     cache_key = f"{sym}:{period}:{interval}"
-    print("CACHE CHECK:", cache_key)
 
-    if False and not force_refresh and cache_key in CACHE:
-        cached_df = CACHE[cache_key]
+    if not force_refresh:
+        cached_df = CACHE.get(cache_key)
         if cached_df is not None and not cached_df.empty:
-            print("🔥 PRICE HISTORY CACHE HIT:", sym, cached_df.shape)
             return _normalize_df(cached_df)
 
     if not force_refresh and _symbol_temporarily_failed(sym):
-        print(f"⚠️ SYMBOL TEMP FAILED, SKIPPING: {sym}")
         return _empty_history()
 
     if _all_history_providers_disabled():
-        print(f"⚠️ ALL HISTORY PROVIDERS DISABLED — SKIPPING FETCH: {sym}")
+        logger.warning("All history providers disabled -- skipping fetch for %s", sym)
         return _empty_history()
 
     # -----------------------------------
@@ -538,10 +553,8 @@ def get_price_history_internal(
 
                 if interval == "1d" and db is not None:
                     _save_history_to_db(db, sym, df)
-                else:
-                    print(f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}")
 
-                CACHE[cache_key] = df
+                CACHE.set(cache_key, df, expire=PRICE_HISTORY_CACHE_TTL_SECONDS)
                 return df
 
             router.mark_failure("POLYGON")
@@ -551,7 +564,7 @@ def get_price_history_internal(
                 router.mark_rate_limited("POLYGON", cooldown_minutes=15)
             else:
                 router.mark_failure("POLYGON")
-            print(f"POLYGON HISTORY ERROR: {sym}", e)
+            logger.warning("Polygon history error for %s: %s", sym, e)
 
     # -----------------------------------
     # 2. MARKETDATA.APP HISTORY BACKUP
@@ -568,20 +581,34 @@ def get_price_history_internal(
 
                 if interval == "1d" and db is not None:
                     _save_history_to_db(db, sym, df)
-                else:
-                    print(f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}")
 
-                CACHE[cache_key] = df
+                CACHE.set(cache_key, df, expire=PRICE_HISTORY_CACHE_TTL_SECONDS)
                 return df
 
             router.mark_failure("MARKETDATA")
+
+        except MarketDataCreditLimitException as e:
+            # Account-level credit/quota exhaustion, not a transient
+            # rate limit -- a 15-minute cooldown would just mean
+            # retrying (and failing) every 15 minutes for the rest of
+            # a multi-hour run. 6 hours is a conservative middle
+            # ground: long enough to stop wasting requests against a
+            # provider that's guaranteed to fail, short enough that a
+            # daily-reset quota recovers before the next scheduled
+            # universe refresh.
+            router.mark_rate_limited("MARKETDATA", cooldown_minutes=360)
+            logger.warning("MarketData credit limit reached, cooling down 6h: %s", e)
+
+        except MarketDataRateLimitException as e:
+            router.mark_rate_limited("MARKETDATA", cooldown_minutes=15)
+            logger.warning("MarketData rate limited: %s", e)
 
         except Exception as e:
             if is_rate_limit_error(e):
                 router.mark_rate_limited("MARKETDATA", cooldown_minutes=15)
             else:
                 router.mark_failure("MARKETDATA")
-            print(f"MARKETDATA HISTORY ERROR: {sym}", e)
+            logger.warning("MarketData history error for %s: %s", sym, e)
 
     # -----------------------------------
     # 3. ALPHA VANTAGE HISTORY BACKUP
@@ -598,10 +625,8 @@ def get_price_history_internal(
 
                 if interval == "1d" and db is not None:
                     _save_history_to_db(db, sym, df)
-                else:
-                    print(f"SKIPPING DB SAVE FOR INTRADAY HISTORY: {sym} {period} {interval}")
 
-                CACHE[cache_key] = df
+                CACHE.set(cache_key, df, expire=PRICE_HISTORY_CACHE_TTL_SECONDS)
                 return df
 
             router.mark_failure("ALPHA_VANTAGE")
@@ -611,7 +636,43 @@ def get_price_history_internal(
                 router.mark_rate_limited("ALPHA_VANTAGE", cooldown_minutes=60)
             else:
                 router.mark_failure("ALPHA_VANTAGE")
-            print(f"ALPHA HISTORY ERROR: {sym}", e)
+            logger.warning("Alpha Vantage history error for %s: %s", sym, e)
+
+    # -----------------------------------
+    # 4. TWELVEDATA HISTORY BACKUP
+    # -----------------------------------
+    if provider_override in (None, "TWELVEDATA") and router.is_available("TWELVEDATA"):
+        try:
+            start_time = time.time()
+            router.wait_for_provider("TWELVEDATA")
+
+            df = twelvedata_history(sym, period="5d", interval="1d")
+
+            if df is not None and not df.empty:
+                router.mark_success("TWELVEDATA", latency_ms=(time.time() - start_time) * 1000)
+
+                if interval == "1d" and db is not None:
+                    _save_history_to_db(db, sym, df)
+
+                CACHE.set(cache_key, df, expire=PRICE_HISTORY_CACHE_TTL_SECONDS)
+                return df
+
+            router.mark_failure("TWELVEDATA")
+
+        except TwelveDataRateLimitException as e:
+            # Deliberately short cooldown -- TwelveData's own docs
+            # confirm this specific limit resets at the start of the
+            # next minute, unlike MarketData's credit-limit exception
+            # (a daily/monthly quota deserving a 6-hour cooldown).
+            router.mark_rate_limited("TWELVEDATA", cooldown_minutes=2)
+            logger.debug("TwelveData per-minute limit reached, cooling down 2min: %s", e)
+
+        except Exception as e:
+            if is_rate_limit_error(e):
+                router.mark_rate_limited("TWELVEDATA", cooldown_minutes=15)
+            else:
+                router.mark_failure("TWELVEDATA")
+            logger.warning("TwelveData history error for %s: %s", sym, e)
 
     return _empty_history()
 
@@ -634,6 +695,7 @@ def get_price_history(
         symbol=symbol,
         period=period,
         interval=interval,
+        force_refresh=force_refresh,
     )
 
     df = result.get("data")

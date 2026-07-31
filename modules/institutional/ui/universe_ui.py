@@ -95,7 +95,7 @@ def render_universe_dashboard(db, tenant_id, universe_id):
     )
 
     now = datetime.now(UTC)
-    fresh_cutoff = now - timedelta(hours=72)
+    fresh_cutoff = now - timedelta(hours=24)
 
     latest_by_symbol = {}
 
@@ -638,7 +638,7 @@ def render_universe(db, user):
                 universe_id=universe_id,
                 payload={
                     "universe_id": universe_id,
-                    "max_age_hours": 72,
+                    "max_age_hours": 24,
                     "batch_size": 25,
                     "parallel": True,
                     "max_workers": 4,

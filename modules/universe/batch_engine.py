@@ -25,10 +25,11 @@ def refresh_universe_cache(
     tenant_id: str,
     symbols: Optional[List[str]] = None,
     universe_id: Optional[str] = None,
-    max_age_hours: int = 72,
+    max_age_hours: int = 24,
     batch_size: int = 25,
     parallel: bool = True,
     max_workers: int = 12,
+    max_api_calls: int = 400,
     progress: ProgressFn = None,
     **kwargs,
 ):
@@ -44,6 +45,7 @@ def refresh_universe_cache(
             "max_workers": max_workers,
             "batch_size": batch_size,
             "stale_or_missing": 0,
+            "_db": db,
         }
 
     symbols = [s.strip().upper() for s in symbols if s and s.strip()]
@@ -107,26 +109,34 @@ def refresh_universe_cache(
             "max_workers": max_workers,
             "batch_size": batch_size,
             "stale_or_missing": 0,
+            "_db": db,
         }
 
     # --------------------------------------------
     # FAST PATH: vectorized price-based analytics
     # --------------------------------------------
-    fast_results = run_vectorized_price_analytics(
+    fast_results, db = run_vectorized_price_analytics(
         db=db,
         tenant_id=tenant_id,
         symbols=to_refresh,
+        max_api_calls=max_api_calls,
     )
 
     ran_fast = len(fast_results)
 
-    # progress for the fast path
+    # Report the fast path's completion in a single call, not one
+    # call per symbol. The vectorized analytics step above has
+    # already fully finished all its real work by this point -- these
+    # per-symbol progress() calls were purely cosmetic (retroactively
+    # "catching up" a progress display to work that already happened)
+    # while each one costs a real, non-trivial database round-trip.
+    # For a large stale-symbol backlog this made the cosmetic catch-up
+    # loop itself the single slowest part of the whole job, with the
+    # job correctly showing "running" the entire time but no new real
+    # work actually happening -- indistinguishable from a stall.
     if progress:
-        done = 0
         total = len(to_refresh)
-        for sym in to_refresh:
-            done += 1
-            progress(done, total, sym)
+        progress(total, total, to_refresh[-1] if to_refresh else "")
 
     # --------------------------------------------
     # OPTIONAL SLOW PATH:
@@ -167,4 +177,5 @@ def refresh_universe_cache(
         "max_workers": max_workers,
         "batch_size": batch_size,
         "stale_or_missing": len(to_refresh),
+        "_db": db,
     }

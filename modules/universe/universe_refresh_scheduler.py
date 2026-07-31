@@ -24,28 +24,50 @@ import pandas as pd
 from sqlalchemy import text
 
 
-DEFAULT_REFRESH_INTERVAL_HOURS = 72
+DEFAULT_REFRESH_INTERVAL_HOURS = 24
 DEFAULT_MAX_SYMBOLS_PER_RUN = 250
 DEFAULT_BATCH_SIZE = 50
 
 
 def utc_now() -> datetime:
-    return datetime.now(UTC)
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _dialect_name(db) -> str:
+    try:
+        bind = getattr(db, "bind", None)
+        if bind is None and hasattr(db, "get_bind"):
+            bind = db.get_bind()
+        if bind is not None:
+            return bind.dialect.name
+    except Exception:
+        pass
+    try:
+        return db.get_bind().dialect.name
+    except Exception:
+        return "postgresql"
 
 
 def ensure_universe_refresh_tables(db) -> None:
-    db.execute(text("""
+    dialect = _dialect_name(db)
+    id_column = (
+        "id INTEGER PRIMARY KEY AUTOINCREMENT"
+        if dialect == "sqlite"
+        else "id SERIAL PRIMARY KEY"
+    )
+
+    db.execute(text(f"""
         CREATE TABLE IF NOT EXISTS universe_refresh_jobs (
-            id INTEGER PRIMARY KEY,
+            {id_column},
             universe_id TEXT NOT NULL,
             universe_name TEXT,
             status TEXT DEFAULT 'PENDING',
-            refresh_interval_hours INTEGER DEFAULT 72,
-            last_refresh DATETIME,
-            next_refresh DATETIME,
+            refresh_interval_hours INTEGER DEFAULT 24,
+            last_refresh TIMESTAMP,
+            next_refresh TIMESTAMP,
             symbols_count INTEGER DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP
         )
     """))
 

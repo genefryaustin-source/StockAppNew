@@ -2,10 +2,12 @@ import streamlit as st
 
 from modules.help.help_home import render_help_home
 from modules.help.help_getting_started import render_help_getting_started
+from modules.help.help_daily_checklist import render_daily_checklist_help
 
 from modules.help.help_stock_research import render_stock_research_help
 from modules.help.help_portfolio import render_portfolio_help
 from modules.help.help_options import render_options_help
+from modules.help.help_forex import render_forex_help
 from modules.help.help_ipo import render_ipo_help
 from modules.help.help_preipo import render_preipo_help
 
@@ -26,9 +28,11 @@ def render_help():
         [
             "Home",
             "Getting Started",
+            "Daily Checklist",
             "Stock Research",
             "Portfolio",
             "Options",
+            "Forex",
             "IPO Intelligence",
             "Pre-IPO Intelligence",
             "AI Modules",
@@ -47,6 +51,9 @@ def render_help():
     elif section == "Getting Started":
         render_help_getting_started()
 
+    elif section == "Daily Checklist":
+        render_daily_checklist_help()
+
     elif section == "Stock Research":
         render_stock_research_help()
 
@@ -55,6 +62,9 @@ def render_help():
 
     elif section == "Options":
         render_options_help()
+
+    elif section == "Forex":
+        render_forex_help()
 
     elif section == "IPO Intelligence":
         render_ipo_help()

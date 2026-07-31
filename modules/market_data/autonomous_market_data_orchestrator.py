@@ -4,10 +4,13 @@ modules/market_data/autonomous_market_data_orchestrator.py
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, Optional
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from modules.market_data.provider_decision_engine import (
     get_provider_decision_engine,
@@ -42,6 +45,7 @@ class AutonomousMarketDataOrchestrator:
         symbol: str,
         period: str = "1y",
         interval: str = "1d",
+        force_refresh: bool = False,
     ) -> Dict[str, Any]:
         from modules.market_data.service import (
             get_price_history_internal,
@@ -59,25 +63,18 @@ class AutonomousMarketDataOrchestrator:
             symbol=symbol,
             allowed_providers=allowed,
         )
+
+        attempted_providers = set()
+
         for provider_name in decision.failover_chain:
-            print(
-                "FAILOVER CHAIN:",
-                decision.failover_chain
-            )
+            attempted_providers.add(provider_name)
             try:
-
-                print(
-                    "TRYING PROVIDER:",
-                    provider_name,
-                    symbol,
-                )
-
                 df = get_price_history_internal(
                     db=db,
                     symbol=symbol,
                     period=period,
                     interval=interval,
-                    force_refresh=True,
+                    force_refresh=force_refresh,
                     provider_override=provider_name,
                 )
 
@@ -94,14 +91,7 @@ class AutonomousMarketDataOrchestrator:
                         "data": df,
                     }
 
-                print(
-                    "EMPTY RESULT:",
-                    provider_name,
-                    symbol,
-                )
-
                 continue
-
 
             except Exception as e:
 
@@ -127,12 +117,42 @@ class AutonomousMarketDataOrchestrator:
         start = time.time()
 
         try:
+            # Only fall through to get_price_history_internal()'s own
+            # internal Polygon/MarketData/AlphaVantage chain if the
+            # decision engine's failover_chain was empty to begin with
+            # (e.g. no providers were allowed/available at all) --
+            # not as a catch-all after that chain already tried and
+            # failed, which would silently re-attempt the same
+            # already-just-failed providers a second time for every
+            # symbol in a batch.
+            if attempted_providers:
+                latency_ms = (time.time() - start) * 1000
+                if decision.selected_provider:
+                    self.learning.record_outcome(
+                        db=db,
+                        provider=decision.selected_provider,
+                        request_type=request_type,
+                        symbol=symbol,
+                        success=False,
+                        latency_ms=latency_ms,
+                        error="ALL_FAILOVER_PROVIDERS_FAILED",
+                    )
+                return {
+                    "symbol": symbol,
+                    "request_type": request_type,
+                    "provider_decision": self.decision_engine.as_dict(decision),
+                    "success": False,
+                    "rows": 0,
+                    "data": pd.DataFrame(),
+                    "error": "ALL_FAILOVER_PROVIDERS_FAILED",
+                }
+
             df = get_price_history_internal(
                 db=db,
                 symbol=symbol,
                 period=period,
                 interval=interval,
-                force_refresh=True,
+                force_refresh=force_refresh,
             )
 
             latency_ms = (
@@ -230,15 +250,6 @@ class AutonomousMarketDataOrchestrator:
 
         failover_chain = list(decision.failover_chain or allowed or [])
 
-        print("=" * 80)
-        print("ORCHESTRATOR ROUTER FETCH")
-        print("SYMBOL:", symbol)
-        print("FAILOVER_CHAIN:", failover_chain)
-        print("ALLOWED:", allowed)
-        print("DB:", db)
-        print("DB TYPE:", type(db))
-        print("=" * 80)
-
         last_error = None
 
         for provider_name in failover_chain:
@@ -248,7 +259,6 @@ class AutonomousMarketDataOrchestrator:
                 continue
 
             if not self.router.is_available(provider_name):
-                print(f"SKIP UNAVAILABLE PROVIDER: {provider_name} {symbol}")
                 continue
 
             start = time.time()
@@ -334,9 +344,9 @@ class AutonomousMarketDataOrchestrator:
                         error=last_error,
                     )
 
-                print(
-                    f"LATEST PRICE PROVIDER FAILED: "
-                    f"{provider_name} {symbol} {last_error}"
+                logger.warning(
+                    "Latest price provider failed: %s %s %s",
+                    provider_name, symbol, last_error,
                 )
 
         return {
