@@ -625,7 +625,7 @@ try:
             ("📈 Trading & Portfolio", [
                 "Portfolio","Portfolio Construction","Portfolio Deployment",
                 "Portfolio Construction & Capital Allocation",
-                "Options Flow","Options Trading", "Crypto","Forex","Forex (New)","Alerts",
+                "Options Flow","Options Trading", "Crypto","Forex","Alerts",
                 "Risk Layer",
             ]),
             ("🧠 Strategy", [
@@ -1219,34 +1219,9 @@ try:
             st.error(f"Crypto module failed: {e}")
             st.exception(e)
 
+
+
     elif page == "Forex":
-        if not check_page(user, "Forex", db):
-            require_page(user, "Forex", db)
-            st.stop()
-
-        try:
-            from modules.forex.forex_master_workspace import render_forex_master_workspace
-
-            print("=" * 80)
-            from datetime import datetime, timezone
-
-            print("FOREX ENTRY TIMESTAMP:", datetime.now(timezone.utc).isoformat())
-            print("USER =", user)
-            print("USER TYPE =", type(user))
-            print("=" * 80)
-            run_page(
-                "Forex",
-                render_forex_master_workspace,
-                db,
-                user,
-            )
-
-        except Exception as e:
-            safe_rollback(db)
-            st.error(f"Forex module failed: {e}")
-            st.exception(e)
-
-    elif page == "Forex (New)":
         if not check_page(user, "Forex", db):
             require_page(user, "Forex", db)
             st.stop()
@@ -1255,7 +1230,7 @@ try:
             from modules.forex.forex_terminal_v2 import render_forex_terminal_v2
 
             run_page(
-                "Forex (New)",
+                "Forex",
                 render_forex_terminal_v2,
                 db,
                 user,
