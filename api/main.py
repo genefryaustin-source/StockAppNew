@@ -86,9 +86,9 @@ app = FastAPI(
     version=API_VERSION,
     description=API_DESCRIPTION,
     lifespan=lifespan,
-    docs_url="/docs" if settings.enable_docs else None,
-    redoc_url="/redoc" if settings.enable_redoc else None,
-    openapi_url="/openapi.json" if settings.enable_openapi else None,
+    docs_url="/api/v1/docs" if settings.enable_docs else None,
+    redoc_url="/api/v1/redoc" if settings.enable_redoc else None,
+    openapi_url="/api/v1/openapi.json" if settings.enable_openapi else None,
     openapi_tags=[
         {
             "name": "Platform",
