@@ -56,8 +56,20 @@ def render_login(db):
 
     st.markdown("""
     <hr>
-    <div style="text-align:center;color:#A8B3C7;font-size:12px;">
-    © 2026 Conduro Ventures LLC<br>
-    AI-Powered Equities Research Platform
+    <div style="text-align:center;color:#A8B3C7;font-size:12px;line-height:1.7;">
+        © 2026 Conduro Ventures LLC<br>
+        AI-Powered Equities Research Platform<br>
+        <a
+            href="/privacy-policy.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            style="
+                color:#67E8F9;
+                text-decoration:none;
+                font-weight:600;
+            "
+        >
+            Privacy Policy
+        </a>
     </div>
     """, unsafe_allow_html=True)
