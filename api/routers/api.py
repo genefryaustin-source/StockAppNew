@@ -26,6 +26,7 @@ from .executive import router as executive_router
 from .ai import router as ai_router
 from .crypto import router as crypto_router
 from .market import router as market_router
+from .tenant_export import router as tenant_export_router
 
 
 
@@ -118,4 +119,8 @@ api_router.include_router(
 
 api_router.include_router(
     market_router,
+)
+
+api_router.include_router(
+    tenant_export_router,
 )
