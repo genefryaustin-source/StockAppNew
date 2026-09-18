@@ -715,6 +715,13 @@ class ModuleRegistry:
             class_name="MarketAPIService",
         )
 
+    def portfolio_full_export(self):
+        return self._load(
+            key="portfolio_full_export",
+            module_path="api.services.portfolio_full_export_api_service",
+            class_name="PortfolioFullExportAPIService",
+        )
+
 
 
 
