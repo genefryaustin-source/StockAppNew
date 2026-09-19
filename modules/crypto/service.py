@@ -1031,7 +1031,12 @@ def _render_portfolio_tracker(db=None, user=None):
     if db is not None and user is not None:
         try:
             from modules.crypto.portfolio_sync import sync_crypto_holdings_to_portfolio
-            sync_crypto_holdings_to_portfolio(db, user, enriched)
+            stale_symbols = sync_crypto_holdings_to_portfolio(db, user, enriched)
+            if stale_symbols:
+                st.caption(
+                    f"⚠️ Price lookup failed this refresh for {', '.join(stale_symbols)} -- "
+                    "showing the last known price instead of a misleading $0."
+                )
         except Exception as e:
             st.caption(f"⚠️ Couldn't sync holdings to the Risk Layer this refresh: {e}")
 

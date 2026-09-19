@@ -214,7 +214,42 @@ class PortfolioFullExportAPIService:
     def _forex_orders(self, tenant_id: str, limit: int) -> list[dict]:
         from modules.forex.forex_portfolio_engine import get_forex_portfolio_engine
         engine = get_forex_portfolio_engine(tenant_id=tenant_id, db=self.db)
-        return engine.load_execution_history(limit=limit)
+        raw_orders = engine.load_execution_history(limit=limit)
+        return [self._trim_forex_order(o) for o in raw_orders]
+
+    @staticmethod
+    def _trim_forex_order(order: dict) -> dict:
+        """
+        forex_portfolio_engine's raw order rows include a "raw_payload"
+        field that nests the full account/position/validation objects as
+        they existed at submission time -- sometimes several levels deep,
+        multiplying response size many times over for no benefit to an API
+        consumer. This keeps only the fields an order history actually
+        needs; the shared engine method itself is left untouched since
+        other callers may depend on its current full-payload shape.
+        """
+        return {
+            "id": order.get("id"),
+            "portfolio_id": order.get("portfolio_id"),
+            "user_id": order.get("user_id"),
+            "account_id": order.get("account_id"),
+            "symbol": order.get("pair") or order.get("symbol"),
+            "side": order.get("side"),
+            "order_type": order.get("order_type"),
+            "quantity": order.get("quantity") or order.get("units"),
+            "limit_price": order.get("limit_price"),
+            "stop_price": order.get("stop_price"),
+            "avg_fill_price": order.get("avg_fill_price") or order.get("price"),
+            "filled_qty": order.get("filled_qty"),
+            "status": order.get("status"),
+            "broker": order.get("broker"),
+            "broker_order_id": order.get("broker_order_id"),
+            "submitted_at": order.get("submitted_at"),
+            "filled_at": order.get("filled_at"),
+            "cancelled_at": order.get("cancelled_at"),
+            "created_at": order.get("created_at"),
+            "notes": order.get("notes"),
+        }
 
 
 def _iso(value):
