@@ -89,12 +89,18 @@ def _get_or_create_tracker_portfolio(db, tenant_id: Optional[str]) -> Portfolio:
     return portfolio
 
 
-def sync_crypto_holdings_to_portfolio(db, user: dict, enriched_holdings: list[dict]) -> None:
+def sync_crypto_holdings_to_portfolio(db, user: dict, enriched_holdings: list[dict]) -> list[str]:
     """
     enriched_holdings: list of {"symbol": str, "qty": float, "price": float,
     "value": float} as already computed by _render_portfolio_tracker.
     Safe to call on every render -- positions are upserted by symbol, and
     duplicate-symbol entries (added twice via the UI) are summed first.
+
+    Returns the list of symbols whose price fetch appeared to fail this
+    render (price <= 0) and were kept at their last known-good price
+    instead of being overwritten with 0 -- callers should surface this so
+    "why does this look unchanged" has an answer, e.g.
+    st.caption(f"Price unavailable for {symbols}, showing last known price.")
     """
     tenant_id = user.get("tenant_id") if user else None
     if not enriched_holdings:
@@ -103,7 +109,7 @@ def sync_crypto_holdings_to_portfolio(db, user: dict, enriched_holdings: list[di
         portfolio = _get_or_create_tracker_portfolio(db, tenant_id)
         db.query(PortfolioPosition).filter(PortfolioPosition.portfolio_id == portfolio.id).delete()
         db.commit()
-        return
+        return []
 
     portfolio = _get_or_create_tracker_portfolio(db, tenant_id)
 
@@ -124,20 +130,41 @@ def sync_crypto_holdings_to_portfolio(db, user: dict, enriched_holdings: list[di
     }
 
     total_value = 0.0
+    stale_price_symbols = []
     for sym, data in by_symbol.items():
-        total_value += data["value"]
         row = existing.get(sym)
+
+        # A price of exactly 0 almost always means the CoinGecko lookup
+        # failed for this symbol on this render (rate limit, a transient
+        # API error, or a bad coin_id) rather than the asset genuinely
+        # being worth nothing -- overwriting a previously-known-good price
+        # with 0 would be strictly worse than just keeping the stale one,
+        # since it silently fabricates a -100% position and P&L. Keep the
+        # last good price/value in that case and flag it so the caller can
+        # surface a "price may be stale" notice instead of trusting a
+        # confident-looking $0.
+        fetch_failed = not data["price"] or data["price"] <= 0
+        if fetch_failed and row and row.market_price and row.market_price > 0:
+            effective_price = row.market_price
+            effective_value = row.market_price * data["qty"]
+            stale_price_symbols.append(sym)
+        else:
+            effective_price = data["price"]
+            effective_value = data["value"]
+
+        total_value += effective_value
+
         if row:
             row.qty = data["qty"]
-            row.market_price = data["price"]
-            row.market_value = data["value"]
-            row.unrealized_pnl = data["value"] - (row.avg_cost * data["qty"])
+            row.market_price = effective_price
+            row.market_value = effective_value
+            row.unrealized_pnl = effective_value - (row.avg_cost * data["qty"])
             row.updated_at = datetime.utcnow()
         else:
             db.add(PortfolioPosition(
                 portfolio_id=portfolio.id, symbol=sym, qty=data["qty"],
-                avg_cost=data["price"],  # no real cost basis available -- see module docstring
-                market_price=data["price"], market_value=data["value"],
+                avg_cost=effective_price,  # no real cost basis available -- see module docstring
+                market_price=effective_price, market_value=effective_value,
                 unrealized_pnl=0.0, realized_pnl=0.0, updated_at=datetime.utcnow(),
             ))
 
@@ -153,3 +180,4 @@ def sync_crypto_holdings_to_portfolio(db, user: dict, enriched_holdings: list[di
         realized_pnl=0.0, unrealized_pnl=0.0, net_pnl=0.0,
     ))
     db.commit()
+    return stale_price_symbols

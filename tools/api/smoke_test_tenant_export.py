@@ -165,6 +165,56 @@ def main():
 
     check("include_all_users=false correctly suppresses the users section", _check_query_params_respected)
 
+    # ── Regression: forex orders must not leak the raw_payload bloat ─────
+    def _check_forex_order_trimming():
+        from api.services.portfolio_full_export_api_service import PortfolioFullExportAPIService
+        bloated = {
+            "id": 13, "portfolio_id": "p1", "user_id": "u1", "account_id": "a1",
+            "broker": "paper", "broker_order_id": "FXP-TEST", "symbol": "USDCHF",
+            "pair": "USD/CHF", "side": "BUY", "order_type": "MARKET",
+            "quantity": 10000.0, "units": 10000.0, "limit_price": None, "stop_price": 0.0,
+            "price": 0.89115, "avg_fill_price": 0.89115, "filled_qty": 10000.0,
+            "status": "filled", "submitted_at": "2026-07-06T14:26:35", "filled_at": "2026-07-06T14:26:35",
+            "cancelled_at": None, "created_at": "2026-07-06T14:26:35", "notes": "test",
+            "raw_payload": {"raw": {"deeply": {"nested": "x" * 5000}}},
+        }
+        trimmed = PortfolioFullExportAPIService._trim_forex_order(bloated)
+        assert "raw_payload" not in trimmed, "raw_payload bloat should never reach the API response"
+        assert trimmed["symbol"] == "USD/CHF"
+        assert trimmed["avg_fill_price"] == 0.89115
+        assert trimmed["quantity"] == 10000.0
+        assert len(str(trimmed)) < len(str(bloated)) / 5, "trimmed order should be dramatically smaller"
+
+    check("Forex order trimming removes raw_payload bloat, keeps the useful fields", _check_forex_order_trimming)
+
+    # ── Regression: a failed crypto price fetch (price=0) must not
+    # overwrite a previously-known-good stored price ──
+    def _check_crypto_zero_price_guard():
+        from modules.crypto.portfolio_sync import sync_crypto_holdings_to_portfolio
+        from modules.risk_layer.positions import get_positions_df
+
+        fake_user = {"tenant_id": TENANT_ID, "user_id": "u1"}
+        good = [{"coin_id": "ripple", "symbol": "XRP", "qty": 20000, "price": 1.11, "value": 22200.0}]
+        stale1 = sync_crypto_holdings_to_portfolio(db_session_for_crypto_test(), fake_user, good)
+        assert stale1 == []
+
+        failed = [{"coin_id": "ripple", "symbol": "XRP", "qty": 20000, "price": 0, "value": 0.0}]
+        stale2 = sync_crypto_holdings_to_portfolio(db_session_for_crypto_test(), fake_user, failed)
+        assert stale2 == ["XRP"], f"expected XRP flagged as stale, got {stale2}"
+
+        df = get_positions_df(db_session_for_crypto_test(), tenant_id=TENANT_ID)
+        xrp_row = df[df["Symbol"] == "XRP"]
+        assert not xrp_row.empty
+        assert xrp_row.iloc[0]["Market Price"] == 1.11, (
+            "a failed ($0) price fetch should not have overwritten the last known-good price"
+        )
+        assert xrp_row.iloc[0]["Market Value"] > 0, "market value should reflect the preserved price, not $0"
+
+    def db_session_for_crypto_test():
+        return new_db_session()
+
+    check("Crypto sync keeps last known-good price instead of a failed $0 fetch", _check_crypto_zero_price_guard)
+
     print()
     print(f"{results['pass']} passed, {results['fail']} failed")
     return 1 if results["fail"] else 0
