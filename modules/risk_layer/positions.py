@@ -98,7 +98,7 @@ def get_positions_df(db, tenant_id: Optional[str] = None, portfolio_id: Optional
     return df
 
 
-def get_returns_df(db, tenant_id: Optional[str] = None, portfolio_id: Optional[str] = None) -> pd.DataFrame:
+def get_returns_df(db, tenant_id: Optional[str] = None, portfolio_id: Optional[str] = None, lookback_days: Optional[int] = None) -> pd.DataFrame:
     """
     Daily-equity-curve-derived Return/Drawdown series, aggregated across
     every portfolio in scope. Feeds
@@ -123,12 +123,17 @@ def get_returns_df(db, tenant_id: Optional[str] = None, portfolio_id: Optional[s
     if not portfolio_ids:
         return pd.DataFrame()
 
-    rows = (
+    query = (
         db.query(PortfolioSnapshot)
         .filter(PortfolioSnapshot.portfolio_id.in_(portfolio_ids))
-        .order_by(PortfolioSnapshot.as_of.asc())
-        .all()
     )
+
+    if lookback_days is not None:
+        from datetime import datetime, timedelta, UTC
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=lookback_days)
+        query = query.filter(PortfolioSnapshot.as_of >= cutoff)
+
+    rows = query.order_by(PortfolioSnapshot.as_of.asc()).all()
     if not rows:
         return pd.DataFrame()
 

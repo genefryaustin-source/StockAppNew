@@ -376,6 +376,19 @@ try:
 
 
     # ============================================================
+    # LEGAL PORTAL
+    # ============================================================
+    # Keep this import isolated so the trading application can still start
+    # while the Legal Portal package is being installed or upgraded.
+    legal_portal_import_error = None
+    try:
+        from modules.legal_portal import render_legal_portal
+    except Exception as e:
+        render_legal_portal = None
+        legal_portal_import_error = e
+
+
+    # ============================================================
     # MARKET DATA SERVICE
     # ============================================================
     @st.cache_resource
@@ -407,6 +420,40 @@ try:
     market_data_service = get_market_data_service()
 
 
+    # ============================================================
+    # PUBLIC LEGAL PORTAL ROUTE
+    # ============================================================
+    # Legal documents must remain available without authentication.
+    # Examples:
+    #   /?page=legal&legal_document=privacy-policy
+    #   /?page=legal&legal_document=terms-of-service
+    def _query_param_value(name: str, default: str = "") -> str:
+        value = st.query_params.get(name, default)
+        if isinstance(value, list):
+            return str(value[0]) if value else default
+        return str(value)
+
+
+    public_page = _query_param_value("page").strip().lower()
+
+    if public_page == "legal":
+        if legal_portal_import_error is not None or render_legal_portal is None:
+            st.error("The Legal Portal module could not be loaded.")
+            if legal_portal_import_error is not None:
+                st.exception(legal_portal_import_error)
+            st.stop()
+
+        render_legal_portal(
+            default_document=(
+                _query_param_value(
+                    "legal_document",
+                    "privacy-policy",
+                )
+                or "privacy-policy"
+            ),
+            current_user=st.session_state.get("user"),
+        )
+        st.stop()
 
 
     # ============================================================
@@ -583,7 +630,7 @@ try:
     # ============================================================
     role = (user.get("role") or "").lower()
     if role == "client":
-        pages = ["Portfolio"]
+        pages = ["Portfolio", "Legal Portal"]
 
         # _render_grouped_nav(NAV_GROUPS) is called unconditionally below,
         # regardless of role -- without this, NAV_GROUPS was never defined
@@ -592,6 +639,7 @@ try:
         # a client-role user visited, including their own Portfolio page.
         NAV_GROUPS = [
             ("📈 Portfolio", ["Portfolio"]),
+            ("⚖️ Legal & Compliance", ["Legal Portal"]),
         ]
     else:
         # ── Full page list (used for routing) ───────────────────
@@ -608,7 +656,7 @@ try:
             "Export / Sheets","Research Reports","Social Sentiment",
             "Team Collaboration","Crypto","Investment Committee","Multi-Agent Research",
             "Portfolio Construction OS","Autonomous PM","Fund Operations","Hedge Fund OS",
-            "Help",
+            "Legal Portal","Help",
         ]
 
         # ── Grouped navigation ───────────────────────────────────
@@ -651,6 +699,9 @@ try:
             ("👥 Collaboration", [
                 "Team Collaboration",
             ]),
+            ("⚖️ Legal & Compliance", [
+                "Legal Portal",
+            ]),
             ("⚙️ System", [
                 "Admin","Help",
             ]),
@@ -675,7 +726,12 @@ try:
                         use_container_width=True,
                         type="primary" if is_active else "secondary",
                     ):
-                        st.session_state["nav_page"] = pg
+                        if pg == "Legal Portal":
+                            st.query_params["page"] = "legal"
+                            st.query_params["legal_document"] = "privacy-policy"
+                            st.session_state["legal_portal_active"] = True
+                        else:
+                            st.session_state["nav_page"] = pg
                         st.rerun()
         return st.session_state.get("nav_page","Executive Dashboard")
 
@@ -686,8 +742,15 @@ try:
         key="quick_jump",
     )
     if _qj and _qj != "— select —":
-        st.session_state["nav_page"] = _qj
-        st.session_state["quick_jump"] = "— select —"
+        if _qj == "Legal Portal":
+            st.query_params["page"] = "legal"
+            st.query_params["legal_document"] = "privacy-policy"
+            st.session_state["legal_portal_active"] = True
+            st.session_state["quick_jump"] = "— select —"
+            st.rerun()
+        else:
+            st.session_state["nav_page"] = _qj
+            st.session_state["quick_jump"] = "— select —"
 
     st.sidebar.markdown("---")
     page = _render_grouped_nav(NAV_GROUPS)
@@ -1328,6 +1391,14 @@ try:
                 st.info("Portfolio Construction & Capital Allocation — module loading.")
         except Exception as _e:
             st.info(f"Portfolio Construction & Capital Allocation coming soon.")
+
+    elif page == "Legal Portal":
+        # Navigation normally opens the public query-parameter route directly.
+        # This branch is a safeguard for an older/stale nav_page session value.
+        st.query_params["page"] = "legal"
+        st.query_params["legal_document"] = "privacy-policy"
+        st.session_state["legal_portal_active"] = True
+        st.rerun()
 
     elif page == "Help":
         from modules.help.help_ui import render_help

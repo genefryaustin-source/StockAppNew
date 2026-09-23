@@ -58,7 +58,7 @@ def _returns_for_symbols(db, symbols: list[str]) -> dict[str, float]:
     """
     from modules.market_data.price_history_service import load_close_matrix
 
-    matrix = load_close_matrix(db, symbols)
+    matrix = load_close_matrix(db, symbols, lookback_days=7)
 
     if matrix is None or matrix.empty or len(matrix) < 2:
         return {}

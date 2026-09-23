@@ -1,0 +1,15 @@
+{
+  "version": "2.1.0",
+  "sprint": "L2.1",
+  "framework": "Streamlit",
+  "capabilities": [
+    "public route integration",
+    "login legal links",
+    "application footer",
+    "role permissions",
+    "audit logging",
+    "operations health dashboard",
+    "static publishing",
+    "deployment verification"
+  ]
+}

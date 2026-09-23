@@ -38,8 +38,9 @@ class TradeAttributionEngine:
     # SUMMARY
     # -----------------------------------------------------
 
-    def build_summary(self, portfolio_id: str) -> TradeAttributionSummary:
-        df = self.load_attribution_table(portfolio_id)
+    def build_summary(self, portfolio_id: str, df: pd.DataFrame | None = None) -> TradeAttributionSummary:
+        if df is None:
+            df = self.load_attribution_table(portfolio_id)
 
         if df.empty:
             return TradeAttributionSummary(
@@ -63,8 +64,8 @@ class TradeAttributionEngine:
         wins = len(closed_df[closed_df["net_pnl"] > 0])
         win_rate = (wins / len(closed_df) * 100.0) if len(closed_df) else 0.0
 
-        signal_df = self.signal_attribution(portfolio_id)
-        sector_df = self.sector_attribution(portfolio_id)
+        signal_df = self.signal_attribution(portfolio_id, df)
+        sector_df = self.sector_attribution(portfolio_id, df)
 
         best_signal = "—"
         if not signal_df.empty and "total_net_pnl" in signal_df.columns:
@@ -151,8 +152,9 @@ class TradeAttributionEngine:
     # SIGNAL ATTRIBUTION
     # -----------------------------------------------------
 
-    def signal_attribution(self, portfolio_id: str) -> pd.DataFrame:
-        df = self.load_attribution_table(portfolio_id)
+    def signal_attribution(self, portfolio_id: str, df: pd.DataFrame | None = None) -> pd.DataFrame:
+        if df is None:
+            df = self.load_attribution_table(portfolio_id)
 
         if df.empty:
             return pd.DataFrame()
@@ -189,8 +191,9 @@ class TradeAttributionEngine:
     # SECTOR ATTRIBUTION
     # -----------------------------------------------------
 
-    def sector_attribution(self, portfolio_id: str) -> pd.DataFrame:
-        df = self.load_attribution_table(portfolio_id)
+    def sector_attribution(self, portfolio_id: str, df: pd.DataFrame | None = None) -> pd.DataFrame:
+        if df is None:
+            df = self.load_attribution_table(portfolio_id)
 
         if df.empty:
             return pd.DataFrame()
@@ -227,8 +230,9 @@ class TradeAttributionEngine:
     # CONVICTION ATTRIBUTION
     # -----------------------------------------------------
 
-    def conviction_band_attribution(self, portfolio_id: str) -> pd.DataFrame:
-        df = self.load_attribution_table(portfolio_id)
+    def conviction_band_attribution(self, portfolio_id: str, df: pd.DataFrame | None = None) -> pd.DataFrame:
+        if df is None:
+            df = self.load_attribution_table(portfolio_id)
 
         if df.empty:
             return pd.DataFrame()

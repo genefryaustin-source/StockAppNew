@@ -1,0 +1,16 @@
+{
+  "version": "2.4.0",
+  "sprint": "L2.4",
+  "features": [
+    "compliance metrics",
+    "overdue detection",
+    "notification hooks",
+    "scheduled compliance job",
+    "systemd timer",
+    "acknowledgement enforcement",
+    "document aggregation",
+    "tenant aggregation",
+    "CSV export"
+  ],
+  "enforcement_default": false
+}

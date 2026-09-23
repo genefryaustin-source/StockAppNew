@@ -1,0 +1,17 @@
+{
+  "version": "2.2.0",
+  "sprint": "L2.2",
+  "features": [
+    "document version lifecycle",
+    "review decisions",
+    "approval workflow",
+    "publication workflow",
+    "acknowledgement assignment",
+    "acceptance tracking",
+    "decline tracking",
+    "workflow metrics",
+    "audit events",
+    "replaceable persistence repository"
+  ],
+  "persistence": "in-memory development implementation"
+}

@@ -68,23 +68,23 @@ class PortfolioAttributionAPIService:
 
         try:
 
-            summary = engine.build_summary(portfolio_id)
-
             linkage = engine.load_attribution_table(
                 portfolio_id
             )
 
+            summary = engine.build_summary(portfolio_id, linkage)
+
             signal = engine.signal_attribution(
-                portfolio_id
+                portfolio_id, linkage
             )
 
             sector = engine.sector_attribution(
-                portfolio_id
+                portfolio_id, linkage
             )
 
             conviction = (
                 engine.conviction_band_attribution(
-                    portfolio_id
+                    portfolio_id, linkage
                 )
             )
 

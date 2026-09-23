@@ -365,7 +365,7 @@ class MarketAPIService:
                 for symbol in wl.get("symbols", [])
             })
 
-            matrix = load_close_matrix(self.db, all_symbols) if all_symbols else None
+            matrix = load_close_matrix(self.db, all_symbols, lookback_days=7) if all_symbols else None
 
             def _symbol_summary(symbol: str) -> dict[str, Any]:
                 if matrix is None or matrix.empty or symbol not in matrix.columns:

@@ -1,0 +1,7 @@
+{
+  "portal_version": "2.6.0",
+  "build_date": "2026-08-01T00:00:00Z",
+  "sprint": "L2.6",
+  "framework": "Streamlit",
+  "public_base_path": "/legal/"
+}

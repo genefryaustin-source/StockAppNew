@@ -1,0 +1,16 @@
+{
+  "version": "2.6.0",
+  "sprint": "L2.6",
+  "features": [
+    "persistent overrides",
+    "persistent notification deliveries",
+    "idempotent delivery",
+    "backup archive",
+    "checksum manifest",
+    "retention dry run",
+    "recovery dashboard",
+    "persistence verification"
+  ],
+  "enforcement_default": false,
+  "retention_mode": "dry-run only"
+}
