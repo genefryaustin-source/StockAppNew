@@ -75,12 +75,14 @@ try:
         get_price_history,
         preload_histories,
         build_shared_price_cache,
+        build_shared_price_cache_bulk_first,
     )
 except Exception:
     from modules.market_data.service import (
         get_latest_price_map,
         get_price_history,
         build_shared_price_cache,
+        build_shared_price_cache_bulk_first,
     )
 
     def preload_histories(
@@ -1670,7 +1672,7 @@ def run_vectorized_price_analytics(
     # ---------------------------------
     try:
 
-        price_cache, meta = build_shared_price_cache(
+        price_cache, meta = build_shared_price_cache_bulk_first(
             db=db,
             symbols=clean_symbols,
             min_rows=MIN_HISTORY_ROWS,
@@ -1680,9 +1682,20 @@ def run_vectorized_price_analytics(
         )
 
     except Exception as e:
-        print("🚨 SHARED CACHE BUILD FAILED:", e)
-        price_cache = {}
-        meta = {}
+        print("🚨 BULK-FIRST CACHE BUILD FAILED, falling back to per-symbol path:", e)
+        try:
+            price_cache, meta = build_shared_price_cache(
+                db=db,
+                symbols=clean_symbols,
+                min_rows=MIN_HISTORY_ROWS,
+                period="1y",
+                interval="1d",
+                max_api_calls=kwargs.get("max_api_calls", None),
+            )
+        except Exception as e2:
+            print("🚨 SHARED CACHE BUILD FAILED:", e2)
+            price_cache = {}
+            meta = {}
 
     if not price_cache:
         print("🚨 VECTOR CACHE EMPTY")
