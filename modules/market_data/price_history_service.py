@@ -65,6 +65,108 @@ def load_price_history(db: Session, symbol: str) -> pd.DataFrame | None:
 # ---------------------------------------------------
 
 
+def bulk_upsert_price_history(db, rows: list[dict], batch_size: int = 500) -> dict:
+    """
+    True bulk upsert: builds ONE multi-row INSERT ... ON CONFLICT statement
+    per batch (default 500 rows) instead of one INSERT + one commit per
+    row. This exists specifically for full-market bulk refreshes (e.g.
+    modules.market_data.updater.bulk_update_from_grouped_daily) where
+    calling store_price_history() in a loop -- one commit per symbol --
+    means one network round-trip to the database PER SYMBOL. Against a
+    remote database (Neon, etc.), 12,000+ symbols means 12,000+ round
+    trips, and a single stalled connection blocks the entire operation
+    with no way out short of restarting the process -- exactly what
+    happened testing this in production. Batching drops that to roughly
+    (row_count / batch_size) round trips -- ~25 for 12,000 rows instead
+    of 12,000.
+
+    Unlike store_price_history's on_conflict_do_nothing (which skips
+    rows that already exist), this uses on_conflict_do_update -- a bulk
+    "refresh" is expected to overwrite that day's bar with fresh data,
+    not silently no-op if something already wrote a row for that date.
+
+    rows: list of {"symbol": str, "date": date-like, "open": float,
+    "high": float, "low": float, "close": float, "volume": float|None}.
+
+    Returns {"written": int, "failed_batches": int, "errors": [...]}.
+    A failed batch is retried once as individual on_conflict_do_nothing
+    inserts (same recovery spirit as store_price_history's per-row
+    try/except) so one bad row in a 500-row batch doesn't lose the other
+    499 -- but this fallback path is the slow one-by-one path, so it
+    should only ever trigger rarely, not as the normal case.
+    """
+    if not rows:
+        return {"written": 0, "failed_batches": 0, "errors": []}
+
+    written = 0
+    failed_batches = 0
+    errors = []
+
+    for batch_start in range(0, len(rows), batch_size):
+        batch = rows[batch_start:batch_start + batch_size]
+        values = []
+        for r in batch:
+            try:
+                values.append({
+                    "symbol": str(r["symbol"]).upper(),
+                    "date": pd.to_datetime(r["date"]).date(),
+                    "open": float(r["open"]),
+                    "high": float(r["high"]),
+                    "low": float(r["low"]),
+                    "close": float(r["close"]),
+                    "volume": int(r["volume"]) if r.get("volume") is not None and pd.notna(r["volume"]) else None,
+                })
+            except (KeyError, TypeError, ValueError):
+                continue  # malformed row -- skip rather than fail the whole batch up front
+
+        if not values:
+            continue
+
+        try:
+            stmt = insert(PriceHistory).values(values)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["symbol", "date"],
+                set_={
+                    "open": stmt.excluded.open, "high": stmt.excluded.high,
+                    "low": stmt.excluded.low, "close": stmt.excluded.close,
+                    "volume": stmt.excluded.volume,
+                },
+            )
+            db.execute(stmt)
+            db.commit()
+            written += len(values)
+        except Exception as batch_err:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            # Fallback: retry this one batch row-by-row so a single bad
+            # row doesn't lose the whole batch -- slow path, rare case.
+            batch_written = 0
+            for v in values:
+                try:
+                    row_stmt = insert(PriceHistory).values(**v).on_conflict_do_update(
+                        index_elements=["symbol", "date"],
+                        set_={"open": v["open"], "high": v["high"], "low": v["low"],
+                              "close": v["close"], "volume": v["volume"]},
+                    )
+                    db.execute(row_stmt)
+                    db.commit()
+                    batch_written += 1
+                except Exception as row_err:
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                    errors.append(f"{v.get('symbol', '?')}: {row_err}")
+            written += batch_written
+            failed_batches += 1
+            print(f"[price_history] batch upsert fell back to row-by-row "
+                  f"({batch_written}/{len(values)} recovered): {batch_err}")
+
+    return {"written": written, "failed_batches": failed_batches, "errors": errors[:50]}
+
+
 def store_price_history(db, symbol, df):
     df = df.copy()
 
