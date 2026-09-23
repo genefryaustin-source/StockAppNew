@@ -1,0 +1,66 @@
+{
+  "version": "1.5.0",
+  "document_count": 12,
+  "documents": [
+    {
+      "filename": "acceptable-use-policy.html",
+      "size_bytes": 1067,
+      "public_path": "/legal/acceptable-use-policy.html"
+    },
+    {
+      "filename": "accessibility.html",
+      "size_bytes": 3806,
+      "public_path": "/legal/accessibility.html"
+    },
+    {
+      "filename": "ai-disclosure.html",
+      "size_bytes": 1335,
+      "public_path": "/legal/ai-disclosure.html"
+    },
+    {
+      "filename": "api-license.html",
+      "size_bytes": 1059,
+      "public_path": "/legal/api-license.html"
+    },
+    {
+      "filename": "contact.html",
+      "size_bytes": 3824,
+      "public_path": "/legal/contact.html"
+    },
+    {
+      "filename": "cookie-policy.html",
+      "size_bytes": 10224,
+      "public_path": "/legal/cookie-policy.html"
+    },
+    {
+      "filename": "financial-disclaimer.html",
+      "size_bytes": 11437,
+      "public_path": "/legal/financial-disclaimer.html"
+    },
+    {
+      "filename": "market-data-disclaimer.html",
+      "size_bytes": 1188,
+      "public_path": "/legal/market-data-disclaimer.html"
+    },
+    {
+      "filename": "privacy-policy.html",
+      "size_bytes": 22431,
+      "public_path": "/legal/privacy-policy.html"
+    },
+    {
+      "filename": "risk-disclosure.html",
+      "size_bytes": 2057,
+      "public_path": "/legal/risk-disclosure.html"
+    },
+    {
+      "filename": "security.html",
+      "size_bytes": 1026,
+      "public_path": "/legal/security.html"
+    },
+    {
+      "filename": "terms-of-service.html",
+      "size_bytes": 21263,
+      "public_path": "/legal/terms-of-service.html"
+    }
+  ]
+}

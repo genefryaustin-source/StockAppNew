@@ -350,21 +350,37 @@ def download_price_batch(
 # Close matrix loader
 # ---------------------------------------------------
 
-def load_close_matrix(db: Session, symbols: list[str]) -> pd.DataFrame:
+def load_close_matrix(db: Session, symbols: list[str], *, lookback_days: int | None = None) -> pd.DataFrame:
+    """
+    lookback_days: when given, only rows from the last N calendar days
+    are fetched -- for callers that only need a recent value (e.g. a
+    1-day % change, which only ever reads the last two rows). Left as
+    None (full history) for callers building longer return series
+    (correlation, factor analysis), which need many months of data.
+
+    Using calendar days rather than trading days as the cutoff is
+    deliberate: a small buffer (7+ days) safely covers weekends and
+    holidays without needing to know the market calendar here.
+    """
 
     if not symbols:
         return pd.DataFrame()
 
-    rows = (
+    query = (
         db.query(
             PriceHistory.symbol,
             PriceHistory.date,
             PriceHistory.close,
         )
         .filter(PriceHistory.symbol.in_(symbols))
-        .order_by(PriceHistory.date.asc())
-        .all()
     )
+
+    if lookback_days is not None:
+        from datetime import datetime, timedelta, UTC
+        cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
+        query = query.filter(PriceHistory.date >= cutoff)
+
+    rows = query.order_by(PriceHistory.date.asc()).all()
 
     if not rows:
         return pd.DataFrame()

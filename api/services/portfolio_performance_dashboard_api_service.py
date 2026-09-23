@@ -166,7 +166,7 @@ class PortfolioPerformanceDashboardAPIService:
                 "_snapshot_section", tenant_id=tenant_id, portfolio_id=portfolio_id,
             ),
             "risk": lambda: _with_fresh_session(
-                "_risk_section", tenant_id=tenant_id, portfolio_id=portfolio_id,
+                "_risk_section", tenant_id=tenant_id, portfolio_id=portfolio_id, period=period,
             ),
             "benchmark_comparison": lambda: _with_fresh_session(
                 "_benchmark_section", tenant_id=tenant_id, portfolio_id=portfolio_id,
@@ -303,7 +303,7 @@ class PortfolioPerformanceDashboardAPIService:
         try:
             from modules.risk_layer.positions import get_returns_df
 
-            df = get_returns_df(self.db, tenant_id=tenant_id, portfolio_id=portfolio_id)
+            df = get_returns_df(self.db, tenant_id=tenant_id, portfolio_id=portfolio_id, lookback_days=730)
 
             if df is None or df.empty or "Return" not in df.columns:
                 return {"available": False, "reason": "Not enough snapshot history yet."}
@@ -334,14 +334,22 @@ class PortfolioPerformanceDashboardAPIService:
     # Risk-adjusted metrics
     # ------------------------------------------------------------
 
-    def _risk_section(self, *, tenant_id: str, portfolio_id: str) -> dict[str, Any]:
-        return self._safe_call("risk", lambda: self._risk_section_impl(tenant_id, portfolio_id))
+    def _risk_section(self, *, tenant_id: str, portfolio_id: str, period: str = "6mo") -> dict[str, Any]:
+        return self._safe_call("risk", lambda: self._risk_section_impl(tenant_id, portfolio_id, period))
 
-    def _risk_section_impl(self, tenant_id: str, portfolio_id: str) -> dict[str, Any]:
+    def _risk_section_impl(self, tenant_id: str, portfolio_id: str, period: str = "6mo") -> dict[str, Any]:
         from modules.risk_layer.positions import get_returns_df, get_positions_df
         from modules.portfolio.risk_analytics_service import RiskAnalyticsService
 
-        returns_df = get_returns_df(self.db, tenant_id=tenant_id, portfolio_id=portfolio_id)
+        period_days = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365}.get(period, 180)
+        # Floor at 90 days: Sharpe/Sortino/VaR are meant to reflect a
+        # statistically reasonable sample, not just whatever a very
+        # short requested period happens to contain.
+        lookback_days = max(period_days, 90)
+
+        returns_df = get_returns_df(
+            self.db, tenant_id=tenant_id, portfolio_id=portfolio_id, lookback_days=lookback_days,
+        )
         positions_df = get_positions_df(self.db, tenant_id=tenant_id, portfolio_id=portfolio_id)
 
         analytics = RiskAnalyticsService(returns_df=returns_df, positions_df=positions_df)

@@ -1,0 +1,21 @@
+Add this block to `/usr/local/bin/deploy-stockapp.sh` after the Git checkout
+is updated and before public verification:
+
+```bash
+LEGAL_PUBLISH_SCRIPT="$APP_DIR/deployment/publish-legal-portal.sh"
+
+if [[ -x "$LEGAL_PUBLISH_SCRIPT" ]]; then
+    log "Publishing legal portal"
+    "$LEGAL_PUBLISH_SCRIPT"
+else
+    log "Legal portal publish script is not executable; skipping"
+fi
+```
+
+After copying the script to the repository, make it executable:
+
+```bash
+chmod +x deployment/publish-legal-portal.sh
+git add deployment/publish-legal-portal.sh
+git update-index --chmod=+x deployment/publish-legal-portal.sh
+```

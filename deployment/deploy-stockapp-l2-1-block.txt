@@ -1,0 +1,30 @@
+Add this block to the existing deploy-stockapp.sh after dependency installation
+and before service restarts:
+
+```bash
+LEGAL_PUBLISH_SCRIPT="$APP_DIR/deployment/publish-legal-portal.sh"
+LEGAL_VERIFY_SCRIPT="$APP_DIR/deployment/verify-legal-portal.sh"
+
+if [[ -x "$LEGAL_PUBLISH_SCRIPT" ]]; then
+    log "Publishing AIQ Intellus legal portal"
+    APP_DIR="$APP_DIR"         STATIC_ROOT="/var/www/html/legal"         PUBLIC_BASE_URL="https://aiqintellus.com/legal"         "$LEGAL_PUBLISH_SCRIPT"
+else
+    rollback "Legal portal publisher is missing or not executable"
+fi
+
+if [[ -x "$LEGAL_VERIFY_SCRIPT" ]]; then
+    log "Verifying AIQ Intellus legal portal"
+    BASE_URL="https://aiqintellus.com/legal"         "$LEGAL_VERIFY_SCRIPT"
+else
+    rollback "Legal portal verification script is missing or not executable"
+fi
+```
+
+Ensure executable Git permissions:
+
+```bash
+chmod +x deployment/publish-legal-portal.sh
+chmod +x deployment/verify-legal-portal.sh
+git update-index --chmod=+x deployment/publish-legal-portal.sh
+git update-index --chmod=+x deployment/verify-legal-portal.sh
+```

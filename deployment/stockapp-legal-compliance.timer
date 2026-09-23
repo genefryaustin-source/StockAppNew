@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AIQ Intellus Legal Compliance Job Daily
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=stockapp-legal-compliance.service
+
+[Install]
+WantedBy=timers.target

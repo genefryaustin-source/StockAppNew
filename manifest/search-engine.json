@@ -1,0 +1,15 @@
+{
+  "version": "1.3",
+  "engine": "weighted-local-streamlit",
+  "features": [
+    "weighted field scoring",
+    "exact phrase boost",
+    "category filters",
+    "all-term matching",
+    "result limits",
+    "snippets",
+    "matched-term display",
+    "recent searches",
+    "suggested searches"
+  ]
+}

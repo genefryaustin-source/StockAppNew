@@ -1,0 +1,13 @@
+[Unit]
+Description=AIQ Intellus Legal Escalation Job
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/stockapp/current
+EnvironmentFile=/opt/stockapp/.env
+ExecStart=/opt/stockapp/.venv/bin/python /opt/stockapp/current/integration/escalation-job.example.py
+Nice=10

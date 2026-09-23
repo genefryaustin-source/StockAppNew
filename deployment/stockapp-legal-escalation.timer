@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AIQ Intellus Legal Escalation Job Daily
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=stockapp-legal-escalation.service
+
+[Install]
+WantedBy=timers.target

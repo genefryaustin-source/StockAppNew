@@ -429,6 +429,56 @@ def render_universe(db, user):
             st.info("Operation complete. Refresh manually if the table does not update immediately.")
 
     # --------------------------------------------------
+    # Bulk sync from NASDAQ Trader (fast path)
+    # --------------------------------------------------
+
+    st.markdown("### Bulk Symbol Sync")
+    st.caption(
+        "Pulls the full NASDAQ Trader symbol directory (free, no API key, updated multiple "
+        "times per trading day) -- effectively the entire US equity market (~8,000+ symbols) "
+        "in one click, instead of adding symbols one at a time or preparing a CSV by hand. "
+        "Safe to run repeatedly -- already-present symbols are skipped, never duplicated."
+    )
+    if st.button("🔄 Sync from NASDAQ (all US symbols)", key=f"nasdaq_sync_{universe_id}"):
+        from modules.universe.nasdaq_ftp_sync import sync_universe_from_nasdaq_ftp
+        with st.spinner("Pulling the NASDAQ Trader symbol directory…"):
+            result = sync_universe_from_nasdaq_ftp(db, tenant_id, universe_id)
+        if not result.available:
+            st.error(f"Sync failed: {result.error}")
+        else:
+            st.success(
+                f"Fetched {result.fetched:,} symbols "
+                f"({result.nasdaq_listed_count:,} NASDAQ-listed, {result.other_listed_count:,} other-listed). "
+                f"Added {result.universe_symbols_added:,} new symbols to this universe "
+                f"({result.universe_symbols_already_present:,} were already present). "
+                f"Updated {result.security_master_upserted:,} security master records."
+            )
+            _safe_clear_streamlit_cache()
+            st.info("Operation complete. Refresh manually if the table does not update immediately.")
+
+    st.caption(
+        "Once symbols are in the universe, refresh their prices in one Polygon API call "
+        "(covers the whole US market, not one call per symbol) rather than waiting on a "
+        "one-symbol-at-a-time refresh."
+    )
+    if st.button("💰 Bulk-refresh prices (Polygon grouped daily)", key=f"grouped_daily_{universe_id}"):
+        from modules.market_data.updater import bulk_update_from_grouped_daily
+        current_symbols = list_symbols(db, tenant_id, universe_id)
+        if not current_symbols:
+            st.warning("This universe has no symbols yet -- sync symbols first.")
+        else:
+            with st.spinner(f"Fetching yesterday's close for {len(current_symbols):,} symbols in one call…"):
+                price_result = bulk_update_from_grouped_daily(db, current_symbols)
+            if price_result.get("error"):
+                st.error(price_result["error"])
+            else:
+                st.success(
+                    f"Updated {price_result['updated']:,} of {price_result['total']:,} symbols "
+                    f"for {price_result.get('date', 'the latest trading day')} in a single API call "
+                    f"({price_result['skipped']:,} had no data returned)."
+                )
+
+    # --------------------------------------------------
     # Symbols
     # --------------------------------------------------
 

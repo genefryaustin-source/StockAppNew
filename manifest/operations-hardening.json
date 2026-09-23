@@ -1,0 +1,17 @@
+{
+  "version": "2.5.0",
+  "sprint": "L2.5",
+  "features": [
+    "escalation policy",
+    "notification deduplication",
+    "temporary access overrides",
+    "override revocation",
+    "evidence packages",
+    "evidence integrity hash",
+    "retention framework",
+    "operations dashboard",
+    "systemd escalation timer"
+  ],
+  "enforcement_default": false,
+  "override_persistence": "in-memory development implementation"
+}

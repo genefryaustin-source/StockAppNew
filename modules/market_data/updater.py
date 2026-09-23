@@ -4,6 +4,7 @@ import logging
 import time
 from typing import List
 
+import pandas as pd
 from sqlalchemy.orm import Session
 
 
@@ -260,4 +261,90 @@ def update_latest_prices(
         "failed": failed,
         "skipped": skipped,
         "updated_symbols": updated_symbols,
+    }
+
+def bulk_update_from_grouped_daily(
+    db: Session,
+    symbols: List[str],
+    date: str = None,
+) -> dict:
+    """
+    Fast-path price refresh: one Polygon "grouped daily" API call fetches
+    EVERY US stock's OHLCV for a single date, versus update_latest_prices()
+    above which makes one API call per symbol. For a large universe
+    (thousands of symbols), this is the difference between one request
+    and thousands.
+
+    date defaults to the most recent trading day (yesterday, since
+    Polygon's free tier is end-of-day only and today's bar isn't final
+    until after close). Only writes price history for symbols already in
+    `symbols` -- the grouped response includes the whole market, and this
+    filters it down rather than inserting thousands of untracked tickers.
+
+    Returns the same shape as update_latest_prices() so callers/UI code
+    can treat either path identically.
+    """
+    from datetime import date as date_cls, timedelta as timedelta_cls
+    from modules.market_data.providers.polygon import fetch_grouped_daily, PolygonRateLimitException
+
+    if date is None:
+        date = (date_cls.today() - timedelta_cls(days=1)).isoformat()
+
+    polygon_api_key = get_secret("POLYGON_API_KEY")
+    if not polygon_api_key:
+        return {"total": len(symbols), "updated": 0, "failed": 0, "skipped": len(symbols),
+                "updated_symbols": [], "error": "POLYGON_API_KEY not configured"}
+
+    try:
+        grouped = fetch_grouped_daily(date, api_key=polygon_api_key)
+    except PolygonRateLimitException as e:
+        return {"total": len(symbols), "updated": 0, "failed": 0, "skipped": len(symbols),
+                "updated_symbols": [], "error": f"Rate limited: {e}"}
+    except Exception as e:
+        return {"total": len(symbols), "updated": 0, "failed": 0, "skipped": len(symbols),
+                "updated_symbols": [], "error": f"Grouped daily fetch failed: {e}"}
+
+    if grouped.empty:
+        return {"total": len(symbols), "updated": 0, "failed": 0, "skipped": len(symbols),
+                "updated_symbols": [], "error": f"No data returned for {date} "
+                                                  "(weekend/holiday, or too recent for the free tier)."}
+
+    wanted = set(s.upper() for s in symbols)
+    grouped = grouped[grouped["Symbol"].str.upper().isin(wanted)]
+
+    updated = 0
+    updated_symbols = []
+    BATCH_COMMIT = 100
+    for _, row in grouped.iterrows():
+        sym = row["Symbol"]
+        try:
+            single = pd.DataFrame([{
+                "Date": date, "Open": row["Open"], "High": row["High"],
+                "Low": row["Low"], "Close": row["Close"], "Volume": row["Volume"],
+            }])
+            store_price_history(db, sym, single)
+            updated += 1
+            updated_symbols.append(sym)
+            if updated % BATCH_COMMIT == 0:
+                db.commit()
+        except Exception:
+            logger.exception("Failed to store grouped-daily price for %s", sym)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    matched_symbols = set(grouped["Symbol"].str.upper())
+    skipped = [s for s in symbols if s.upper() not in matched_symbols]
+
+    return {
+        "total": len(symbols),
+        "updated": updated,
+        "failed": 0,
+        "skipped": len(skipped),
+        "updated_symbols": updated_symbols,
+        "skipped_symbols": skipped,
+        "date": date,
     }

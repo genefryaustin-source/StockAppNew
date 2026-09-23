@@ -1,0 +1,17 @@
+{
+  "version": "1.4",
+  "target": "WCAG 2.2 AA roadmap",
+  "features": [
+    "skip links",
+    "reading landmarks",
+    "estimated reading time",
+    "dark/light/system themes",
+    "high contrast",
+    "adjustable text size",
+    "reduced motion",
+    "wide reading mode",
+    "keyboard search and print shortcuts",
+    "standalone HTML export",
+    "print/save PDF support"
+  ]
+}
