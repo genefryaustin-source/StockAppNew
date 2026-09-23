@@ -18,6 +18,26 @@ def ensure_security_master_table(db):
 
 
 def seed_security_master_from_universe_symbols(db):
+    """
+    Seeds security_master with every symbol currently in universe_symbols
+    that isn't there yet (a bare placeholder row -- exchange/sector/etc.
+    get filled in later by upsert_security_master_classification via
+    "Run Auto Classification").
+
+    Uses "INSERT ... ON CONFLICT (symbol) DO NOTHING" rather than SQLite's
+    "INSERT OR IGNORE" shorthand -- the latter is SQLite-only syntax and
+    raises a hard SyntaxError against Postgres/Neon in production ("syntax
+    error at or near OR"), which aborted this entire function on the very
+    first row with no rows seeded at all. ON CONFLICT DO NOTHING is
+    supported natively by both SQLite (3.24+) and Postgres, so this one
+    statement form works unchanged on both.
+
+    Also batches the insert (500 symbols per statement) instead of
+    executing one INSERT per symbol in a loop -- for an 11,000+ symbol
+    universe that's ~22 statements instead of 11,000+, avoiding the same
+    class of slow one-row-at-a-time pattern that caused the price refresh
+    to hang earlier.
+    """
     ensure_security_master_table(db)
 
     rows = db.execute(text("""
@@ -28,28 +48,27 @@ def seed_security_master_from_universe_symbols(db):
     """)).fetchall()
 
     now = datetime.now(UTC).isoformat()
+    symbols = sorted({row[0].strip().upper() for row in rows if row[0] and row[0].strip()})
 
     inserted = 0
-    for row in rows:
-        sym = row[0].strip().upper()
-        if not sym:
-            continue
+    batch_size = 500
+    for batch_start in range(0, len(symbols), batch_size):
+        batch = symbols[batch_start:batch_start + batch_size]
+        values_sql = ", ".join(f"(:symbol_{i}, NULL, 0, NULL, NULL, 'universe_seed', :updated_at)"
+                                for i in range(len(batch)))
+        params = {f"symbol_{i}": sym for i, sym in enumerate(batch)}
+        params["updated_at"] = now
 
-        db.execute(text("""
-            INSERT OR IGNORE INTO security_master (
+        db.execute(text(f"""
+            INSERT INTO security_master (
                 symbol, exchange, is_etf, sector, industry, source, updated_at
             )
-            VALUES (
-                :symbol, NULL, 0, NULL, NULL, 'universe_seed', :updated_at
-            )
-        """), {
-            "symbol": sym,
-            "updated_at": now,
-        })
+            VALUES {values_sql}
+            ON CONFLICT (symbol) DO NOTHING
+        """), params)
+        inserted += len(batch)
+        db.commit()
 
-        inserted += 1
-
-    db.commit()
     return inserted
 
 
