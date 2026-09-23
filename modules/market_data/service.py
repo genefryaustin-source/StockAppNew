@@ -1049,6 +1049,82 @@ def build_shared_price_cache(
     return price_cache, meta
 
 
+_PERIOD_TO_TRADING_DAYS = {
+    "1mo": 21, "3mo": 63, "6mo": 126, "1y": 252, "2y": 504, "5y": 1260,
+}
+
+
+def build_shared_price_cache_bulk_first(
+    db,
+    symbols,
+    min_rows=50,
+    period="1y",
+    interval="1d",
+    max_api_calls=1000,
+    calls_per_minute=5,
+    **kwargs,
+):
+    """
+    Drop-in alternative to build_shared_price_cache() above -- same
+    signature, same return shape ({symbol: DataFrame}, {symbol: {"rows": n}}) --
+    that tries to cover the WHOLE requested symbol list with Polygon's
+    grouped-daily endpoint first (see
+    modules.market_data.grouped_daily_history_builder), which needs
+    roughly (trading days in `period`) API calls total regardless of how
+    many symbols there are, instead of build_shared_price_cache's one API
+    call PER symbol.
+
+    Anything the bulk fetch doesn't cover (no Polygon key configured, a
+    symbol Polygon has no data for -- OTC/delisted/very new tickers, or a
+    symbol that came back with fewer than min_rows) falls back to
+    build_shared_price_cache for just that remaining, usually much
+    smaller, set -- so callers get the same completeness guarantee as
+    before, just with far fewer slow individual calls needed to get there.
+
+    Only interval="1d" benefits from the bulk path (grouped-daily is a
+    daily-bars endpoint) -- any other interval skips straight to the
+    existing per-symbol path unchanged.
+    """
+    symbols = list(symbols or [])
+    if interval != "1d":
+        return build_shared_price_cache(
+            db, symbols, min_rows=min_rows, period=period, interval=interval,
+            max_api_calls=max_api_calls, **kwargs,
+        )
+
+    lookback_days = _PERIOD_TO_TRADING_DAYS.get(period, 252)
+
+    try:
+        from modules.market_data.grouped_daily_history_builder import build_price_cache_from_grouped_daily
+        bulk_cache, bulk_meta = build_price_cache_from_grouped_daily(
+            db, symbols, lookback_days=lookback_days, calls_per_minute=calls_per_minute, persist=True,
+        )
+    except Exception as e:
+        print(f"[build_shared_price_cache_bulk_first] bulk path failed, falling back entirely: {e}")
+        bulk_cache, bulk_meta = {}, {}
+
+    covered = {
+        sym for sym, df in bulk_cache.items()
+        if df is not None and len(df) >= min_rows
+    }
+    remaining = [s for s in symbols if s.upper() not in covered]
+
+    if not remaining:
+        return bulk_cache, bulk_meta
+
+    print(f"[build_shared_price_cache_bulk_first] bulk path covered {len(covered)}/{len(symbols)} symbols; "
+          f"falling back to per-symbol fetch for the remaining {len(remaining)}.")
+
+    fallback_cache, fallback_meta = build_shared_price_cache(
+        db, remaining, min_rows=min_rows, period=period, interval=interval,
+        max_api_calls=max_api_calls, **kwargs,
+    )
+
+    merged_cache = {**bulk_cache, **fallback_cache}
+    merged_meta = {**bulk_meta, **fallback_meta}
+    return merged_cache, merged_meta
+
+
 def get_price_history_page_from_db(db, symbol, page=1, page_size=250, period="1y"):
     df = get_price_history(db, symbol, period=period)
     total = len(df)

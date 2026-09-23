@@ -208,6 +208,111 @@ def main():
     check("Bulk price update reports a clear error (not a crash) when no Polygon key is configured",
           _check_bulk_update_no_api_key)
 
+    # ── Regression: the production hang. bulk_update_from_grouped_daily
+    # previously called store_price_history() once per symbol -- one
+    # network round-trip + one commit PER SYMBOL. Against Neon in
+    # production, this stalled indefinitely on a single connection with
+    # 12,601 symbols and zero rows had been written after 20+ minutes.
+    # The fix batches writes into large multi-row upserts via
+    # bulk_upsert_price_history() instead. ──
+    def _check_bulk_upsert_price_history_correctness():
+        from modules.market_data.price_history_service import bulk_upsert_price_history
+        from modules.market_data.models import PriceHistory
+        from datetime import date as date_cls
+
+        rows = [
+            {"symbol": "AAPL", "date": date_cls(2026, 9, 22), "open": 188.5, "high": 191.2,
+             "low": 187.9, "close": 190.4, "volume": 52000000},
+            {"symbol": "MSFT", "date": date_cls(2026, 9, 22), "open": 420.1, "high": 423.0,
+             "low": 418.5, "close": 421.8, "volume": 21000000},
+        ]
+        result = bulk_upsert_price_history(db, rows)
+        assert result["written"] == 2 and result["failed_batches"] == 0
+
+        # Re-upsert with different values for the same (symbol, date) --
+        # must UPDATE in place (on_conflict_do_update), not skip or duplicate.
+        updated_rows = [
+            {"symbol": "AAPL", "date": date_cls(2026, 9, 22), "open": 1, "high": 1,
+             "low": 1, "close": 999.0, "volume": 1},
+        ]
+        bulk_upsert_price_history(db, updated_rows)
+        row = db.query(PriceHistory).filter_by(symbol="AAPL", date=date_cls(2026, 9, 22)).first()
+        assert row.close == 999.0, "on_conflict_do_update should overwrite, not skip, an existing row"
+        total = (
+            db.query(PriceHistory)
+            .filter(PriceHistory.symbol.in_(["AAPL", "MSFT"]), PriceHistory.date == date_cls(2026, 9, 22))
+            .count()
+        )
+        assert total == 2, "re-upserting an existing (symbol, date) must not create a duplicate row"
+
+    check("bulk_upsert_price_history correctly upserts and overwrites without duplicating",
+          _check_bulk_upsert_price_history_correctness)
+
+    def _check_bulk_upsert_handles_malformed_rows():
+        from modules.market_data.price_history_service import bulk_upsert_price_history
+        from datetime import date as date_cls
+
+        rows = [
+            {"symbol": "GOOD1", "date": date_cls(2026, 9, 22), "open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 100},
+            {"symbol": "BAD_MISSING_CLOSE", "date": date_cls(2026, 9, 22), "open": 1, "high": 2, "low": 0.5},  # missing close
+            {"symbol": "GOOD2", "date": date_cls(2026, 9, 22), "open": 5, "high": 6, "low": 4, "close": 5.5, "volume": 200},
+        ]
+        result = bulk_upsert_price_history(db, rows)
+        assert result["written"] == 2, f"expected the 2 well-formed rows to write despite 1 bad row, got {result}"
+
+    check("A malformed row is skipped without losing the other valid rows in its batch",
+          _check_bulk_upsert_handles_malformed_rows)
+
+    def _check_bulk_update_uses_bulk_upsert_not_per_symbol_loop():
+        """
+        The specific regression check: bulk_update_from_grouped_daily must
+        route through bulk_upsert_price_history (batched), not call
+        store_price_history() in a per-symbol loop (the original hang).
+        """
+        import inspect
+        import modules.market_data.updater as updater_module
+        source = inspect.getsource(updater_module.bulk_update_from_grouped_daily)
+        assert "bulk_upsert_price_history" in source, (
+            "bulk_update_from_grouped_daily should call the batched bulk_upsert_price_history"
+        )
+        assert "for _, row in grouped.iterrows():" not in source, (
+            "bulk_update_from_grouped_daily should not loop store_price_history per row/symbol -- "
+            "that per-symbol-commit pattern is exactly what caused the production hang"
+        )
+
+    check("bulk_update_from_grouped_daily routes through the batched upsert, not a per-symbol loop",
+          _check_bulk_update_uses_bulk_upsert_not_per_symbol_loop)
+
+    def _check_large_scale_performance():
+        """Proves the fix at the scale that actually hung in production --
+        12,601 symbols, the real count Polygon returned. Should complete
+        in low single-digit seconds against a real database, not hang."""
+        import time
+        import pandas as pd
+        import modules.market_data.updater as updater_module
+
+        fake_grouped = pd.DataFrame([
+            {"Symbol": f"PERF{i:05d}", "Open": 100 + i * 0.01, "High": 101 + i * 0.01,
+             "Low": 99 + i * 0.01, "Close": 100.5 + i * 0.01, "Volume": 1000 + i}
+            for i in range(12601)
+        ])
+        universe_symbols = [f"PERF{i:05d}" for i in range(12601)]
+
+        with patch("modules.market_data.updater.get_secret", return_value="fake_key"), \
+             patch("modules.market_data.providers.polygon.fetch_grouped_daily", return_value=fake_grouped):
+            start = time.time()
+            result = updater_module.bulk_update_from_grouped_daily(db, symbols=universe_symbols, date="2026-09-22")
+            elapsed = time.time() - start
+
+        assert result["updated"] == 12601, f"expected all 12,601 rows written, got {result}"
+        assert elapsed < 30, (
+            f"12,601-symbol bulk update took {elapsed:.1f}s -- should be a few seconds against a "
+            f"real database, not the 20+ minute hang this fix addresses"
+        )
+
+    check("12,601-symbol bulk update (the exact production scale) completes in seconds, not minutes",
+          _check_large_scale_performance)
+
     print()
     print(f"{results['pass']} passed, {results['fail']} failed")
     return 1 if results["fail"] else 0
