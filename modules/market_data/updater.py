@@ -8,7 +8,7 @@ import pandas as pd
 from sqlalchemy.orm import Session
 
 
-from modules.market_data.price_history_service import store_price_history
+from modules.market_data.price_history_service import store_price_history, bulk_upsert_price_history
 from modules.market_data.provider_router import (
     get_provider_router,
     is_rate_limit_error,
@@ -312,29 +312,44 @@ def bulk_update_from_grouped_daily(
     wanted = set(s.upper() for s in symbols)
     grouped = grouped[grouped["Symbol"].str.upper().isin(wanted)]
 
-    updated = 0
-    updated_symbols = []
-    BATCH_COMMIT = 100
-    for _, row in grouped.iterrows():
-        sym = row["Symbol"]
-        try:
-            single = pd.DataFrame([{
-                "Date": date, "Open": row["Open"], "High": row["High"],
-                "Low": row["Low"], "Close": row["Close"], "Volume": row["Volume"],
-            }])
-            store_price_history(db, sym, single)
-            updated += 1
-            updated_symbols.append(sym)
-            if updated % BATCH_COMMIT == 0:
-                db.commit()
-        except Exception:
-            logger.exception("Failed to store grouped-daily price for %s", sym)
+    if grouped.empty:
+        return {"total": len(symbols), "updated": 0, "failed": 0, "skipped": len(symbols),
+                "updated_symbols": [], "error": None, "date": date}
 
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
+    # A single batched bulk upsert instead of one store_price_history() call
+    # (and one commit) per symbol -- looping per-symbol here previously
+    # meant one network round-trip to the database PER SYMBOL, which for a
+    # multi-thousand-symbol universe against a remote database (Neon, etc.)
+    # could take many minutes and was observed to hang entirely on a single
+    # stalled connection with no way to recover short of restarting the
+    # process. See modules.market_data.price_history_service.bulk_upsert_price_history.
+    rows = [
+        {
+            "symbol": row["Symbol"], "date": date,
+            "open": row["Open"], "high": row["High"], "low": row["Low"],
+            "close": row["Close"], "volume": row["Volume"],
+        }
+        for _, row in grouped.iterrows()
+    ]
+    upsert_result = bulk_upsert_price_history(db, rows)
+    updated = upsert_result["written"]
+    all_requested_symbols = [r["symbol"] for r in rows]
+    # bulk_upsert_price_history batches rows and only tracks aggregate
+    # counts in the fast path (not which specific symbol failed within a
+    # batch), so when something didn't fully succeed, we honestly can't
+    # name exactly which symbols made it without deeper introspection --
+    # report the full requested list only when the counts actually match,
+    # and surface the raw per-row error list otherwise rather than
+    # guessing (or worse, claiming symbols succeeded that didn't).
+    fully_succeeded = updated == len(all_requested_symbols)
+    updated_symbols = all_requested_symbols if fully_succeeded else []
+    if not fully_succeeded:
+        logger.warning(
+            "bulk_update_from_grouped_daily: %d/%d rows written; "
+            "%d batch(es) needed row-by-row fallback. Errors: %s",
+            updated, len(all_requested_symbols), upsert_result["failed_batches"],
+            upsert_result["errors"][:10],
+        )
 
     matched_symbols = set(grouped["Symbol"].str.upper())
     skipped = [s for s in symbols if s.upper() not in matched_symbols]
@@ -342,9 +357,10 @@ def bulk_update_from_grouped_daily(
     return {
         "total": len(symbols),
         "updated": updated,
-        "failed": 0,
+        "failed": len(all_requested_symbols) - updated,
         "skipped": len(skipped),
         "updated_symbols": updated_symbols,
         "skipped_symbols": skipped,
         "date": date,
+        "upsert_errors": upsert_result["errors"] if not fully_succeeded else [],
     }
