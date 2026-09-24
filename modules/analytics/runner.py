@@ -1597,8 +1597,28 @@ def run_analytics(db, tenant_id, symbols):
 
         except Exception as e:
             print("ANALYTICS ERROR:", sym, e)
+            # Without this rollback, a genuine (non-connection-drop) error
+            # here leaves the session's transaction permanently aborted --
+            # every symbol processed AFTER this one in the loop then fails
+            # with the same generic "current transaction is aborted" error
+            # even though nothing is actually wrong with them, and the
+            # unguarded db.commit() below then crashes the entire job
+            # instead of returning whatever results were already gathered.
+            # This is exactly the failure observed in production: one bad
+            # symbol took down an otherwise-successful universe_refresh run.
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        print("ANALYTICS FINAL COMMIT FAILED (returning partial results instead of crashing the job):", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
     _st_success(f"Analytics completed: {len(results)} symbols")
 
@@ -1780,6 +1800,16 @@ def run_vectorized_price_analytics(
 
         except Exception as e:
             print("VECTOR ANALYTICS ERROR:", sym, e)
+            # Same fix as run_analytics above: without this rollback, one
+            # symbol's genuine (non-connection-drop) failure leaves this
+            # session's transaction permanently aborted for the rest of
+            # the loop -- and since this function returns `db` back to
+            # its caller (refresh_universe_cache), a poisoned session
+            # here can propagate the failure beyond just this one job run.
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     print(f"✅ VECTOR ANALYTICS COMPLETE: {len(results)} snapshots")
 
