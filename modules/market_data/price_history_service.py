@@ -104,10 +104,24 @@ def bulk_upsert_price_history(db, rows: list[dict], batch_size: int = 500) -> di
 
     for batch_start in range(0, len(rows), batch_size):
         batch = rows[batch_start:batch_start + batch_size]
-        values = []
+        # Deduplicate by (symbol, date) before building the INSERT --
+        # Postgres's "ON CONFLICT DO UPDATE" cannot affect the same row
+        # twice within a single statement, and raises a hard
+        # CardinalityViolation if two rows in the same batch target the
+        # same (symbol, date). This happened in production: Polygon's
+        # grouped-daily response (or the .upper() symbol normalization
+        # below, which can collide two differently-cased raw symbols)
+        # produced two rows for the same symbol+date within one 500-row
+        # batch. The batch still succeeded via the row-by-row fallback
+        # below, but that's the slow path this function exists to avoid --
+        # deduplicating up front means the fast bulk path handles it
+        # correctly instead of needing to fall back at all. Last
+        # occurrence wins, consistent with ON CONFLICT DO UPDATE's own
+        # "newest write wins" semantics for a genuine re-upsert.
+        deduped_by_key: dict[tuple[str, object], dict] = {}
         for r in batch:
             try:
-                values.append({
+                normalized = {
                     "symbol": str(r["symbol"]).upper(),
                     "date": pd.to_datetime(r["date"]).date(),
                     "open": float(r["open"]),
@@ -115,9 +129,12 @@ def bulk_upsert_price_history(db, rows: list[dict], batch_size: int = 500) -> di
                     "low": float(r["low"]),
                     "close": float(r["close"]),
                     "volume": int(r["volume"]) if r.get("volume") is not None and pd.notna(r["volume"]) else None,
-                })
+                }
             except (KeyError, TypeError, ValueError):
                 continue  # malformed row -- skip rather than fail the whole batch up front
+            deduped_by_key[(normalized["symbol"], normalized["date"])] = normalized
+
+        values = list(deduped_by_key.values())
 
         if not values:
             continue
