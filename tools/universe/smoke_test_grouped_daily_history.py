@@ -293,6 +293,51 @@ def main():
     check("After one rate-limit, the circuit breaker skips the provider entirely for subsequent symbols",
           _check_circuit_breaker_skips_symbols_after_rate_limit)
 
+    # ── Regression: a genuine production error found while testing today's
+    # fix -- "ON CONFLICT DO UPDATE command cannot affect row a second
+    # time" (psycopg2.errors.CardinalityViolation). Two rows for the same
+    # (symbol, date) landed in the same 500-row batch (from Polygon's
+    # grouped-daily response, or a case-normalization collision), which
+    # Postgres's multi-row upsert cannot resolve on its own. The existing
+    # row-by-row fallback recovered the data correctly (no data was lost
+    # in production), but silently dropped that whole batch to the slow
+    # path this function exists to avoid. Deduplicating by (symbol, date)
+    # before building the INSERT means the fast bulk path handles it
+    # directly instead of ever needing to fall back. ──
+    def _check_duplicate_symbol_date_in_batch_does_not_error():
+        from modules.market_data.price_history_service import bulk_upsert_price_history
+        from modules.market_data.models import PriceHistory
+        from datetime import date as date_cls
+
+        rows = [
+            {"symbol": "AAPL", "date": date_cls(2025, 11, 6), "open": 188.0, "high": 191.0,
+             "low": 187.0, "close": 190.0, "volume": 1000000},
+            {"symbol": "MSFT", "date": date_cls(2025, 11, 6), "open": 420.0, "high": 423.0,
+             "low": 418.0, "close": 421.0, "volume": 500000},
+            # The exact production scenario: same symbol, same date, twice
+            # in one batch, with a different value on the second occurrence.
+            {"symbol": "AAPL", "date": date_cls(2025, 11, 6), "open": 188.5, "high": 191.5,
+             "low": 187.5, "close": 190.5, "volume": 1000001},
+        ]
+
+        result = bulk_upsert_price_history(db, rows)
+        assert result["failed_batches"] == 0, (
+            f"the fast bulk path should succeed directly with a duplicate present, not fall back -- "
+            f"got {result['failed_batches']} failed batch(es): {result['errors']}"
+        )
+        assert result["written"] == 2, f"expected 2 unique (symbol, date) rows written, got {result['written']}"
+
+        aapl_row = db.query(PriceHistory).filter_by(symbol="AAPL", date=date_cls(2025, 11, 6)).first()
+        assert aapl_row.close == 190.5, "the later duplicate in the batch should win"
+
+        total = db.query(PriceHistory).filter(
+            PriceHistory.symbol.in_(["AAPL", "MSFT"]), PriceHistory.date == date_cls(2025, 11, 6)
+        ).count()
+        assert total == 2, f"expected exactly 2 rows (no duplicate rows created), got {total}"
+
+    check("A duplicate (symbol, date) within one batch no longer raises CardinalityViolation",
+          _check_duplicate_symbol_date_in_batch_does_not_error)
+
     print()
     print(f"{results['pass']} passed, {results['fail']} failed")
     return 1 if results["fail"] else 0
