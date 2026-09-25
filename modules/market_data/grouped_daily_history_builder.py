@@ -128,15 +128,32 @@ def build_price_cache_from_grouped_daily(
     if not wanted:
         return {}, {}
 
-    accumulator: dict[str, list[dict]] = {s: [] for s in wanted}
+    # IMPORTANT: earlier versions of this function accumulated every
+    # symbol's every fetched day as a Python dict in memory for the
+    # ENTIRE run (accumulator[sym].append(...)), on top of ALSO
+    # persisting to the database. For an 11,000-symbol universe over a
+    # year of history (~2.7 million small dict objects), this bloated
+    # memory usage badly -- on a production box with well under 1GB of
+    # RAM, it drove the process into heavy swapping (and likely an OOM
+    # kill/restart) while appearing to make zero progress, since nearly
+    # all its "CPU time" was actually the kernel swapping memory in and
+    # out rather than useful work. Since every fetched row is already
+    # being persisted to price_history as we go, there's no need to also
+    # hold it all in memory during the fetch -- this version only tracks
+    # which symbols were actually touched, then reads the result back
+    # from Postgres in bounded chunks afterward. A single columnar bulk
+    # read (via pandas) for a batch of symbols is dramatically cheaper
+    # than millions of small Python dict objects accumulated one at a
+    # time, and chunking the read-back keeps peak memory bounded
+    # regardless of universe size, rather than pulling everything back
+    # in one giant query.
     limiter = _RateLimiter(calls_per_minute)
-
-    # 2x buffer: weekends are already filtered out of candidates, but
-    # holidays aren't -- padding the candidate window means a few holidays
-    # in the range don't leave the cache short of the requested lookback.
     candidates = _trading_day_candidates(date.today() - timedelta(days=1), lookback_days * 2)
 
     trading_days_found = 0
+    touched_symbols: set[str] = set()
+    no_persist_accumulator: dict[str, list[dict]] = {}
+    fetched_dates: list[date] = []
     bulk_upsert_price_history = None
     if persist:
         from modules.market_data.price_history_service import bulk_upsert_price_history as _buph
@@ -167,22 +184,34 @@ def build_price_cache_from_grouped_daily(
             continue  # weekend/holiday -- doesn't count toward the trading-day target
 
         trading_days_found += 1
+        fetched_dates.append(day)
         matched = grouped[grouped["Symbol"].str.upper().isin(wanted)]
 
-        persist_rows = []
-        for _, row in matched.iterrows():
-            sym = row["Symbol"].upper()
-            accumulator[sym].append({
-                "Date": day, "Open": row["Open"], "High": row["High"],
-                "Low": row["Low"], "Close": row["Close"], "Volume": row["Volume"],
-            })
-            if persist:
-                persist_rows.append({
-                    "symbol": sym, "date": day, "open": row["Open"], "high": row["High"],
-                    "low": row["Low"], "close": row["Close"], "volume": row["Volume"],
+        if not persist:
+            # Without persistence there is nowhere to read the data back
+            # from afterward, so this (rare) case keeps the old, fully
+            # in-memory behavior -- a caller explicitly opting out of
+            # persistence is choosing a lighter-weight, presumably
+            # smaller-scale, use where this doesn't matter.
+            for _, row in matched.iterrows():
+                sym = row["Symbol"].upper()
+                touched_symbols.add(sym)
+                no_persist_accumulator.setdefault(sym, []).append({
+                    "Date": day, "Open": row["Open"], "High": row["High"],
+                    "Low": row["Low"], "Close": row["Close"], "Volume": row["Volume"],
                 })
+            continue
 
-        if persist and persist_rows and bulk_upsert_price_history is not None:
+        persist_rows = [
+            {
+                "symbol": row["Symbol"].upper(), "date": day, "open": row["Open"], "high": row["High"],
+                "low": row["Low"], "close": row["Close"], "volume": row["Volume"],
+            }
+            for _, row in matched.iterrows()
+        ]
+        touched_symbols.update(r["symbol"] for r in persist_rows)
+
+        if persist_rows and bulk_upsert_price_history is not None:
             try:
                 bulk_upsert_price_history(db, persist_rows)
             except Exception as e:
@@ -194,13 +223,70 @@ def build_price_cache_from_grouped_daily(
             except Exception:
                 pass  # a broken progress callback should never abort the actual fetch
 
-    price_cache = {}
-    meta = {}
-    for sym, rows in accumulator.items():
+    if not persist:
+        price_cache, meta = {}, {}
+        for sym, day_rows in no_persist_accumulator.items():
+            if not day_rows:
+                continue
+            df = pd.DataFrame(day_rows).sort_values("Date").reset_index(drop=True)
+            price_cache[sym] = df
+            meta[sym] = {"rows": len(df)}
+        return price_cache, meta
+
+    if not touched_symbols or not fetched_dates:
+        return {}, {}
+
+    return _read_back_price_cache(db, touched_symbols, min(fetched_dates), max(fetched_dates))
+
+
+def _read_back_price_cache(
+    db, symbols: set[str], start_date: date, end_date: date, chunk_size: int = 500,
+) -> tuple[dict, dict]:
+    """
+    Rebuilds the {symbol: DataFrame} price cache from price_history AFTER
+    the fetch loop has already persisted everything -- one bounded, mostly
+    columnar bulk read per chunk of symbols, instead of holding the whole
+    universe's history in memory throughout the fetch itself. Reads are
+    chunked (default 500 symbols at a time) so peak memory for the
+    read-back step stays roughly constant regardless of how large the
+    total universe is.
+    """
+    from modules.market_data.models import PriceHistory
+
+    price_cache: dict[str, pd.DataFrame] = {}
+    meta: dict[str, dict] = {}
+    symbol_list = sorted(symbols)
+
+    for chunk_start in range(0, len(symbol_list), chunk_size):
+        chunk = symbol_list[chunk_start:chunk_start + chunk_size]
+        try:
+            rows = (
+                db.query(
+                    PriceHistory.symbol, PriceHistory.date, PriceHistory.open,
+                    PriceHistory.high, PriceHistory.low, PriceHistory.close, PriceHistory.volume,
+                )
+                .filter(
+                    PriceHistory.symbol.in_(chunk),
+                    PriceHistory.date >= start_date,
+                    PriceHistory.date <= end_date,
+                )
+                .order_by(PriceHistory.symbol, PriceHistory.date)
+                .all()
+            )
+        except Exception as e:
+            logger.warning("Read-back query failed for a chunk of %d symbols: %s", len(chunk), e)
+            continue
+
         if not rows:
             continue
-        df = pd.DataFrame(rows).sort_values("Date").reset_index(drop=True)
-        price_cache[sym] = df
-        meta[sym] = {"rows": len(df)}
+
+        chunk_df = pd.DataFrame(
+            rows, columns=["Symbol", "Date", "Open", "High", "Low", "Close", "Volume"],
+        )
+        for sym, group in chunk_df.groupby("Symbol", sort=False):
+            df = group.drop(columns=["Symbol"]).reset_index(drop=True)
+            price_cache[sym] = df
+            meta[sym] = {"rows": len(df)}
+        del chunk_df, rows  # let this chunk's memory go before starting the next one
 
     return price_cache, meta

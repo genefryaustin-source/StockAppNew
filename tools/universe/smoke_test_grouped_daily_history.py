@@ -23,6 +23,7 @@ Usage:
 
 import sys
 import os
+import inspect
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -337,6 +338,80 @@ def main():
 
     check("A duplicate (symbol, date) within one batch no longer raises CardinalityViolation",
           _check_duplicate_symbol_date_in_batch_does_not_error)
+
+    # ── Regression: memory design. The original version accumulated every
+    # symbol's every fetched day as a Python dict in memory for the ENTIRE
+    # run (on top of also persisting to the database) -- for an 11,000-
+    # symbol universe over a year of history, roughly 2.7 million small
+    # dict objects held simultaneously. On the actual production box
+    # (under 1GB of RAM), this drove heavy swapping while a universe_refresh
+    # job appeared to make zero progress. Since every row is already
+    # persisted as it's fetched, there's no need to also hold it all in
+    # memory -- this reads the result back from price_history afterward,
+    # in bounded chunks, instead. ──
+    def _check_no_full_accumulator_and_read_back_is_correct():
+        import time
+        from unittest.mock import patch
+        import modules.market_data.grouped_daily_history_builder as builder_module
+
+        n_symbols = 300
+        symbols = [f"MEMTEST{i:04d}" for i in range(n_symbols)]
+
+        def fake_fetch(date_str, api_key, timeout=30):
+            return pd.DataFrame([
+                {"Symbol": s, "Open": 10.0, "High": 11.0, "Low": 9.0, "Close": 10.5, "Volume": 100}
+                for s in symbols
+            ])
+
+        with patch("modules.utils.config.get_secret", return_value="fake_key"), \
+             patch("modules.market_data.providers.polygon.fetch_grouped_daily", side_effect=fake_fetch), \
+             patch("time.sleep"):
+            price_cache, meta = builder_module.build_price_cache_from_grouped_daily(
+                db, symbols=symbols, lookback_days=10, calls_per_minute=1000, persist=True,
+            )
+
+        assert len(price_cache) == n_symbols, f"expected all {n_symbols} symbols in the cache, got {len(price_cache)}"
+        assert all(len(df) == 10 for df in price_cache.values()), "each symbol should have exactly 10 trading days"
+        assert list(price_cache[symbols[0]].columns) == ["Date", "Open", "High", "Low", "Close", "Volume"]
+
+        # The specific regression: the old code path kept a persistent,
+        # ever-growing accumulator dict alive for the whole function call.
+        # Confirm the persist=True path delegates to a bounded, chunked
+        # database read-back afterward, rather than returning something
+        # built up entirely in memory during the fetch loop itself.
+        source = inspect.getsource(builder_module.build_price_cache_from_grouped_daily)
+        assert "_read_back_price_cache(db, touched_symbols" in source, (
+            "the persist=True path should delegate to the bounded, chunked database "
+            "read-back instead of returning an in-memory accumulator built during the fetch"
+        )
+
+    check("Price cache is correctly rebuilt from the database afterward, not accumulated in memory during the fetch",
+          _check_no_full_accumulator_and_read_back_is_correct)
+
+    def _check_persist_false_still_returns_data():
+        """The one remaining in-memory code path (persist=False, where
+        there's nothing to read back from) must still actually return its
+        results -- a regression caught while building this fix: an early
+        version of the persist=False branch discarded its own results."""
+        from unittest.mock import patch
+        import modules.market_data.grouped_daily_history_builder as builder_module
+
+        def fake_fetch(date_str, api_key, timeout=30):
+            return pd.DataFrame([
+                {"Symbol": "NOPERSIST", "Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 10},
+            ])
+
+        with patch("modules.utils.config.get_secret", return_value="fake_key"), \
+             patch("modules.market_data.providers.polygon.fetch_grouped_daily", side_effect=fake_fetch), \
+             patch("time.sleep"):
+            cache, meta = builder_module.build_price_cache_from_grouped_daily(
+                db, symbols=["NOPERSIST"], lookback_days=3, persist=False,
+            )
+
+        assert "NOPERSIST" in cache, "persist=False must still return the data it fetched, not discard it"
+        assert len(cache["NOPERSIST"]) == 3
+
+    check("persist=False still returns its fetched data instead of discarding it", _check_persist_false_still_returns_data)
 
     print()
     print(f"{results['pass']} passed, {results['fail']} failed")
