@@ -26,7 +26,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import pandas as pd
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -165,6 +165,133 @@ def main():
 
     check("A non-daily interval bypasses the bulk (daily-only) path entirely",
           _check_non_daily_interval_skips_bulk_path)
+
+    # ── Regression: one bad symbol's real DB error must not cascade and
+    # kill every symbol processed after it in the same loop. Found in
+    # production: a universe_refresh job failed outright with "Can't
+    # reconnect until invalid transaction is rolled back" after this
+    # exact bulk-first integration was deployed -- the per-symbol error
+    # handler logged the failure but never rolled back, so Postgres kept
+    # refusing every subsequent query on that session until the whole job
+    # died.
+    #
+    # IMPORTANT: this can only be verified against real Postgres. SQLite's
+    # transaction model is far more lenient -- a failed query there does
+    # NOT poison the session the way Postgres's does, so this exact test
+    # would report a false PASS on SQLite regardless of whether the fix
+    # is actually present. Skips honestly (not a fabricated pass) when
+    # only SQLite is available, e.g. in a quick local run without
+    # DATABASE_URL pointed at a real Postgres instance. ──
+    def _check_one_bad_symbol_does_not_cascade():
+        import modules.analytics.runner as runner_module
+        from sqlalchemy import text
+
+        pg_url = os.environ.get("DATABASE_URL", "")
+        if not pg_url.startswith("postgresql"):
+            print("SKIP  (requires a real Postgres DATABASE_URL -- SQLite doesn't "
+                  "reproduce this transaction-abort behavior, so this test would "
+                  "pass regardless of whether the fix is present)")
+            return
+
+        pg_engine = create_engine(pg_url)
+        pg_db = sessionmaker(bind=pg_engine)()
+
+        call_log = []
+
+        def fake_run_analytics_for_symbol(db, tenant_id, symbol, price_df=None):
+            call_log.append(symbol)
+            if symbol == "BADSYM":
+                # A genuine Postgres error (not a dropped connection) --
+                # exactly the class of error _is_dead_connection_error does
+                # not recognize, so recovery depends on the per-symbol
+                # except block rolling back unconditionally.
+                db.execute(text("SELECT * FROM this_table_does_not_exist"))
+            db.execute(text("SELECT 1"))
+            return {"symbol": symbol, "ok": True}
+
+        price_cache = {sym: pd.DataFrame({"Close": [1, 2, 3]})
+                       for sym in ["GOODSYM1", "BADSYM", "GOODSYM2", "GOODSYM3"]}
+
+        with patch("modules.analytics.runner.run_analytics_for_symbol", side_effect=fake_run_analytics_for_symbol), \
+             patch("modules.analytics.runner.build_shared_price_cache_bulk_first",
+                   return_value=(price_cache, {s: {"rows": 3} for s in price_cache})), \
+             patch("modules.analytics.runner._normalize_history_df", side_effect=lambda df: df), \
+             patch("modules.analytics.runner.MIN_HISTORY_ROWS", 1):
+            results, _ = runner_module.run_vectorized_price_analytics(
+                db=pg_db, tenant_id="test-tenant", symbols=list(price_cache.keys()),
+            )
+
+        succeeded = [r["symbol"] for r in results]
+        assert call_log == ["GOODSYM1", "BADSYM", "GOODSYM2", "GOODSYM3"], (
+            f"all 4 symbols should have been attempted, got {call_log}"
+        )
+        assert succeeded == ["GOODSYM1", "GOODSYM2", "GOODSYM3"], (
+            f"GOODSYM2/GOODSYM3 must succeed despite BADSYM's real error -- got {succeeded}. "
+            "Without the rollback fix, both would fail with a cascading "
+            "'current transaction is aborted' error even though nothing is wrong with them."
+        )
+
+    check("One symbol's genuine DB error is rolled back and does not cascade to the rest of the run (Postgres only)",
+          _check_one_bad_symbol_does_not_cascade)
+
+    # ── Regression: the real cause of a universe_refresh job running for
+    # "approximately one day" instead of finishing. modules.analytics.runner
+    # imports _disable_provider/provider_enabled from market_data.service
+    # inside a bare try/except that silently falls back to no-op stubs
+    # (provider_enabled always True, _disable_provider a no-op) if the
+    # import fails for ANY reason -- including a genuine ImportError, which
+    # is exactly what was happening: provider_enabled didn't exist in
+    # service.py at all. The cooldown-setting half worked
+    # (_disable_provider/_provider_disabled), but nothing ever read it, so
+    # every one of 11,000+ symbols re-attempted every already-exhausted
+    # fundamentals provider (Finnhub/FMP/Alpha Vantage) and got rate-limited
+    # again, one guaranteed-to-fail HTTP round-trip at a time. ──
+    def _check_provider_enabled_exists_and_is_wired_up():
+        from modules.market_data.service import provider_enabled, _disable_provider
+        import modules.analytics.runner as runner_module
+
+        assert runner_module.provider_enabled is provider_enabled, (
+            "runner.py's import of provider_enabled must resolve to the real function, "
+            "not silently fall back to the always-True no-op stub"
+        )
+        assert runner_module._disable_provider is _disable_provider, (
+            "runner.py's import of _disable_provider must resolve to the real function"
+        )
+
+    check("provider_enabled exists and runner.py's import resolves to the real function, not a no-op stub",
+          _check_provider_enabled_exists_and_is_wired_up)
+
+    def _check_circuit_breaker_skips_symbols_after_rate_limit():
+        import modules.market_data.service as svc
+        svc._PROVIDER_STATE.clear()  # isolate from any other test's cooldown state
+
+        import modules.analytics.runner as runner_module
+        call_count = {"n": 0}
+
+        def fake_requests_get(url, params=None, timeout=None):
+            call_count["n"] += 1
+            resp = MagicMock()
+            resp.status_code = 429
+            resp.text = "rate limited"
+            return resp
+
+        with patch("modules.analytics.runner.requests.get", side_effect=fake_requests_get), \
+             patch("modules.analytics.runner.get_secret", return_value="fake_key"):
+            runner_module._get_finnhub_fundamentals("SYM1")
+            calls_after_first = call_count["n"]
+            runner_module._get_finnhub_fundamentals("SYM2")
+            calls_after_second = call_count["n"]
+
+        assert calls_after_first == 1
+        assert calls_after_second == 1, (
+            f"a second symbol must NOT make another HTTP call once the provider is in cooldown -- "
+            f"got {calls_after_second} total calls. This is the exact bug that turned a job that "
+            f"should finish in minutes into one that ran for roughly a full day."
+        )
+        svc._PROVIDER_STATE.clear()  # leave clean state for any tests that run after this one
+
+    check("After one rate-limit, the circuit breaker skips the provider entirely for subsequent symbols",
+          _check_circuit_breaker_skips_symbols_after_rate_limit)
 
     print()
     print(f"{results['pass']} passed, {results['fail']} failed")

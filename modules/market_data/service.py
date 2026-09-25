@@ -119,6 +119,31 @@ def _disable_provider(provider: str, seconds: int = 900, reason: str = "") -> No
     print(f"🚨 {provider.upper()} DISABLED FOR {seconds // 60} MIN {reason}".strip())
 
 
+def provider_enabled(provider: str) -> bool:
+    """
+    True if `provider` is NOT currently in a rate-limit cooldown (see
+    _disable_provider/_provider_disabled above).
+
+    This didn't exist until now -- modules.analytics.runner imports it
+    inside a bare `try/except Exception` specifically to stay compatible
+    with older versions of this file that didn't expose provider-health
+    functions at all, and silently falls back to a no-op stub (always
+    "available") if the import fails for ANY reason, including a genuine
+    ImportError from a missing name like this one. That silent fallback
+    meant the cooldown mechanism -- correctly implemented on this end via
+    _disable_provider/_provider_disabled -- was never actually being
+    checked by callers: every symbol re-attempted every fundamentals
+    provider regardless of how many times it had just been rate-limited
+    moments earlier. At the ~2,000-symbol universe size this was
+    tolerable; at 11,000+ symbols (after the NASDAQ bulk sync), the same
+    dead circuit breaker meant a job that should skip cooled-down
+    providers instead wasted a real HTTP round-trip (and a guaranteed
+    429) on every single remaining symbol, stretching what should be a
+    fast pass into something that could run for the better part of a day.
+    """
+    return not _provider_disabled(provider)
+
+
 def _mark_symbol_failed(symbol: str) -> None:
     sym = _base(symbol)
     if sym:
