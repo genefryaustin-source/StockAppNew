@@ -169,15 +169,15 @@ def build_price_cache_from_grouped_daily(
         try:
             grouped = fetch_grouped_daily(date_str, api_key=api_key)
         except PolygonRateLimitException:
-            logger.warning("Rate limited fetching %s -- backing off 60s and retrying once.", date_str)
+            print(f"⚠️ [grouped_daily_history] Rate limited fetching {date_str} -- backing off 60s and retrying once.")
             time.sleep(60)
             try:
                 grouped = fetch_grouped_daily(date_str, api_key=api_key)
             except Exception as e:
-                logger.warning("Retry after rate limit failed for %s: %s", date_str, e)
+                print(f"⚠️ [grouped_daily_history] Retry after rate limit failed for {date_str}: {e}")
                 continue
         except Exception as e:
-            logger.warning("grouped_daily fetch failed for %s: %s", date_str, e)
+            print(f"⚠️ [grouped_daily_history] grouped_daily fetch failed for {date_str}: {e}")
             continue
 
         if grouped.empty:
@@ -215,7 +215,7 @@ def build_price_cache_from_grouped_daily(
             try:
                 bulk_upsert_price_history(db, persist_rows)
             except Exception as e:
-                logger.warning("Persisting grouped-daily rows for %s failed: %s", date_str, e)
+                print(f"🚨 [grouped_daily_history] Persisting grouped-daily rows for {date_str} failed: {e}")
 
         if progress:
             try:
@@ -274,7 +274,7 @@ def _read_back_price_cache(
                 .all()
             )
         except Exception as e:
-            logger.warning("Read-back query failed for a chunk of %d symbols: %s", len(chunk), e)
+            print(f"🚨 [grouped_daily_history] Read-back query failed for a chunk of {len(chunk)} symbols: {e}")
             continue
 
         if not rows:
