@@ -735,7 +735,16 @@ try:
                         st.rerun()
         return st.session_state.get("nav_page","Executive Dashboard")
 
+
     # Quick-jump selectbox
+    # Reset any pending selection from the PREVIOUS run before the widget
+    # below is instantiated. Writing to st.session_state["quick_jump"] after
+    # the widget with that key already exists (as this used to do, right
+    # after creating it) raises StreamlitAPIException and crashes the app --
+    # any reset has to happen here, one run later, before creation.
+    if st.session_state.pop("_quick_jump_pending_reset", False):
+        st.session_state["quick_jump"] = "— select —"
+
     _qj = st.sidebar.selectbox(
         "⚡ Quick Jump",
         ["— select —"] + pages,
@@ -746,11 +755,12 @@ try:
             st.query_params["page"] = "legal"
             st.query_params["legal_document"] = "privacy-policy"
             st.session_state["legal_portal_active"] = True
-            st.session_state["quick_jump"] = "— select —"
+            st.session_state["_quick_jump_pending_reset"] = True
             st.rerun()
         else:
             st.session_state["nav_page"] = _qj
-            st.session_state["quick_jump"] = "— select —"
+            st.session_state["_quick_jump_pending_reset"] = True
+            st.rerun()
 
     st.sidebar.markdown("---")
     page = _render_grouped_nav(NAV_GROUPS)
