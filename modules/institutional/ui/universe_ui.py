@@ -715,12 +715,42 @@ def render_universe(db, user):
                 else:
                     st.warning("No queued jobs found for this universe.")
 
+    st.caption(
+        "Queues a refresh job for every universe, one after another -- same safe, "
+        "vectorized bulk-first analytics path as \"Queue Universe Refresh\" above, just "
+        "looped across all universes instead of just the one selected above. Symbols "
+        "that aren't in any universe are not touched by this."
+    )
 
+    if st.button("Refresh All Universes"):
+
+        queued_count = 0
+
+        for u_name, u_id in u_map.items():
+            enqueue_job(
+                db=db,
+                tenant_id=tenant_id,
+                job_type="universe_refresh",
+                universe_id=u_id,
+                payload={
+                    "universe_id": u_id,
+                    "max_age_hours": 24,
+                    "batch_size": 25,
+                    "parallel": True,
+                    "max_workers": 4,
+                },
+            )
+
+            queued_count += 1
+
+        st.success(f"Queued refresh jobs for all {queued_count} universe(s).")
+
+        _safe_clear_streamlit_cache()
+        st.info("Operation complete. Refresh manually if the table does not update immediately.")
 
     # --------------------------------------------------
     # Jobs
     # --------------------------------------------------
-
     st.markdown("### Recent Jobs")
 
     jobs = list_jobs(

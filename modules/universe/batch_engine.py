@@ -7,12 +7,15 @@ from sqlalchemy.orm import Session
 
 from modules.analytics.models import AnalyticsSnapshot
 from modules.analytics.runner import (
-    run_full_analytics,
+    run_analytics_for_symbol,
     run_vectorized_price_analytics,
+    MIN_HISTORY_ROWS,
 )
+
 from modules.utils.datetime_utils import (
     to_aware_utc,
 )
+from modules.market_data.service import build_shared_price_cache_bulk_first
 from modules.universe.service import list_symbols
 from modules.market_data.price_cache import warm_price_cache
 
@@ -139,9 +142,25 @@ def refresh_universe_cache(
         progress(total, total, to_refresh[-1] if to_refresh else "")
 
     # --------------------------------------------
-    # OPTIONAL SLOW PATH:
-    # only run full analytics for symbols that still
-    # need sector / fundamentals enrichment
+    # --------------------------------------------
+    # RETRY PATH:
+    # run_vectorized_price_analytics() above already calls
+    # run_analytics_for_symbol() -> _get_fundamentals() (a live
+    # Finnhub -> FMP -> Alpha Vantage chain) for every symbol in
+    # to_refresh, so sector/revenue_cagr are normally already
+    # populated by the fast path above. This step is only a retry
+    # for stragglers where every fundamentals provider failed on
+    # that first attempt.
+    #
+    # This calls run_analytics_for_symbol() directly (NOT
+    # run_full_analytics()/run_analytics()) -- those go through
+    # preload_histories(), which re-fetches a full year of price
+    # history live, per symbol, via the old per-symbol provider
+    # failover chain. That redundant re-fetch -- retrying a
+    # fundamentals lookup by re-triggering an unrelated, expensive
+    # price call -- is what made this step unsafe at full-universe
+    # scale before. Reusing a freshly-built bulk-first price cache
+    # for just the stragglers avoids that entirely.
     # --------------------------------------------
     rows_after = (
         db.query(AnalyticsSnapshot)
@@ -161,14 +180,48 @@ def refresh_universe_cache(
     # de-dup
     need_full = sorted(set(need_full))
 
-    #ran_full = 0
-    #for sym in need_full:
-        #snap = run_full_analytics(db, tenant_id, sym)
-        #if snap is not None:
-            #ran_full += 1
-    #print("🚨 FULL ANALYTICS DISABLED FOR TEST")
-
     ran_full = 0
+
+    if need_full:
+
+        try:
+            retry_cache, _retry_meta = build_shared_price_cache_bulk_first(
+                db=db,
+                symbols=need_full,
+                min_rows=MIN_HISTORY_ROWS,
+                period="1y",
+                interval="1d",
+                max_api_calls=max_api_calls,
+            )
+        except Exception as e:
+            print("FUNDAMENTALS RETRY CACHE BUILD FAILED:", e)
+            retry_cache = {}
+
+        for sym in need_full:
+
+            cached_df = retry_cache.get(sym)
+
+            if cached_df is None or cached_df.empty:
+                continue
+
+            try:
+                snap = run_analytics_for_symbol(
+                    db=db,
+                    tenant_id=tenant_id,
+                    symbol=sym,
+                    price_df=cached_df,
+                )
+
+                if snap is not None:
+                    ran_full += 1
+
+            except Exception as e:
+                print("FUNDAMENTALS RETRY ERROR:", sym, e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
     return {
         "symbols": total_symbols,
         "ran_analytics": ran_fast,
