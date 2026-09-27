@@ -44,6 +44,7 @@ from datetime import date, timedelta
 from typing import Callable, Optional
 
 import pandas as pd
+from modules.db.connection_resilience import is_dead_connection_error, get_fresh_session
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +216,40 @@ def build_price_cache_from_grouped_daily(
             try:
                 bulk_upsert_price_history(db, persist_rows)
             except Exception as e:
-                print(f"🚨 [grouped_daily_history] Persisting grouped-daily rows for {date_str} failed: {e}")
+                if not is_dead_connection_error(e):
+                    print(f"🚨 [grouped_daily_history] Persisting grouped-daily rows for {date_str} failed: {e}")
+                    continue
 
+                # The connection can die silently during one of the
+                # time.sleep(60) rate-limit backoffs above -- this
+                # session has been held open, idle, across the whole
+                # day-by-day walk, which is exactly what triggers
+                # Neon's idle-connection cutoff elsewhere in this app.
+                # Without this, the NEXT db call on the dead connection
+                # doesn't reliably raise a quick, catchable error -- it
+                # can hang indefinitely on a half-dead socket instead.
+                # That's what actually happened in production: a stuck
+                # "Refresh All Universes" job with no further log
+                # output and no live network connection to Polygon,
+                # just a dead DB socket nothing was watching.
+                print(
+                    f"⚠️ [grouped_daily_history] DB connection dropped -- reconnecting and retrying persist for {date_str}: {e}")
+
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
+                db = get_fresh_session()
+
+                try:
+                    bulk_upsert_price_history(db, persist_rows)
+                except Exception as e2:
+                    print(f"🚨 [grouped_daily_history] Retry after reconnect failed for {date_str}: {e2}")
         if progress:
             try:
                 progress(trading_days_found, lookback_days, date_str)
