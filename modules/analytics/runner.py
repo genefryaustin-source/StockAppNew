@@ -152,6 +152,50 @@ except Exception:
 
 
 # ---------------------------------------------------
+# FUNDAMENTALS PROVIDER PACING
+# ---------------------------------------------------
+# A bulk run (e.g. "Refresh All Universes") calls these fundamentals
+# providers back-to-back for every symbol with no pacing between calls.
+# That can burst past a provider's per-minute limit within seconds, which
+# trips _cooldown_provider()'s 1-hour, app-wide cooldown -- taking that
+# provider offline for every user, not just the rest of this job. This
+# rolling-window limiter spaces calls out so a bulk run stays under each
+# provider's ceiling instead of tripping it.
+#
+# Finnhub's free tier allows ~60 calls/min; capped conservatively below
+# that here since fundamentals + sector are 2 Finnhub calls per symbol.
+# Raise FINNHUB accordingly if/when the Fundamental-1 add-on (300/min) is
+# active. FMP and Alpha Vantage's real ceilings are far lower (FMP ~250
+# calls/day free tier, Alpha Vantage ~5/min and ~25/day) -- pacing keeps
+# a single burst from exhausting those instantly, but can't raise a hard
+# daily cap.
+class _ProviderRateLimiter:
+    def __init__(self, calls_per_minute):
+        self.calls_per_minute = calls_per_minute
+        self._timestamps = []
+
+    def wait_if_needed(self):
+        now = time.monotonic()
+        window_start = now - 60
+        self._timestamps = [t for t in self._timestamps if t > window_start]
+
+        if len(self._timestamps) >= self.calls_per_minute:
+            sleep_for = self._timestamps[0] + 60 - now
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            now = time.monotonic()
+            window_start = now - 60
+            self._timestamps = [t for t in self._timestamps if t > window_start]
+
+        self._timestamps.append(time.monotonic())
+
+
+_FINNHUB_LIMITER = _ProviderRateLimiter(calls_per_minute=25)
+_FMP_LIMITER = _ProviderRateLimiter(calls_per_minute=8)
+_ALPHA_LIMITER = _ProviderRateLimiter(calls_per_minute=4)
+
+
+# ---------------------------------------------------
 # CONFIG
 # ---------------------------------------------------
 
@@ -765,6 +809,8 @@ def _get_finnhub_sector(sym, api_key):
         return _profile_cache[sym]
 
     try:
+        _FINNHUB_LIMITER.wait_if_needed()
+
         profile_response = requests.get(
             "https://finnhub.io/api/v1/stock/profile2",
             params={
@@ -815,8 +861,11 @@ def _get_finnhub_fundamentals(sym):
     if not key:
         return None
 
+    _FINNHUB_LIMITER.wait_if_needed()
+
     response = requests.get(
         "https://finnhub.io/api/v1/stock/metric",
+
         params={
             "symbol": sym,
             "metric": "all",
@@ -887,10 +936,8 @@ def _get_finnhub_fundamentals(sym):
 
 def _get_fmp_profile_sector(sym, api_key):
     try:
-        # FMP retired the /api/v3/ endpoints for non-legacy accounts
-        # (returns 403 "Legacy Endpoint" now) -- the replacement is
-        # /stable/, with the symbol as a query param instead of a path
-        # segment.
+        _FMP_LIMITER.wait_if_needed()
+
         response = requests.get(
             "https://financialmodelingprep.com/stable/profile",
             params={
@@ -937,6 +984,8 @@ def _get_fmp_fundamentals(sym):
 
     if not key:
         return None
+
+    _FMP_LIMITER.wait_if_needed()
 
     response = requests.get(
         "https://financialmodelingprep.com/stable/key-metrics-ttm",
@@ -1019,6 +1068,8 @@ def _get_alpha_fundamentals(sym):
 
     if not key:
         return None
+
+    _ALPHA_LIMITER.wait_if_needed()
 
     response = requests.get(
         "https://www.alphavantage.co/query",
