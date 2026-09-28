@@ -267,8 +267,12 @@ def run_one_queued_job(db: Session, tenant_id: str):
                         raise RuntimeError(f"Job interrupted at {symbol}")
                 except RuntimeError:
                     raise
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"PROGRESS CALLBACK ERROR (rolled back): {symbol}: {e}")
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
 
             result = refresh_universe_cache(
                 db=db,
