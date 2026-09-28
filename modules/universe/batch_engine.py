@@ -195,6 +195,10 @@ def refresh_universe_cache(
             )
         except Exception as e:
             print("FUNDAMENTALS RETRY CACHE BUILD FAILED:", e)
+            try:
+                db.rollback()
+            except Exception:
+                pass
             retry_cache = {}
 
         for sym in need_full:
