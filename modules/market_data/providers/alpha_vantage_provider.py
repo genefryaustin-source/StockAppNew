@@ -4,6 +4,7 @@ import time
 
 from datetime import datetime, UTC
 from modules.utils.config import get_secret
+from modules.market_data.provider_router import get_provider_router
 
 
 BASE_URL = "https://www.alphavantage.co/query"
@@ -124,9 +125,17 @@ def get_history(
         # -----------------------------------
         # RATE LIMIT
         # -----------------------------------
-        if "Note" in data:
+        if "Note" in data or "Information" in data:
 
             print("⚠️ ALPHA RATE LIMITED")
+
+            try:
+                get_provider_router().mark_rate_limited(
+                    "ALPHA_VANTAGE",
+                    cooldown_minutes=60,
+                )
+            except Exception as e:
+                print("PROVIDER COOLDOWN SKIPPED:", "ALPHA_VANTAGE", e)
 
             return pd.DataFrame()
 
