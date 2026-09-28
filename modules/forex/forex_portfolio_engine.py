@@ -2300,8 +2300,11 @@ class ForexPortfolioEngine:
         account_id: str,
         pair: str,
         risk_pct: float = DEFAULT_MAX_RISK_PER_TRADE_PCT,
+        historical_prices: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
-        signal = self.forex_ai_engine.generate_signal(pair, save=True)
+        signal = self.forex_ai_engine.generate_signal(
+            pair, save=True, historical_prices=historical_prices,
+        )
 
         sizing = self.position_size_from_risk(
             account_id=account_id,

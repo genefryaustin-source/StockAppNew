@@ -1289,6 +1289,43 @@ def _get_throttled_execution_quality(
     return {**result, "_cache_age_seconds": 0.0, "_from_cache": False}
 
 
+def _fetch_historical_closes_for_signal(pair: str, lookback_days: int = 180):
+    """
+    Real historical daily closes for `pair`, as a plain list of floats
+    oldest-to-newest -- what forex_ai.py's score_pair() expects for its
+    historical_prices parameter. Mirrors forex_strategy_backtester.py's
+    own _fetch_price_series() (same forex_history_service ->
+    provider-router path); returns a list instead of a pandas Series
+    since score_pair() takes Optional[List[float]] and has no use for
+    a DatetimeIndex. Returns None on any failure so the caller falls
+    back to the existing neutral-default behavior rather than erroring
+    out the whole recommendation.
+    """
+    try:
+        from modules.forex.forex_history_service import get_forex_history_service
+
+        history_service = get_forex_history_service()
+        start = history_service.default_start(days=lookback_days)
+        end = history_service.default_end()
+        payload = history_service.fetch_from_router(
+            pair, start_date=start, end_date=end, interval="1day",
+        )
+
+        rows = payload.get("rows") if isinstance(payload, dict) else None
+        if not rows:
+            return None
+
+        closes = [
+            float(row["close"])
+            for row in sorted(rows, key=lambda r: r.get("asof", ""))
+            if isinstance(row, dict) and row.get("close") not in (None, "")
+        ]
+        return closes or None
+
+    except Exception:
+        return None
+
+
 def _get_ai_trade_recommendation(
     db, *, tenant_id: str | None, user_id: str | None, portfolio_id: str | None,
     account_id: str | None, pair: str, risk_pct: float,
@@ -1319,8 +1356,10 @@ def _get_ai_trade_recommendation(
         engine = get_forex_portfolio_engine(
             db=db, tenant_id=tenant_id, user_id=user_id, portfolio_id=portfolio_id,
         )
+        historical_prices = _fetch_historical_closes_for_signal(pair)
         recommendation = engine.recommend_position_from_signal(
             account_id=account_id, pair=pair, risk_pct=risk_pct,
+            historical_prices=historical_prices,
         )
         if recommendation is None:
             return {"status": "error", "message": "The AI was unable to generate a recommendation."}
