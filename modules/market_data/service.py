@@ -1070,6 +1070,10 @@ def build_shared_price_cache(
 
         except Exception as e:
             print("CACHE ERROR:", sym, e)
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     return price_cache, meta
 
