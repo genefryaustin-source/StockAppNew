@@ -11,6 +11,7 @@ from modules.options.providers import (
     marketdata_provider,
     tradier_provider,
     yahoo_provider,
+    alpaca_provider,
 )
 from modules.options.providers.common import build_chain_payload
 
@@ -23,6 +24,7 @@ ProviderFn = Callable[[str, str | None], dict]
 
 _PROVIDER_ORDER: list[tuple[str, ProviderFn]] = [
     ("massive", massive_provider.get_chain),
+    ("alpaca", alpaca_provider.get_chain),
     ("marketdata", marketdata_provider.get_chain),
     ("tradier", tradier_provider.get_chain),
     ("finnhub", finnhub_provider.get_chain),
