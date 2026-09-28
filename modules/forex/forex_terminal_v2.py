@@ -1884,6 +1884,46 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
         db, tenant_id=tenant_id,
     )
 
+    with st.expander("+ New Portfolio", expanded=not portfolios):
+        with st.form(key=f"fx_v2_new_portfolio_form:{tenant_id}", clear_on_submit=True):
+            new_portfolio_name = st.text_input("Portfolio Name", key="fx_v2_new_portfolio_name")
+            new_portfolio_currency = st.selectbox(
+                "Base Currency",
+                options=["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"],
+                key="fx_v2_new_portfolio_currency",
+            )
+            new_portfolio_balance = st.number_input(
+                "Starting Balance",
+                min_value=0.0,
+                value=100000.0,
+                step=1000.0,
+                key="fx_v2_new_portfolio_balance",
+            )
+            create_submitted = st.form_submit_button("Create Portfolio")
+
+        if create_submitted:
+            if not new_portfolio_name or not new_portfolio_name.strip():
+                st.error("Portfolio name is required.")
+            else:
+                from modules.forex.forex_portfolio_crud_engine import get_forex_portfolio_crud_engine
+
+                crud_engine = get_forex_portfolio_crud_engine(db=db)
+                new_portfolio_id = crud_engine.create_portfolio(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    name=new_portfolio_name.strip(),
+                    base_currency=new_portfolio_currency,
+                    starting_balance=float(new_portfolio_balance),
+                    is_default=not portfolios,
+                )
+
+                st.session_state.pop(f"fx_v2_portfolio_list_cache:{tenant_id}", None)
+                st.session_state.pop(f"fx_v2_portfolio_list_last_fetch_ts:{tenant_id}", None)
+                st.session_state[f"fx_v2_selected_portfolio_id:{tenant_id}"] = new_portfolio_id
+
+                st.success(f"Portfolio '{new_portfolio_name.strip()}' created.")
+                st.rerun()
+
     if portfolios:
         portfolio_ids = [p.get("id") for p in portfolios]
         portfolio_labels = {p.get("id"): p.get("name") or p.get("id") for p in portfolios}
