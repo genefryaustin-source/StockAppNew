@@ -73,6 +73,13 @@ def get_expirations(ticker: str) -> list[str]:
         return []
 
     data = r.json()
+    contracts = data.get("option_contracts", []) if isinstance(data, dict) else []
+    dates = {
+        str(c.get("expiration_date"))[:10]
+        for c in contracts
+        if isinstance(c, dict) and c.get("expiration_date")
+    }
+    return sorted(dates)
 
 
 def get_chain(ticker: str, expiration: str | None = None) -> dict:
