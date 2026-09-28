@@ -1833,9 +1833,9 @@ def _metric_card(title: str, value, subtitle: str = "", mood="", progress: float
 def _currency_flag(code: str) -> str:
     """Copied from forex_terminal_dashboard.py -- see _class_for's docstring for why."""
     return {
-        "USD": "ðŸ‡ºðŸ‡¸", "EUR": "ðŸ‡ªðŸ‡º", "JPY": "ðŸ‡¯ðŸ‡µ", "GBP": "ðŸ‡¬ðŸ‡§",
-        "CHF": "ðŸ‡¨ðŸ‡­", "CAD": "ðŸ‡¨ðŸ‡¦", "AUD": "ðŸ‡¦ðŸ‡º", "NZD": "ðŸ‡³ðŸ‡¿",
-    }.get(str(code or "").upper(), "ðŸŒ")
+        "USD": "🇺🇸", "EUR": "🇪🇺", "JPY": "🇯🇵", "GBP": "🇬🇧",
+        "CHF": "🇨🇭", "CAD": "🇨🇦", "AUD": "🇦🇺", "NZD": "🇳🇿",
+    }.get(str(code or "").upper(), "🌐")
 
 
 def _inject_terminal_css() -> None:
@@ -1866,8 +1866,8 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
 
     st.markdown(
         '<div class="fx-panel">'
-        '<div style="font-size:1.1rem;font-weight:800;color:#f5f9ff;">ðŸŒ Forex Institutional Terminal (v2 rebuild)</div>'
-        '<div class="fx-sub">Real-Time Market Intelligence Â· Portfolio Management Â· AI Decision Support</div>'
+        '<div style="font-size:1.1rem;font-weight:800;color:#f5f9ff;">🌍 Forex Institutional Terminal (v2 rebuild)</div>'
+        '<div class="fx-sub">Real-Time Market Intelligence · Portfolio Management · AI Decision Support</div>'
         "</div>",
         unsafe_allow_html=True,
     )
@@ -2041,7 +2041,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
             f"every {STRENGTH_THROTTLE_SECONDS:.0f} seconds."
         )
 
-        force_refresh_strength = st.button("ðŸ”„ Refresh now", key="fx_v2_force_refresh_strength")
+        force_refresh_strength = st.button("🔄 Refresh now", key="fx_v2_force_refresh_strength")
 
         strength = _timed_section(
             "currency_strength",
@@ -2061,28 +2061,28 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
                 if strongest:
                     st.metric(
                         "Strongest Currency",
-                        strongest.get("currency", "â€”"),
-                        delta=f"Score: {strongest.get('strength_score', 'â€”')}",
+                        strongest.get("currency", "—"),
+                        delta=f"Score: {strongest.get('strength_score', '—')}",
                     )
                 else:
-                    st.metric("Strongest Currency", "â€”")
+                    st.metric("Strongest Currency", "—")
 
             with regime_cols[1]:
                 if weakest:
                     st.metric(
                         "Weakest Currency",
-                        weakest.get("currency", "â€”"),
-                        delta=f"Score: {weakest.get('strength_score', 'â€”')}",
+                        weakest.get("currency", "—"),
+                        delta=f"Score: {weakest.get('strength_score', '—')}",
                     )
                 else:
-                    st.metric("Weakest Currency", "â€”")
+                    st.metric("Weakest Currency", "—")
 
             cache_note = (
                 f"cached, {strength['_cache_age_seconds']:.0f}s old"
                 if strength.get("_from_cache")
                 else "just fetched"
             )
-            st.caption(f"Quote health: {strength.get('quote_health', {})} Â· {cache_note}")
+            st.caption(f"Quote health: {strength.get('quote_health', {})} · {cache_note}")
 
     elif workspace == "Positions":
         positions = _timed_section(
@@ -2099,9 +2099,9 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
                     "Pair": p["pair"],
                     "Side": p["side"],
                     "Units": f"{p['units']:,.0f}",
-                    "Avg Entry": f"{p['avg_price']:.5f}" if p.get("avg_price") is not None else "â€”",
-                    "Current": f"{p['current_price']:.5f}" if p.get("current_price") is not None else "â€”",
-                    "Unrealized P&L": f"{p['unrealized_pnl']:,.2f}" if p.get("unrealized_pnl") is not None else "â€”",
+                    "Avg Entry": f"{p['avg_price']:.5f}" if p.get("avg_price") is not None else "—",
+                    "Current": f"{p['current_price']:.5f}" if p.get("current_price") is not None else "—",
+                    "Unrealized P&L": f"{p['unrealized_pnl']:,.2f}" if p.get("unrealized_pnl") is not None else "—",
                 }
                 for p in positions
             ]
@@ -2138,7 +2138,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
                 )
                 if close_result.get("status") == "ok":
                     closed = close_result["position"]
-                    st.success(f"Closed {closed.pair} Â· realized P&L: {closed.realized_pnl:,.2f}")
+                    st.success(f"Closed {closed.pair} · realized P&L: {closed.realized_pnl:,.2f}")
                 else:
                     st.error(f"Could not close position: {close_result.get('message')}")
     elif workspace == "Orders":
@@ -2183,7 +2183,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
             f"computation every {RISK_THROTTLE_SECONDS:.0f} seconds."
         )
 
-        force_refresh_risk = st.button("ðŸ”„ Refresh now", key="fx_v2_force_refresh_risk")
+        force_refresh_risk = st.button("🔄 Refresh now", key="fx_v2_force_refresh_risk")
 
         risk = _timed_section(
             "risk_summary",
@@ -2210,8 +2210,8 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
 
             directional = risk.get("directional") or {}
             st.caption(
-                f"Directional: long ${directional.get('long', 0.0):,.2f} Â· "
-                f"short ${directional.get('short', 0.0):,.2f} Â· "
+                f"Directional: long ${directional.get('long', 0.0):,.2f} · "
+                f"short ${directional.get('short', 0.0):,.2f} · "
                 f"net ${directional.get('net', 0.0):,.2f}"
             )
 
@@ -2251,7 +2251,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
             f"computation every {PERFORMANCE_THROTTLE_SECONDS:.0f} seconds."
         )
 
-        force_refresh_perf = st.button("ðŸ”„ Refresh now", key="fx_v2_force_refresh_performance")
+        force_refresh_perf = st.button("🔄 Refresh now", key="fx_v2_force_refresh_performance")
 
         perf = _timed_section(
             "performance_summary",
@@ -2361,7 +2361,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
 
             with st.expander("View thesis / lesson notes"):
                 for e in entries:
-                    st.markdown(f"**{e.get('pair', 'â€”')} Â· {e.get('created_at', '')}**")
+                    st.markdown(f"**{e.get('pair', '—')} · {e.get('created_at', '')}**")
                     if e.get("thesis"):
                         st.caption(f"Thesis: {e['thesis']}")
                     if e.get("lesson"):
@@ -2375,7 +2375,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
             f"{AI_BRIEFING_THROTTLE_SECONDS:.0f} seconds."
         )
 
-        force_refresh_briefing = st.button("ðŸ”„ Refresh now", key="fx_v2_force_refresh_briefing")
+        force_refresh_briefing = st.button("🔄 Refresh now", key="fx_v2_force_refresh_briefing")
 
         briefing = _timed_section(
             "ai_briefing",
@@ -2457,7 +2457,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
             for i, rec in enumerate(top_recommendations):
                 with rec_cols[i]:
                     side = rec.get("side", "WATCH")
-                    color = "ðŸŸ¢" if side == "BUY" else "ðŸ”´" if side == "SELL" else "ðŸŸ¡"
+                    color = "🟢" if side == "BUY" else "🔴" if side == "SELL" else "🟡"
                     st.markdown(f"{color} **{side} {rec.get('pair', '-')}**")
                     st.caption(f"Confidence: {rec.get('confidence', 0):.0f}%")
                     st.caption(f"Entry: {rec.get('entry') or '-'}")
@@ -2589,7 +2589,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
             f"than other tabs."
         )
 
-        force_refresh_exec = st.button("ðŸ”„ Refresh now", key="fx_v2_force_refresh_ai_executive")
+        force_refresh_exec = st.button("🔄 Refresh now", key="fx_v2_force_refresh_ai_executive")
 
         exec_result = _timed_section(
             "ai_executive",
@@ -2631,7 +2631,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
 
             st.caption(
                 f"Consensus: {consensus.get('active_models', 0)}/{consensus.get('total_models', 0)} "
-                f"active models Â· agreement {consensus.get('agreement_score', 0):.0f}% Â· "
+                f"active models · agreement {consensus.get('agreement_score', 0):.0f}% · "
                 f"decision {consensus.get('executive_decision', 'WATCH')} {consensus.get('top_pair', 'N/A')}"
             )
 
@@ -2659,7 +2659,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
                 "preview step. This matches the original terminal's own "
                 "behavior exactly."
             )
-            if st.button("â–¶ï¸ Run Autonomous Cycle", key="fx_v2_run_autonomous_cycle"):
+            if st.button("▶️ Run Autonomous Cycle", key="fx_v2_run_autonomous_cycle"):
                 from modules.forex.forex_portfolio_engine import get_forex_portfolio_engine as _get_pe
 
                 account_for_cycle = _get_pe(
@@ -2736,7 +2736,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
         chart_pair = st.selectbox(
             "Chart Pair", options=MAJOR_AND_CROSS_PAIRS, key="fx_v2_chart_pair",
         )
-        force_refresh_chart = st.button("ðŸ”„ Refresh chart", key="fx_v2_force_refresh_chart")
+        force_refresh_chart = st.button("🔄 Refresh chart", key="fx_v2_force_refresh_chart")
         chart_result = _timed_section(
             "price_chart", _get_throttled_price_chart, chart_pair, force=force_refresh_chart,
         )
@@ -2826,7 +2826,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
             f"real fetch every {LIVE_MARKET_THROTTLE_SECONDS:.0f} seconds."
         )
 
-        force_refresh_market = st.button("ðŸ”„ Refresh now", key="fx_v2_force_refresh_live_market")
+        force_refresh_market = st.button("🔄 Refresh now", key="fx_v2_force_refresh_live_market")
 
         live_market = _timed_section(
             "live_market",
@@ -2918,7 +2918,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
             f"one real computation every {EXPOSURE_THROTTLE_SECONDS:.0f} seconds."
         )
 
-        force_refresh_exposure = st.button("ðŸ”„ Refresh now", key="fx_v2_force_refresh_exposure")
+        force_refresh_exposure = st.button("🔄 Refresh now", key="fx_v2_force_refresh_exposure")
 
         exposure_data = _timed_section(
             "exposure",
@@ -2980,7 +2980,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
             f"{EXECUTION_QUALITY_THROTTLE_SECONDS:.0f} seconds."
         )
 
-        force_refresh_eq = st.button("ðŸ”„ Refresh now", key="fx_v2_force_refresh_execution_quality")
+        force_refresh_eq = st.button("🔄 Refresh now", key="fx_v2_force_refresh_execution_quality")
 
         eq = _timed_section(
             "execution_quality",
@@ -3035,7 +3035,7 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
             f"elsewhere reuses the cached quote instead of refetching."
         )
 
-        force_refresh = st.button("ðŸ”„ Refresh now", key="fx_v2_force_refresh_quote")
+        force_refresh = st.button("🔄 Refresh now", key="fx_v2_force_refresh_quote")
 
         quote = _timed_section(
             "quote_eurusd",
@@ -3050,10 +3050,10 @@ def render_forex_terminal_v2(db=None, user=None, **kwargs):
 
             with quote_cols[0]:
                 mid = quote.get("mid") or quote.get("last")
-                st.metric(DEFAULT_QUOTE_PAIR, f"{mid:.5f}" if mid is not None else "â€”")
+                st.metric(DEFAULT_QUOTE_PAIR, f"{mid:.5f}" if mid is not None else "—")
 
             with quote_cols[1]:
-                st.metric("Provider", quote.get("provider") or quote.get("source") or "â€”")
+                st.metric("Provider", quote.get("provider") or quote.get("source") or "—")
 
             with quote_cols[2]:
                 if quote.get("_from_cache"):

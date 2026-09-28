@@ -974,7 +974,7 @@ class ForexTradingDeskDashboard:
         st.divider()
         status_cols = st.columns(8)
 
-        status_cols[0].success("â— Market Open")
+        status_cols[0].success("● Market Open")
 
         status_cols[1].info(
 
