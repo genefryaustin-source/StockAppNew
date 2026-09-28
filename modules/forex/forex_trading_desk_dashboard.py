@@ -558,7 +558,7 @@ class ForexTradingDeskDashboard:
         # Resolve the active trading account
         # ---------------------------------------------------------
 
-        account = portfolio_engine.get_account(
+        account = portfolio_engine.get_or_create_account(
             portfolio_id=kwargs.get("portfolio_id"),
         )
 
@@ -602,7 +602,7 @@ class ForexTradingDeskDashboard:
             kwargs,
     ) -> Dict[str, Any]:
 
-        account = portfolio_engine.get_account(
+        account = portfolio_engine.get_or_create_account(
             portfolio_id=kwargs.get("portfolio_id"),
         )
 
@@ -974,7 +974,7 @@ class ForexTradingDeskDashboard:
         st.divider()
         status_cols = st.columns(8)
 
-        status_cols[0].success("● Market Open")
+        status_cols[0].success("â— Market Open")
 
         status_cols[1].info(
 
@@ -2112,7 +2112,7 @@ class ForexTradingDeskDashboard:
 
                         with st.spinner("Submitting order..."):
 
-                            account = portfolio_engine.get_account(
+                            account = portfolio_engine.get_or_create_account(
                                 portfolio_id=kwargs.get("portfolio_id"),
                             )
 
@@ -2448,7 +2448,7 @@ class ForexTradingDeskDashboard:
 
                     st.subheader("AI Trade Setup")
 
-                    account = portfolio_engine.get_account(
+                    account = portfolio_engine.get_or_create_account(
                         portfolio_id=kwargs.get("portfolio_id"),
                     )
 
@@ -3272,7 +3272,7 @@ class ForexTradingDeskDashboard:
             )
 
             if not account_id:
-                account = portfolio_engine.get_account(
+                account = portfolio_engine.get_or_create_account(
                     portfolio_id=kwargs.get("portfolio_id"),
                 )
 
