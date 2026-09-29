@@ -1,44 +1,11 @@
-"""
-api/services/portfolio_full_export_api_service.py
-
-Backs GET /api/v1/tenant/portfolio/full -- one call that returns
-everything available for a tenant (and, for an admin caller, every user
-in that tenant) across every asset class: stocks, options, crypto,
-tokenized real-world assets, and forex.
-
-Distinct from api.services.executive_mobile_dashboard_api_service, which
-returns tenant-wide *counts and rollups* for a UI dashboard. This
-endpoint is a data export: full raw positions, full snapshot/equity
-history, and full order history, not a summarized view.
-
-Reuses rather than reimplements:
-  - modules.risk_layer.positions.get_positions_df() -- already unifies
-    equities/options/crypto/tokenized-RWA (via PortfolioPosition) with
-    forex (via its own table) into one cross-asset positions frame, with
-    every currency-conversion and duplicate-snapshot fix already applied.
-  - modules.risk_layer.positions.get_returns_df() -- the same
-    dedup-and-align equity/drawdown history.
-  - api.services.options_orders_api_service.OptionsOrdersAPIService --
-    options order history (options orders live in their own table, not
-    TradeOrder).
-  - modules.forex.forex_portfolio_engine.get_forex_portfolio_engine --
-    forex order history (forex orders also live in their own table).
-  - TradeOrder directly for stocks/crypto/tokenized-RWA order history --
-    per orders_api_service.py and crypto_orders_api_service.py, every
-    broker (paper, Alpaca, Tradier, IBKR, ccxt, Ondo, Securitize, the
-    custom tokenized-asset adapter) submits through the same canonical
-    stock trading service and lands in the same TradeOrder table,
-    distinguished only by symbol shape (a "/" marks a crypto pair).
-
-Every section is independently wrapped -- one section failing reports
-{"available": False, "reason": ...} in its place rather than failing the
-whole response, matching every other composite service in this API.
-"""
+"""Composite tenant portfolio export service (stocks/crypto/tokenized-RWA, options, forex)."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any, Optional
+
+from sqlalchemy import text
 
 from models.trading import Portfolio, PortfolioSnapshot, TradeOrder
 from modules.db.models import Tenant, User
@@ -88,9 +55,10 @@ class PortfolioFullExportAPIService:
                 "id": p.id, "name": p.name, "description": getattr(p, "description", None),
                 "base_currency": p.base_currency, "starting_cash": p.starting_cash,
                 "is_active": p.is_active, "created_at": _iso(p.created_at),
+                "asset_class": "stocks_crypto_tokenized_rwa",
             }
             for p in portfolios
-        ])
+        ] + self._forex_portfolios(tenant_id))
 
         result["positions"] = self._section("positions", lambda: self._unified_positions(tenant_id))
         result["equity_curve"] = self._section("equity_curve", lambda: self._equity_curve(tenant_id))
@@ -138,6 +106,41 @@ class PortfolioFullExportAPIService:
             {"id": u.id, "email": u.email, "role": u.role, "is_active": u.is_active,
              "created_at": _iso(u.created_at)}
             for u in users
+        ]
+
+    def _forex_portfolios(self, tenant_id: str) -> list[dict]:
+        """
+        forex_portfolios is a separate table from the main `portfolios`
+        table used above (its own schema, its own tenant_id/user_id
+        columns -- see ForexPortfolioCrudEngine). The tenant-wide export
+        needs every forex portfolio for the tenant regardless of which
+        user owns it, so this queries by tenant_id only, the same scope
+        used for the main Portfolio query above, rather than reusing
+        ForexPortfolioCrudEngine.list_portfolios() (which requires a
+        single user_id and would need one call per tenant user).
+        """
+        rows = self.db.execute(
+            text("""
+                SELECT id, name, description, base_currency,
+                       starting_balance, current_balance, status,
+                       is_default, created_at
+                FROM forex_portfolios
+                WHERE tenant_id = :tenant
+                ORDER BY created_at ASC
+            """),
+            {"tenant": tenant_id},
+        ).fetchall()
+
+        return [
+            {
+                "id": r.id, "name": r.name, "description": r.description,
+                "base_currency": r.base_currency, "starting_cash": r.starting_balance,
+                "current_balance": r.current_balance,
+                "is_active": r.status == "ACTIVE", "is_default": r.is_default,
+                "created_at": _iso(r.created_at),
+                "asset_class": "forex",
+            }
+            for r in rows
         ]
 
     def _unified_positions(self, tenant_id: str) -> dict:
