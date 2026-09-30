@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from modules.universe.shared_refresh import propagate_shared_universe_analytics
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -188,7 +188,25 @@ def run_one_queued_job(db: Session, tenant_id: str, universe_id: str = None):
             print("REFRESH RESULT:", result)
 
             append_log(db, job, f"Refresh result: {result}")
-
+            try:
+                propagation = propagate_shared_universe_analytics(
+                    db, tenant_id, universe_id,
+                )
+                if propagation.get("propagated_tenants"):
+                    append_log(
+                        db, job,
+                        f"Propagated fresh analytics to "
+                        f"{propagation['propagated_tenants']} other tenant(s) "
+                        f"sharing this universe "
+                        f"({propagation['symbols_copied']} symbol rows)."
+                    )
+                    print(f"🔁 PROPAGATED shared universe analytics: {propagation}")
+            except Exception as e:
+                print("SHARED UNIVERSE PROPAGATION FAILED (non-fatal):", e)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
             stale_remaining = int(result.get("stale_or_missing", 0) or 0)
             made_progress = int(result.get("ran_analytics", 0) or 0) > 0
 
