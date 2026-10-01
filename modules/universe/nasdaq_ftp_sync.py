@@ -22,19 +22,30 @@ the file's own header row says.
 Two things this writes to:
   - security_master: the tenant-agnostic reference table (exchange,
     is_etf, source) -- authoritative, shared across all tenants.
-  - universe_symbols: per-tenant, per-universe membership -- this sync
-    bulk-upserts directly (a single INSERT ... ON CONFLICT statement per
-    batch) rather than reusing modules.universe.service.add_symbols'
-    one-row-at-a-time loop, since that loop doing a SELECT + INSERT per
-    symbol would be painfully slow across ~8,000 rows -- exactly the kind
-    of thing this feature exists to avoid.
+  - universe_symbols: per-tenant, per-universe membership.
+
+IMPORTANT (read before changing this file again): this sync used to take
+a single `universe_id` and dump EVERY fetched symbol -- every exchange,
+stocks and ETFs alike -- into whatever universe the caller passed in.
+That one-size-fits-all target was always wrong (the whole point of this
+sync is "all US symbols", which spans several different real-world
+listing venues and security types), and in production it twice corrupted
+a tenant's single-purpose universe (S&P 500, then NYSE) when the sync was
+run while that universe happened to be selected in the UI, ballooning it
+to ~13,000 symbols. This version removes the target `universe_id`
+entirely and instead classifies every symbol by its real exchange + ETF
+flag (already computed by fetch_and_parse_nasdaq_universe below) and
+routes it into the one correctly-named per-tenant universe for that
+category -- creating that universe first if the tenant doesn't have it
+yet. There is no longer a way to point this sync at an arbitrary
+universe, which is what made the corruption possible in the first place.
 """
 
 from __future__ import annotations
 
 import ftplib
 import io
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, UTC
 from typing import Optional
 
@@ -45,6 +56,22 @@ OTHER_LISTED_FILE = "otherlisted.txt"
 
 FOOTER_PREFIX = "File Creation Time"
 
+# Maps a fetched symbol's (exchange code, is_etf) to the canonical
+# per-tenant universe name it belongs in. Exchange codes not listed here
+# (NYSE Arca "P", Cboe BZX "Z", IEXG "V", "F", "M") aren't routed anywhere
+# -- they don't correspond to a universe this app currently models, and
+# silently inventing new ones for exchanges nobody asked for would be its
+# own kind of surprise. Symbols on those exchanges are counted and
+# reported as skipped rather than dropped silently.
+_EXCHANGE_UNIVERSE_MAP = {
+    ("NASDAQ", False): "NASDAQ",
+    ("NASDAQ", True):  "NASDAQ ETFs",
+    ("N", False):      "NYSE",
+    ("N", True):       "NYSE ETFs",
+    ("A", False):      "AMEX",
+    ("A", True):       "AMEX ETFs",
+}
+
 
 @dataclass
 class NasdaqSyncResult:
@@ -53,8 +80,10 @@ class NasdaqSyncResult:
     security_master_upserted: int = 0
     universe_symbols_added: int = 0
     universe_symbols_already_present: int = 0
+    skipped_unmapped_exchange: int = 0
     nasdaq_listed_count: int = 0
     other_listed_count: int = 0
+    per_universe_added: dict = field(default_factory=dict)
     error: Optional[str] = None
 
 
@@ -165,11 +194,15 @@ def fetch_and_parse_nasdaq_universe() -> dict:
     }
 
 
-def sync_universe_from_nasdaq_ftp(db, tenant_id: str, universe_id: str) -> NasdaqSyncResult:
+def sync_universe_from_nasdaq_ftp(db, tenant_id: str) -> NasdaqSyncResult:
     """
     One-click bulk sync: pulls the full NASDAQ Trader symbol directory,
-    upserts security_master (tenant-agnostic reference data), and bulk-
-    adds every symbol as a member of the given tenant's universe.
+    upserts security_master (tenant-agnostic reference data), and routes
+    each symbol into the ONE correctly-named per-tenant universe for its
+    real exchange + ETF status (NASDAQ, NASDAQ ETFs, NYSE, NYSE ETFs,
+    AMEX, AMEX ETFs) -- creating that universe for the tenant first if it
+    doesn't exist yet. See the module docstring for why this no longer
+    takes a target universe_id.
     """
     fetched = fetch_and_parse_nasdaq_universe()
     if not fetched.get("available"):
@@ -180,17 +213,67 @@ def sync_universe_from_nasdaq_ftp(db, tenant_id: str, universe_id: str) -> Nasda
         return NasdaqSyncResult(available=False, error="NASDAQ returned no usable symbols.")
 
     sm_count = _bulk_upsert_security_master(db, symbols)
-    added, already_present = _bulk_add_universe_symbols(db, tenant_id, universe_id, symbols)
+
+    by_universe_name: dict[str, list[str]] = {}
+    skipped_unmapped = 0
+    for row in symbols:
+        target_name = _EXCHANGE_UNIVERSE_MAP.get((row["exchange"], row["is_etf"]))
+        if target_name is None:
+            skipped_unmapped += 1
+            continue
+        by_universe_name.setdefault(target_name, []).append(row["symbol"])
+
+    total_added = 0
+    total_already_present = 0
+    per_universe_added: dict[str, int] = {}
+
+    for universe_name, syms in by_universe_name.items():
+        universe_id = _find_or_create_universe(db, tenant_id, universe_name)
+        added, already_present = _bulk_add_universe_symbols(db, tenant_id, universe_id, syms)
+        total_added += added
+        total_already_present += already_present
+        per_universe_added[universe_name] = added
 
     return NasdaqSyncResult(
         available=True,
         fetched=len(symbols),
         security_master_upserted=sm_count,
-        universe_symbols_added=added,
-        universe_symbols_already_present=already_present,
+        universe_symbols_added=total_added,
+        universe_symbols_already_present=total_already_present,
+        skipped_unmapped_exchange=skipped_unmapped,
         nasdaq_listed_count=fetched.get("nasdaq_listed_count", 0),
         other_listed_count=fetched.get("other_listed_count", 0),
+        per_universe_added=per_universe_added,
     )
+
+
+def _find_or_create_universe(db, tenant_id: str, name: str) -> str:
+    """Looks up this tenant's universe by name (case-insensitive, same
+    matching rule used by the shared-universe propagation feature), or
+    creates it if the tenant doesn't have one yet. Returns the
+    universe_id either way."""
+    from sqlalchemy import func
+    from modules.universe.models import Universe
+    from modules.db.models import gen_uuid
+
+    existing = (
+        db.query(Universe)
+        .filter(Universe.tenant_id == tenant_id, func.lower(Universe.name) == name.lower())
+        .first()
+    )
+    if existing:
+        return existing.id
+
+    new_id = gen_uuid()
+    db.add(Universe(
+        id=new_id,
+        name=name,
+        tenant_id=tenant_id,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    ))
+    db.commit()
+    return new_id
 
 
 def _bulk_upsert_security_master(db, symbols: list[dict]) -> int:
@@ -219,7 +302,7 @@ def _bulk_upsert_security_master(db, symbols: list[dict]) -> int:
     return count
 
 
-def _bulk_add_universe_symbols(db, tenant_id: str, universe_id: str, symbols: list[dict]) -> tuple[int, int]:
+def _bulk_add_universe_symbols(db, tenant_id: str, universe_id: str, symbols: list[str]) -> tuple[int, int]:
     from modules.universe.models import UniverseSymbol
 
     existing_symbols = {
@@ -229,7 +312,7 @@ def _bulk_add_universe_symbols(db, tenant_id: str, universe_id: str, symbols: li
         .all()
     }
 
-    to_add = [row["symbol"] for row in symbols if row["symbol"] not in existing_symbols]
+    to_add = [sym for sym in symbols if sym not in existing_symbols]
     already_present = len(symbols) - len(to_add)
 
     for i, sym in enumerate(to_add):

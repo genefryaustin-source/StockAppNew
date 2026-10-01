@@ -439,18 +439,24 @@ def render_universe(db, user):
         "in one click, instead of adding symbols one at a time or preparing a CSV by hand. "
         "Safe to run repeatedly -- already-present symbols are skipped, never duplicated."
     )
-    if st.button("🔄 Sync from NASDAQ (all US symbols)", key=f"nasdaq_sync_{universe_id}"):
+    if st.button("🔄 Sync all US symbols (auto-routes to NASDAQ/NYSE/AMEX + ETF universes)",
+                 key=f"nasdaq_sync_{universe_id}"):
         from modules.universe.nasdaq_ftp_sync import sync_universe_from_nasdaq_ftp
         with st.spinner("Pulling the NASDAQ Trader symbol directory…"):
-            result = sync_universe_from_nasdaq_ftp(db, tenant_id, universe_id)
+            result = sync_universe_from_nasdaq_ftp(db, tenant_id)
         if not result.available:
             st.error(f"Sync failed: {result.error}")
         else:
+            breakdown = ", ".join(
+                f"{name}: +{added:,}" for name, added in sorted(result.per_universe_added.items())
+            )
             st.success(
                 f"Fetched {result.fetched:,} symbols "
                 f"({result.nasdaq_listed_count:,} NASDAQ-listed, {result.other_listed_count:,} other-listed). "
-                f"Added {result.universe_symbols_added:,} new symbols to this universe "
-                f"({result.universe_symbols_already_present:,} were already present). "
+                f"Added {result.universe_symbols_added:,} new symbols across this tenant's universes "
+                f"({breakdown}). "
+                f"{result.universe_symbols_already_present:,} were already present, "
+                f"{result.skipped_unmapped_exchange:,} were on an exchange this app doesn't track (skipped). "
                 f"Updated {result.security_master_upserted:,} security master records."
             )
             _safe_clear_streamlit_cache()
