@@ -128,6 +128,20 @@ def init_database():
         print(t)
     print("=" * 80)
 
+    # Legal Portal uses its own separate SQLAlchemy registry
+    # (LegalWorkflowBase, not the main app Base above) -- create its
+    # tables here too, with the same engine, so they are never
+    # silently missing on a fresh environment.
+    from modules.legal_portal.legal_workflow_db_models import LegalWorkflowBase
+    import modules.legal_portal.legal_operations_db_models  # noqa: F401
+
+    LegalWorkflowBase.metadata.create_all(bind=engine)
+    print("=" * 80)
+    print("REGISTERED LEGAL PORTAL TABLES")
+    for t in sorted(LegalWorkflowBase.metadata.tables.keys()):
+        print(t)
+    print("=" * 80)
+
     # ---------------------------------------------------
     # Database Health Check
     # ---------------------------------------------------
