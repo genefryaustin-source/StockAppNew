@@ -417,6 +417,12 @@ try:
     # import block executes
 
 
+    @st.cache_resource
+    def get_legal_operations_runtime():
+        from modules.legal_portal import build_legal_operations_runtime
+        return build_legal_operations_runtime(session_factory=SessionLocal)
+
+
     market_data_service = get_market_data_service()
 
 
@@ -656,7 +662,7 @@ try:
             "Export / Sheets","Research Reports","Social Sentiment",
             "Team Collaboration","Crypto","Investment Committee","Multi-Agent Research",
             "Portfolio Construction OS","Autonomous PM","Fund Operations","Hedge Fund OS",
-            "Legal Portal","Help",
+            "Legal Portal","Legal Operations Control","Legal Backup & Recovery","Help",
         ]
 
         # ── Grouped navigation ───────────────────────────────────
@@ -700,7 +706,7 @@ try:
                 "Team Collaboration",
             ]),
             ("⚖️ Legal & Compliance", [
-                "Legal Portal",
+                "Legal Portal","Legal Operations Control","Legal Backup & Recovery",
             ]),
             ("⚙️ System", [
                 "Admin","Help",
@@ -1409,6 +1415,34 @@ try:
         st.query_params["legal_document"] = "privacy-policy"
         st.session_state["legal_portal_active"] = True
         st.rerun()
+
+    elif page == "Legal Operations Control":
+        from modules.legal_portal import (
+            get_legal_workflow_runtime,
+            principal_from_user,
+            render_legal_operations_dashboard,
+        )
+        _legal_workflow_runtime = get_legal_workflow_runtime(session_factory=SessionLocal)
+        _legal_operations_runtime = get_legal_operations_runtime()
+        _legal_principal = principal_from_user(user)
+        render_legal_operations_dashboard(
+            principal=_legal_principal,
+            workflow_service=_legal_workflow_runtime.service,
+            override_service=_legal_operations_runtime.override_service,
+        )
+
+    elif page == "Legal Backup & Recovery":
+        from modules.legal_portal import (
+            get_legal_workflow_runtime,
+            principal_from_user,
+            render_legal_recovery_dashboard,
+        )
+        _legal_workflow_runtime = get_legal_workflow_runtime(session_factory=SessionLocal)
+        _legal_principal = principal_from_user(user)
+        render_legal_recovery_dashboard(
+            principal=_legal_principal,
+            service=_legal_workflow_runtime.service,
+        )
 
     elif page == "Help":
         from modules.help.help_ui import render_help
