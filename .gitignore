@@ -103,3 +103,6 @@ Thumbs.db
 /yahoo.py
 /yahoomultiple.py
 /yahoosimple.py
+
+!modules/legal_portal/legal_backup.py
+
