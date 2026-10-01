@@ -37,7 +37,7 @@ from modules.universe.models import Universe, UniverseSymbol
 from modules.analytics.models import AnalyticsSnapshot
 
 
-SHARED_UNIVERSE_NAMES = {"nyse", "nasdaq", "s&p 500", "amex"}
+SHARED_UNIVERSE_NAMES = {"nyse", "nasdaq", "s&p 500", "amex", "nasdaq etfs", "nyse etfs"}
 
 
 # Every AnalyticsSnapshot column that should be mirrored verbatim from
