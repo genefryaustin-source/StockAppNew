@@ -51,25 +51,7 @@ logger = logging.getLogger(__name__)
 ProgressFn = Optional[Callable[[int, int, str], None]]
 
 
-class _RateLimiter:
-    """Rolling-window limiter: at most `calls_per_minute` calls in any
-    60-second window. Paces calls proactively rather than firing as fast
-    as possible and hoping -- gentler on a shared free-tier API key than
-    reacting only after a 429 comes back."""
 
-    def __init__(self, calls_per_minute: int):
-        self.calls_per_minute = max(1, calls_per_minute)
-        self._call_times: deque = deque()
-
-    def wait_if_needed(self) -> None:
-        now = time.monotonic()
-        while self._call_times and now - self._call_times[0] > 60:
-            self._call_times.popleft()
-        if len(self._call_times) >= self.calls_per_minute:
-            sleep_for = 60 - (now - self._call_times[0]) + 0.1
-            if sleep_for > 0:
-                time.sleep(sleep_for)
-        self._call_times.append(time.monotonic())
 
 
 def _trading_day_candidates(start: date, count: int) -> list[date]:
@@ -120,6 +102,7 @@ def build_price_cache_from_grouped_daily(
     """
     from modules.utils.config import get_secret
     from modules.market_data.providers.polygon import fetch_grouped_daily, PolygonRateLimitException
+    from modules.market_data.shared_rate_limiter import get_rate_limiter
 
     api_key = get_secret("POLYGON_API_KEY")
     if not api_key:
@@ -148,7 +131,12 @@ def build_price_cache_from_grouped_daily(
     # time, and chunking the read-back keeps peak memory bounded
     # regardless of universe size, rather than pulling everything back
     # in one giant query.
-    limiter = _RateLimiter(calls_per_minute)
+    # Configure (or update) the shared, per-API-key limiter that
+    # fetch_grouped_daily() itself now enforces on every call -- so this
+    # function's own calls and every other caller using this same key
+    # (the per-symbol path, other tenants, other jobs) draw from one real
+    # coordinated budget instead of each pacing itself in isolation.
+    get_rate_limiter(api_key, calls_per_minute=calls_per_minute)
     candidates = _trading_day_candidates(date.today() - timedelta(days=1), lookback_days * 2)
 
     trading_days_found = 0
@@ -164,7 +152,7 @@ def build_price_cache_from_grouped_daily(
         if trading_days_found >= lookback_days:
             break
 
-        limiter.wait_if_needed()
+
         date_str = day.isoformat()
 
         try:

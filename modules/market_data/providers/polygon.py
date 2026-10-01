@@ -1,7 +1,7 @@
 import requests
 import pandas as pd
 from datetime import datetime, timedelta, UTC
-
+from modules.market_data.shared_rate_limiter import get_rate_limiter
 class PolygonRateLimitException(Exception):
     """Raised when Polygon/Massive returns a rate limit response."""
     pass
@@ -27,7 +27,7 @@ def fetch_grouped_daily(date: str, api_key: str, timeout: int = 30) -> pd.DataFr
     """
     if not api_key:
         raise RuntimeError("Polygon API key missing")
-
+    get_rate_limiter(api_key).wait_if_needed()
     # Note: polygon.io rebranded to Massive in 2026 -- the docs/dashboard
     # moved to massive.com, but this api.polygon.io endpoint still works
     # as of this writing. Worth re-verifying if this ever starts failing
@@ -52,6 +52,8 @@ def fetch_grouped_daily(date: str, api_key: str, timeout: int = 30) -> pd.DataFr
 def fetch_ohlcv(symbol: str, period: str, interval: str, api_key: str, timeout: int):
     if not api_key:
         raise RuntimeError("Polygon API key missing")
+
+    get_rate_limiter(api_key).wait_if_needed()
 
     # basic period->date range
     end = datetime.now(UTC).date()
